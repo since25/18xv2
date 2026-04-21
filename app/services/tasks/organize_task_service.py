@@ -386,6 +386,30 @@ class OrganizeTaskService:
             self.db.refresh(task)
         return created_tasks, replaced_count, skipped_count, errors
 
+    def apply_ambiguous_resolutions_from_json(
+        self,
+        *,
+        import_id: int,
+        resolutions: list[dict],  # [{source_path: str, keyword_entry_id: int}]
+        replace_existing: bool = True,
+    ) -> tuple[list[OrganizeTask], int, int, list[str]]:
+        """JSON 版裁决应用，复用 TSV 版核心逻辑，入参改为 dict 列表。"""
+        if not resolutions:
+            return [], 0, 0, []
+
+        # 构造等价的 TSV 文本，复用现有方法
+        lines = ["source_path\tkeyword_count\tkeywords\tselected_keyword\tselected_keyword_id"]
+        for item in resolutions:
+            sp = str(item.get("source_path", "")).strip()
+            kid = str(item.get("keyword_entry_id", "")).strip()
+            lines.append(f"{sp}\t\t\t\t{kid}")
+        tsv_text = "\n".join(lines) + "\n"
+        return self.apply_ambiguous_resolutions_from_tsv(
+            import_id=import_id,
+            tsv_text=tsv_text,
+            replace_existing=replace_existing,
+        )
+
     @staticmethod
     def _normalize_target_root(target_root: str) -> str:
         cleaned = target_root.strip()

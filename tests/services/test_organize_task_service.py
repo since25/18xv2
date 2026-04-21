@@ -60,3 +60,18 @@ def test_list_ambiguous_conflicts_returns_keyword_options(db_session: Session):
     option_names = {opt.name for opt in conflict.keyword_options}
     assert "作者A" in option_names
     assert "作者B" in option_names
+
+
+def test_apply_ambiguous_resolutions_from_json(db_session: Session):
+    import_id, ka_id, kb_id = _seed_import(db_session)
+    svc = OrganizeTaskService(db_session)
+    tasks, replaced, skipped, errors = svc.apply_ambiguous_resolutions_from_json(
+        import_id=import_id,
+        resolutions=[{"source_path": "/待整理/专辑X", "keyword_entry_id": ka_id}],
+        replace_existing=True,
+    )
+    assert errors == []
+    assert len(tasks) == 1
+    assert tasks[0].keyword_entry_id == ka_id
+    assert tasks[0].source_path == "/待整理/专辑X"
+    assert "作者A" in tasks[0].target_path
