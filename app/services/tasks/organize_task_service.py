@@ -410,6 +410,38 @@ class OrganizeTaskService:
             replace_existing=replace_existing,
         )
 
+    def get_node_details(self, task_ids: list[int]) -> dict[int, dict]:
+        """批量查本地 tree_nodes，返回 task_id → {raw_name, raw_path, cid} 映射。"""
+        if not task_ids:
+            return {}
+        tasks = list(
+            self.db.scalars(
+                select(OrganizeTask).where(OrganizeTask.id.in_(task_ids))
+            ).all()
+        )
+        node_id_to_task_id: dict[int, int] = {}
+        for t in tasks:
+            if t.node_id is not None:
+                node_id_to_task_id[t.node_id] = t.id
+
+        if not node_id_to_task_id:
+            return {}
+
+        nodes = list(
+            self.db.scalars(
+                select(TreeNode).where(TreeNode.id.in_(node_id_to_task_id.keys()))
+            ).all()
+        )
+        result: dict[int, dict] = {}
+        for node in nodes:
+            task_id = node_id_to_task_id[node.id]
+            result[task_id] = {
+                "raw_name": node.raw_name,
+                "raw_path": node.raw_path,
+                "cid": node.remote_cid,
+            }
+        return result
+
     @staticmethod
     def _normalize_target_root(target_root: str) -> str:
         cleaned = target_root.strip()

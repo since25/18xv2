@@ -4,6 +4,7 @@ import pytest
 from sqlalchemy.orm import Session
 
 from app.models.keywords import KeywordEntry, KeywordHit
+from app.models.tasks import OrganizeTask
 from app.models.tree import TreeImport, TreeNode
 from app.services.keywords.registry_service import normalize_keyword_text
 from app.services.tasks.organize_task_service import OrganizeTaskService
@@ -75,3 +76,31 @@ def test_apply_ambiguous_resolutions_from_json(db_session: Session):
     assert tasks[0].keyword_entry_id == ka_id
     assert tasks[0].source_path == "/待整理/专辑X"
     assert "作者A" in tasks[0].target_path
+
+
+def test_get_node_details_returns_cid_and_paths(db_session: Session):
+    ti = TreeImport(source_filename="test2.txt", status="done")
+    db_session.add(ti)
+    db_session.flush()
+    node = TreeNode(
+        import_id=ti.id, raw_name="专辑Y", normalized_name="专辑y",
+        raw_path="/待整理/专辑Y", depth=1, node_type="folder",
+        fingerprint_hint="fp2", remote_cid="cid_abc",
+    )
+    db_session.add(node)
+    db_session.flush()
+    task = OrganizeTask(
+        import_id=ti.id, node_id=node.id,
+        source_path="/待整理/专辑Y", target_path="/根目录/已整理/专辑Y",
+        status="pending",
+    )
+    db_session.add(task)
+    db_session.commit()
+
+    svc = OrganizeTaskService(db_session)
+    details = svc.get_node_details(task_ids=[task.id])
+    assert task.id in details
+    item = details[task.id]
+    assert item["raw_name"] == "专辑Y"
+    assert item["raw_path"] == "/待整理/专辑Y"
+    assert item["cid"] == "cid_abc"

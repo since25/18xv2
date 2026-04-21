@@ -113,6 +113,20 @@ class AmbiguousResolveResponse(BaseModel):
     errors: list[str] = Field(default_factory=list)
 
 
+class NodeDetailRequest(BaseModel):
+    task_ids: list[int]
+
+
+class NodeDetailItem(BaseModel):
+    raw_name: str
+    raw_path: str
+    cid: str | None = None
+
+
+class NodeDetailResponse(BaseModel):
+    details: dict[int, NodeDetailItem]
+
+
 OrganizeTaskBatchResponse.model_rebuild()
 DuplicateTargetConflictGroup.model_rebuild()
 DuplicateTargetConflictListResponse.model_rebuild()

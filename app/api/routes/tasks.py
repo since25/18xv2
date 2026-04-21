@@ -16,6 +16,9 @@ from app.schemas.tasks import (
     AmbiguousResolveResponse,
     DuplicateTargetConflictGroup,
     DuplicateTargetConflictListResponse,
+    NodeDetailItem,
+    NodeDetailRequest,
+    NodeDetailResponse,
     OrganizeTaskBatchResponse,
     OrganizeTaskCreateRequest,
     OrganizeTaskGenerateFromImportRequest,
@@ -248,6 +251,17 @@ async def import_ambiguous_conflicts_tsv(
         errors=errors,
         tasks=[OrganizeTaskResponse.model_validate(item) for item in tasks],
     )
+
+
+@router.post("/node-details", response_model=NodeDetailResponse)
+def get_task_node_details(
+    payload: NodeDetailRequest,
+    db: Session = Depends(get_db),
+) -> NodeDetailResponse:
+    """批量查询各任务关联节点的本地信息（raw_name / raw_path / remote_cid）。"""
+    raw = OrganizeTaskService(db).get_node_details(task_ids=payload.task_ids)
+    details = {tid: NodeDetailItem(**item) for tid, item in raw.items()}
+    return NodeDetailResponse(details=details)
 
 
 @router.get("/workbench", response_class=HTMLResponse)
