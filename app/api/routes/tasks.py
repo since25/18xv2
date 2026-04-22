@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -14,6 +14,9 @@ from app.schemas.tasks import (
     AmbiguousKeywordOption as SchemaKeywordOption,
     AmbiguousResolveRequest,
     AmbiguousResolveResponse,
+    DuplicateResolveRequest,
+    DuplicateResolveResponse,
+    DuplicateResolution,
     DuplicateTargetConflictGroup,
     DuplicateTargetConflictListResponse,
     NodeDetailItem,
@@ -262,6 +265,56 @@ def get_task_node_details(
     raw = OrganizeTaskService(db).get_node_details(task_ids=payload.task_ids)
     details = {tid: NodeDetailItem(**item) for tid, item in raw.items()}
     return NodeDetailResponse(details=details)
+
+
+@router.post("/resolve-duplicate-conflicts", response_model=DuplicateResolveResponse)
+def resolve_duplicate_conflicts(
+    payload: DuplicateResolveRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> DuplicateResolveResponse:
+    """批量处理重复目标冲突：skip 未保留任务，可选从 115 删除。"""
+    from sqlalchemy import select as _select
+    from app.models.tree import TreeNode as _TreeNode
+
+    client_115 = getattr(request.app.state, "client_115", None)
+    resolved_count = 0
+    deleted_from_115_count = 0
+    errors: list[str] = []
+
+    for res in payload.resolutions:
+        # 1. 将 skip_task_ids 标记为 skipped
+        skip_tasks = list(
+            db.scalars(_select(OrganizeTask).where(OrganizeTask.id.in_(res.skip_task_ids))).all()
+        )
+        for t in skip_tasks:
+            t.status = "skipped"
+        db.flush()
+        resolved_count += 1
+
+        # 2. 可选：从 115 删除
+        if res.delete_from_115 and client_115 is not None and skip_tasks:
+            node_ids = [t.node_id for t in skip_tasks if t.node_id is not None]
+            if node_ids:
+                nodes = list(
+                    db.scalars(_select(_TreeNode).where(_TreeNode.id.in_(node_ids))).all()
+                )
+                for node in nodes:
+                    if not node.remote_cid:
+                        errors.append(f"节点 {node.id}（{node.raw_path}）无 remote_cid，跳过删除")
+                        continue
+                    try:
+                        client_115.delete_node(file_id=node.remote_cid, dry_run=False)
+                        deleted_from_115_count += 1
+                    except Exception as exc:  # noqa: BLE001
+                        errors.append(f"删除 {node.raw_path}（cid={node.remote_cid}）失败：{exc}")
+
+    db.commit()
+    return DuplicateResolveResponse(
+        resolved_count=resolved_count,
+        deleted_from_115_count=deleted_from_115_count,
+        errors=errors,
+    )
 
 
 @router.get("/workbench", response_class=HTMLResponse)

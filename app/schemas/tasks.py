@@ -127,6 +127,23 @@ class NodeDetailResponse(BaseModel):
     details: dict[int, NodeDetailItem]
 
 
+class DuplicateResolution(BaseModel):
+    target_path: str
+    keep_task_id: int
+    skip_task_ids: list[int]
+    delete_from_115: bool = False
+
+
+class DuplicateResolveRequest(BaseModel):
+    resolutions: list[DuplicateResolution]
+
+
+class DuplicateResolveResponse(BaseModel):
+    resolved_count: int
+    deleted_from_115_count: int = 0
+    errors: list[str] = Field(default_factory=list)
+
+
 OrganizeTaskBatchResponse.model_rebuild()
 DuplicateTargetConflictGroup.model_rebuild()
 DuplicateTargetConflictListResponse.model_rebuild()
