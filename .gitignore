@@ -1,0 +1,36 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+*.egg
+
+# env
+.env
+!.env.example
+
+# data (volume-mounted in Docker; commit only .gitkeep)
+data/*.db
+data/*.json
+data/*.txt
+data/cookies/
+!data/.gitkeep
+
+# venv
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.claude/
+.DS_Store
+115-cookies-*.txt
+
+# pytest
+.pytest_cache/
+.omx/
+.playwright-mcp/

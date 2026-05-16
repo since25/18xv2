@@ -1,0 +1,15 @@
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.dev
+    ports:
+      - "8000:8000"
+    env_file:
+      - ../.env
+    volumes:
+      # 持久化数据
+      - ../data:/app/data
+      # 开发模式：挂载源码，配合 --reload 热重载
+      - ../app:/app/app
+    restart: "no"

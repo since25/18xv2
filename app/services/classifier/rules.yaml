@@ -1,0 +1,32 @@
+version: rules-v1
+rules:
+  - name: movie
+    enabled: true
+    priority: 10
+    keywords: ["电影", "movies", "movie", "4k电影", "蓝光电影"]
+    target_root: "/Movies"
+    target_template: "{normalized_name}"
+  - name: tv
+    enabled: true
+    priority: 20
+    keywords: ["剧集", "电视剧", "season", "s01", "s02", "tv"]
+    target_root: "/TV"
+    target_template: "{normalized_name}"
+  - name: anime
+    enabled: true
+    priority: 30
+    keywords: ["动漫", "anime", "番剧"]
+    target_root: "/Anime"
+    target_template: "{normalized_name}"
+  - name: variety
+    enabled: true
+    priority: 40
+    keywords: ["综艺", "variety", "show"]
+    target_root: "/Variety"
+    target_template: "{normalized_name}"
+  - name: unsorted
+    enabled: true
+    priority: 999
+    keywords: []
+    target_root: "/Unsorted"
+    target_template: "{normalized_name}"

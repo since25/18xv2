@@ -161,7 +161,7 @@ export interface ExtractedKeyword {
   similar_score: number | null
 }
 export interface ExtractedKeywordListResponse {
-  import_id: number
+  import_id: number | null
   total_nodes: number
   total_keywords: number
   total_actionable_keywords: number
@@ -182,13 +182,21 @@ export interface RegexMatchPreviewItem {
   similar_score: number | null
 }
 export interface RegexExtractPreviewResponse {
-  import_id: number
+  import_id: number | null
   pattern: string
   flags: string
   total_nodes: number
   total_matches: number
   total_actionable_matches: number
   preview: RegexMatchPreviewItem[]
+}
+export interface ManualPathRegexExtractPayload {
+  import_id?: number | null
+  raw_path: string
+  pattern: string
+  flags: string
+  group_index: number
+  limit: number
 }
 export interface DeleteResponse {
   deleted: boolean
@@ -285,6 +293,38 @@ export interface MagnetTaskBatchSummary {
 export interface MagnetTaskBatchSummaryListResponse {
   total: number
   batches: MagnetTaskBatchSummary[]
+}
+export interface WhitelistBatchCandidate {
+  source_tid: number
+  source_title: string
+  source_magnet: string
+  source_detail_url: string | null
+  source_section: string | null
+  matched_keyword: string | null
+  matched_alias: string | null
+  match_score: number
+  keyword_entry_id: number | null
+  duplicate_status: string
+  duplicate_reason: string | null
+  matched_import_id: number | null
+  matched_import_label: string | null
+  target_path: string
+}
+export interface WhitelistBatchPreviewResponse {
+  scanned_keyword_count: number
+  total_candidates: number
+  selected_candidates: number
+  candidates: WhitelistBatchCandidate[]
+}
+export interface WhitelistBatchSubmitResponse {
+  scanned_keyword_count: number
+  total_candidates: number
+  selected_candidates: number
+  created_count: number
+  submitted_count: number
+  duplicate_skipped_count: number
+  failed_count: number
+  tasks: MagnetTask[]
 }
 
 // ── 授权 / QR 登录 ────────────────────────────────────────────

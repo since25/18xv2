@@ -1,0 +1,41 @@
+[project]
+name = "18x-organizer"
+version = "0.2.0"
+description = "115 file organization tool with keyword management, planning, and p115client Open API integration."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "alembic>=1.14.0",
+  "fastapi>=0.115.0",
+  "httpx>=0.28.0",
+  "p115client>=0.0.8.4.4",
+  "pillow>=10.4.0",
+  "pydantic-settings>=2.6.0",
+  "python-dotenv>=1.0.1",
+  "python-multipart>=0.0.12",
+  "requests>=2.32.0",
+  "psycopg[binary]>=3.2.0",
+  "qrcode>=8.2",
+  "pyyaml>=6.0.2",
+  "sqlalchemy>=2.0.36",
+  "uvicorn>=0.32.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3.3",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.alembic]
+script_location = "alembic"
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
