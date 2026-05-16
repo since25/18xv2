@@ -707,8 +707,13 @@ class MagnetDownloadService:
                     len(merged),
                 )
 
+        visible_items = [
+            item
+            for item in merged.values()
+            if item.duplicate_status != "task_exists"
+        ]
         selected = sorted(
-            merged.values(),
+            visible_items,
             key=lambda current: (
                 current.duplicate_status not in {"clear"},
                 -current.item.match_score,
@@ -720,14 +725,14 @@ class MagnetDownloadService:
             "Whitelist preview finished import_id=%s scanned=%s keywords merged=%s selected=%s",
             tree_import_id,
             scanned_keyword_count,
-            len(merged),
+            len(visible_items),
             len(preview_items),
         )
         return WhitelistBatchPreviewRun(
             whitelist_entries=whitelist_entries,
             preview_items=preview_items,
             scanned_keyword_count=scanned_keyword_count,
-            total_candidates=len(merged),
+            total_candidates=len(visible_items),
         )
 
     def submit_whitelist_batch(

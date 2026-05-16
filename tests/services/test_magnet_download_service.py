@@ -450,3 +450,45 @@ def test_preview_whitelist_batch_reuses_single_tree_index_and_duplicate_result_c
 
     assert len(preview_run.preview_items) == 1
     assert build_calls == [tree_import.id]
+
+
+def test_preview_whitelist_batch_hides_existing_task_items(db_session) -> None:
+    entry = _create_whitelist_entry(db_session, canonical_name="Julia")
+    tree_import = _create_tree_import(db_session)
+
+    record = magnet_download_service_module.ArticleRecord(
+        tid=8001,
+        title="JUL-800 Julia Return",
+        magnet="magnet:?xt=urn:btih:8001",
+        detail_url=None,
+        section=None,
+        category=None,
+        sub_type=None,
+        size=None,
+    )
+    article_db = _WhitelistArticleDB({"Julia": [(record, 0.93)]})
+
+    db_session.add(
+        MagnetDownloadTask(
+            keyword_entry_id=entry.id,
+            source_tid=record.tid,
+            source_title=record.title,
+            source_magnet=record.magnet,
+            matched_keyword="Julia",
+            match_score="0.9300",
+            duplicate_status="task_exists",
+            status="submitted",
+        )
+    )
+    db_session.commit()
+
+    service = MagnetDownloadService(db_session, article_db=article_db, client_115=Fake115Client())
+    preview_run = service.preview_whitelist_batch(
+        tree_import_id=tree_import.id,
+        keyword_entry_ids=[entry.id],
+        per_keyword_limit=5,
+        total_limit=10,
+    )
+
+    assert preview_run.total_candidates == 0
+    assert preview_run.preview_items == []

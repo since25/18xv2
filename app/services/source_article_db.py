@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 
 from sqlalchemy import create_engine, text
 
@@ -25,6 +26,8 @@ class SourceArticleDatabaseError(RuntimeError):
 
 
 class SourceArticleDatabaseService:
+    cjk_pattern = re.compile(r"[\u4e00-\u9fff]")
+
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or get_settings()
 
@@ -44,17 +47,9 @@ class SourceArticleDatabaseService:
             return []
         resolved_limit = max(1, limit or self.settings.source_article_search_limit)
         engine = create_engine(self._database_url(), future=True)
-        sql = text(
-            """
-            select tid, title, magnet, detail_url, section, category, sub_type, size
-            from public.article
-            where title ilike :pattern
-            order by publish_date desc nulls last, tid desc
-            limit :limit
-            """
-        )
+        sql, params = self._build_search_sql(query=normalized_query, limit=resolved_limit)
         with engine.connect() as conn:
-            rows = conn.execute(sql, {"pattern": f"%{query.strip()}%", "limit": resolved_limit}).mappings().all()
+            rows = conn.execute(sql, params).mappings().all()
         return [
             ArticleRecord(
                 tid=int(row["tid"]),
@@ -69,9 +64,78 @@ class SourceArticleDatabaseService:
             for row in rows
         ]
 
+    @classmethod
+    def _build_search_sql(cls, *, query: str, limit: int) -> tuple[object, dict[str, object]]:
+        if cls._should_use_word_boundary_match(query):
+            return (
+                text(
+                    """
+                    select tid, title, magnet, detail_url, section, category, sub_type, size
+                    from public.article
+                    where title ~* :regex_pattern
+                    order by publish_date desc nulls last, tid desc
+                    limit :limit
+                    """
+                ),
+                {"regex_pattern": cls._build_word_boundary_regex(query), "limit": limit},
+            )
+        return (
+            text(
+                """
+                select tid, title, magnet, detail_url, section, category, sub_type, size
+                from public.article
+                where title ilike :pattern
+                order by publish_date desc nulls last, tid desc
+                limit :limit
+                """
+            ),
+            {"pattern": f"%{query.strip()}%", "limit": limit},
+        )
+
+    @staticmethod
+    def _should_use_word_boundary_match(query: str) -> bool:
+        normalized = normalize_keyword_text(query)
+        if not normalized:
+            return False
+        return bool(re.fullmatch(r"[A-Za-z0-9]+(?: [A-Za-z0-9]+)*", normalized))
+
+    @staticmethod
+    def _build_word_boundary_regex(query: str) -> str:
+        normalized = normalize_keyword_text(query)
+        tokens = [re.escape(token) for token in normalized.split() if token]
+        body = r"[\s._\-]*".join(tokens)
+        return rf"(^|[^0-9A-Za-z]){body}($|[^0-9A-Za-z])"
+
     def score_articles(self, query: str, *, matched_keyword: str | None = None, matched_alias: str | None = None, limit: int | None = None) -> list[tuple[ArticleRecord, float]]:
         records = self.search_articles(query, limit=limit)
         anchor = matched_alias or matched_keyword or query
-        scored = [(record, similarity_score(anchor, record.title)) for record in records]
+        scored = [(record, self._score_title_match(anchor, record.title)) for record in records]
         scored.sort(key=lambda item: (item[1], item[0].tid), reverse=True)
         return scored
+
+    @classmethod
+    def _score_title_match(cls, anchor: str, title: str) -> float:
+        base = similarity_score(anchor, title)
+        normalized_anchor = normalize_keyword_text(anchor)
+        if not cls._should_use_word_boundary_match(normalized_anchor):
+            return base
+
+        score = base
+        boundary_pattern = cls._build_word_boundary_regex(normalized_anchor)
+        boundary_matches = list(re.finditer(boundary_pattern, title, re.IGNORECASE))
+        if boundary_matches:
+            score += 0.35
+            if cls.cjk_pattern.search(title):
+                score += 0.15
+            if cls._has_wrapped_exact_match(normalized_anchor, title):
+                score += 0.2
+        return round(score, 4)
+
+    @staticmethod
+    def _has_wrapped_exact_match(anchor: str, title: str) -> bool:
+        escaped = re.escape(anchor)
+        patterns = [
+            rf"[【\[]\s*{escaped}\s*[】\]]",
+            rf"[『「（(]\s*{escaped}\s*[』」）)]",
+        ]
+        return any(re.search(pattern, title, re.IGNORECASE) for pattern in patterns)
