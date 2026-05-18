@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 import requests as http_requests
@@ -22,8 +23,8 @@ from app.services.importer.tree_parser import parse_tree_bytes
 
 logger = logging.getLogger(__name__)
 
-_POLL_INTERVAL = 2      # 秒
-_POLL_MAX_TRIES = 60    # 最多等 2 分钟
+_POLL_INTERVAL = 2      # 秒（保留但不再使用）
+_POLL_MAX_TRIES = 60    # 最多等 2 分钟（保留但不再使用）
 _TREE_ROOT_PREFIX = "|---- "
 _TREE_CHILD_PREFIX = "| "
 
@@ -95,12 +96,16 @@ class RemoteTreeFetchService:
         *,
         depth_limit: int = 3,
         folders_only: bool = True,
+        import_id: int,
+        progress_cb: Callable[[str, int, int], None] | None = None,
     ) -> TreeImport:
         """触发 115 目录树导出，下载 txt 并解析存库。
 
         cid        — 115 目录 ID
         path_label — 用户可读路径标签，仅用于展示
         depth_limit — 导出层级深度（传给 layer_limit）
+        import_id  — 路由预先创建的 TreeImport 占位记录 ID，本方法将 UPDATE 该记录
+        progress_cb — 可选进度回调，签名：(stage: str, current: int, total: int) -> None
         """
         label = path_label.strip() or f"cid:{cid}"
         client = self._get_p115_client()
@@ -120,73 +125,82 @@ class RemoteTreeFetchService:
                 raw_bytes = self._build_tree_bytes_from_listing(client, export_cid, label, depth_limit)
                 logger.info("根目录回退遍历完成，生成目录树文本大小=%d bytes", len(raw_bytes))
                 return self._persist_tree_import(
+                    import_id=import_id,
                     cid=str(export_cid),
                     depth_limit=depth_limit,
                     raw_bytes=raw_bytes,
                     source_label=label,
+                    progress_cb=progress_cb,
                 )
             raise RuntimeError(f"fs_export_dir 返回异常：{export_resp}")
         logger.info("目录树导出已触发 export_id=%s cid=%s", export_id, cid)
 
-        # 2. 轮询完成（file_id 出现即为完成）
+        if progress_cb:
+            progress_cb("触发导出", 0, 1)
+
+        # 2. 指数退避轮询（file_id 出现即为完成）
+        delay = 1.0
+        elapsed = 0.0
         pick_code = None
-        for _ in range(_POLL_MAX_TRIES):
+        while elapsed < 180:
+            if progress_cb:
+                progress_cb("轮询导出状态", int(elapsed), 180)
             status = client.fs_export_dir_status({"export_id": export_id})
             data = status.get("data")
             if isinstance(data, dict) and data.get("file_id"):
                 pick_code = data.get("pick_code")
                 logger.info("目录树导出完成 pick_code=%s", pick_code)
                 break
-            time.sleep(_POLL_INTERVAL)
+            time.sleep(delay)
+            elapsed += delay
+            delay = min(delay * 1.5, 30)
         else:
-            raise RuntimeError("等待目录树导出超时（>2分钟）")
+            raise RuntimeError("等待目录树导出超时（>3分钟）")
 
         # 3. 获取下载链接并下载（需空 user-agent，否则 403）
         download_url = client.download_url(pick_code)
         raw_bytes = http_requests.get(str(download_url), headers={"user-agent": ""}).content
         logger.info("目录树 txt 下载完成，大小=%d bytes", len(raw_bytes))
 
+        if progress_cb:
+            progress_cb("下载目录树", 1, 1)
+
         return self._persist_tree_import(
+            import_id=import_id,
             cid=str(export_cid),
             depth_limit=depth_limit,
             raw_bytes=raw_bytes,
             source_label=label,
+            progress_cb=progress_cb,
         )
 
     def _persist_tree_import(
         self,
         *,
+        import_id: int,
         cid: str,
         depth_limit: int,
         raw_bytes: bytes,
         source_label: str,
+        progress_cb: Callable[[str, int, int], None] | None = None,
     ) -> TreeImport:
         logger.info("开始解析目录树文本 source=%s cid=%s", source_label, cid)
-
-        # 4. 解析（复用现有解析器）
         parsed_nodes = parse_tree_bytes(raw_bytes)
-        folder_nodes = [p for p in parsed_nodes if p.node_type == "folder"]
-        logger.info("解析完成，文件夹节点数=%d", len(folder_nodes))
+        folder_nodes_data = [p for p in parsed_nodes if p.node_type == "folder"]
+        logger.info("解析完成，文件夹节点数=%d", len(folder_nodes_data))
 
-        # 5. 写入 DB（先 commit TreeImport，再批量插 TreeNode，全程无长事务）
-        tree_import = TreeImport(
-            source_filename=f"remote:{source_label}",
-            source_type="remote_115",
-            status="processing",
-            note=f"cid={cid} depth_limit={depth_limit}",
-        )
-        self.db.add(tree_import)
+        # 更新已有占位记录（不 INSERT 新行）
+        tree_import = self.db.get(TreeImport, import_id)
+        tree_import.status = "processing"
         self.db.commit()
-        self.db.refresh(tree_import)
 
         seen_paths: set[str] = set()
-        folder_path_to_id: dict[str, int] = {}
         db_nodes: list[TreeNode] = []
-        for p in folder_nodes:
+        for p in folder_nodes_data:
             if p.raw_path in seen_paths:
                 continue
             seen_paths.add(p.raw_path)
-            node = TreeNode(
+            db_nodes.append(TreeNode(
                 import_id=tree_import.id,
                 raw_name=p.name,
                 normalized_name=normalize_folder_name(p.name),
@@ -194,22 +208,27 @@ class RemoteTreeFetchService:
                 parent_path=p.parent_path,
                 depth=p.depth,
                 node_type="folder",
-                parent_id=folder_path_to_id.get(p.parent_path or ""),
+                parent_id=None,
                 fingerprint_hint=p.fingerprint_hint,
-            )
-            db_nodes.append(node)
+            ))
 
+        # 阶段 1：批量插入，一次 flush 拿到所有 id
         self.db.add_all(db_nodes)
         self.db.flush()
+        if progress_cb:
+            progress_cb("写入数据库", 0, len(db_nodes))
+
+        # 阶段 2：回填 parent_id
+        path_to_id: dict[str, int] = {n.raw_path: n.id for n in db_nodes}
         for node in db_nodes:
-            folder_path_to_id[node.raw_path] = node.id
+            node.parent_id = path_to_id.get(node.parent_path or "")
+        if progress_cb:
+            progress_cb("写入数据库", len(db_nodes), len(db_nodes))
 
         tree_import.status = "completed"
         tree_import.note = f"cid={cid} depth_limit={depth_limit} folders={len(db_nodes)}"
         self.db.commit()
         self.db.refresh(tree_import)
-        logger.info(
-            "远端目录树快照完成：import_id=%d cid=%s folders=%d",
-            tree_import.id, cid, len(db_nodes),
-        )
+        logger.info("远端目录树快照完成：import_id=%d cid=%s folders=%d",
+                    tree_import.id, cid, len(db_nodes))
         return tree_import
