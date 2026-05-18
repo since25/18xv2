@@ -39,6 +39,19 @@ async def lifespan(app: FastAPI):
     app.state.client_115_access_token_expires_at = status_info["access_token_expires_at"]
     logger.info("115 client singleton ready in passive mode")
 
+    # 上次异常退出可能留下 status="pending" 的记录，防止 UI 显示永久 pending
+    from app.db.session import SessionLocal as _SessionLocal
+    from app.models.tree import TreeImport as _TreeImport
+    with _SessionLocal() as _s:
+        interrupted = (
+            _s.query(_TreeImport)
+            .filter(_TreeImport.status == "pending")
+            .update({"status": "interrupted"})
+        )
+        _s.commit()
+        if interrupted:
+            logger.info("lifespan: 清理 %d 条残留 pending 导入记录 → interrupted", interrupted)
+
     yield
     logger.info("Shutting down")
 
