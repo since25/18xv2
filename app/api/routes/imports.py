@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Callable
+import logging
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse, StreamingResponse
@@ -23,8 +23,11 @@ from app.services.importer.import_service import TreeImportService
 from app.services.importer.remote_tree_service import RemoteTreeFetchService
 
 router = APIRouter(prefix="/imports", tags=["imports"])
+logger = logging.getLogger(__name__)
 
-# 并发保护：同时最多 1 个 remote-fetch 任务（asyncio.Lock 保证原子检查+锁定）
+# 并发保护：同时最多 1 个 remote-fetch 任务
+# 注意：locked() 检查和 create_task 之间不是真正原子的，但在单用户场景下
+# FastAPI 的单线程事件循环使并发 POST 极少，锁本身在 _run_import 中保证串行
 _import_lock = asyncio.Lock()
 # 进度快照：import_id → {stage, current, total, done, error}；done 后 5s 回收
 _progress: dict[int, dict] = {}
@@ -309,8 +312,8 @@ def _blocking_import(import_id: int, payload: RemoteFetchRequest) -> None:
             if rec:
                 rec.status = "failed"
                 session.commit()
-        except Exception:
-            pass
+        except Exception as inner:
+            logger.warning("导入失败后更新 DB 状态出错 import_id=%d: %s", import_id, inner)
         _progress[import_id].update(stage="失败", error=str(exc), done=True)
     finally:
         session.close()

@@ -47,10 +47,11 @@ def client(tmp_path, monkeypatch):
 
     _main.app.dependency_overrides[deps.get_db] = override_get_db
 
-    # 重置模块级状态，防止测试间污染
-    import importlib
-    importlib.reload(_imports)
-    _main.app.dependency_overrides[deps.get_db] = override_get_db
+    # 重置模块级状态，防止测试间污染（不 reload，直接清理状态避免模块引用分裂）
+    _imports._progress.clear()
+    # 若上一个测试留下锁定状态，强制重置
+    if _imports._import_lock.locked():
+        _imports._import_lock = asyncio.Lock()
 
     yield TestClient(_main.app, raise_server_exceptions=False)
     _main.app.dependency_overrides.clear()
