@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import asyncio
+import json
+from collections.abc import Callable
+
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -19,6 +23,11 @@ from app.services.importer.import_service import TreeImportService
 from app.services.importer.remote_tree_service import RemoteTreeFetchService
 
 router = APIRouter(prefix="/imports", tags=["imports"])
+
+# 并发保护：同时最多 1 个 remote-fetch 任务（asyncio.Lock 保证原子检查+锁定）
+_import_lock = asyncio.Lock()
+# 进度快照：import_id → {stage, current, total, done, error}；done 后 5s 回收
+_progress: dict[int, dict] = {}
 
 
 @router.get("", response_class=HTMLResponse)
@@ -245,23 +254,85 @@ async def import_tree(
     return TreeImportResponse.model_validate(tree_import)
 
 
-@router.post("/remote-fetch", response_model=TreeImportResponse)
-def remote_fetch_tree(
+@router.post("/remote-fetch")
+async def remote_fetch_tree(  # 必须是 async def，asyncio.create_task 需要运行中的 event loop
     payload: RemoteFetchRequest,
     db: Session = Depends(get_db),
-) -> TreeImportResponse:
-    """手动触发：通过 fs_export_dir 导出指定目录树 txt，解析后存为快照。
-    同步执行，导出+下载+解析全部完成后返回。"""
+) -> dict:
+    if _import_lock.locked():
+        raise HTTPException(status_code=409, detail="已有导入任务在运行，请稍后再试")
+
+    tree_import = TreeImport(
+        status="pending",
+        source_filename=f"remote:{payload.path_label}",
+        source_type="remote_115",
+        note=f"cid={payload.cid} depth_limit={payload.depth_limit}",
+    )
+    db.add(tree_import)
+    db.commit()
+    db.refresh(tree_import)
+    import_id = tree_import.id
+
+    _progress[import_id] = {
+        "stage": "等待开始", "current": 0, "total": 0, "done": False, "error": None
+    }
+    asyncio.create_task(_run_import(import_id, payload))
+    return {"import_id": import_id, "status": "pending"}
+
+
+async def _run_import(import_id: int, payload: RemoteFetchRequest) -> None:
+    async with _import_lock:
+        await asyncio.to_thread(_blocking_import, import_id, payload)
+
+
+def _blocking_import(import_id: int, payload: RemoteFetchRequest) -> None:
+    from app.db.session import SessionLocal
+
+    def cb(stage: str, current: int, total: int) -> None:
+        _progress[import_id].update(stage=stage, current=current, total=total)
+
+    session = SessionLocal()
     try:
-        tree_import = RemoteTreeFetchService(db).fetch_subtree(
+        RemoteTreeFetchService(session).fetch_subtree(
             cid=payload.cid,
             path_label=payload.path_label,
             depth_limit=payload.depth_limit,
             folders_only=payload.folders_only,
+            import_id=import_id,
+            progress_cb=cb,
         )
-    except RuntimeError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    return TreeImportResponse.model_validate(tree_import)
+        _progress[import_id].update(stage="完成", done=True)
+    except Exception as exc:
+        try:
+            from app.models.tree import TreeImport as TI
+            rec = session.get(TI, import_id)
+            if rec:
+                rec.status = "failed"
+                session.commit()
+        except Exception:
+            pass
+        _progress[import_id].update(stage="失败", error=str(exc), done=True)
+    finally:
+        session.close()
+
+
+@router.get("/{import_id}/progress")
+async def import_progress(import_id: int) -> StreamingResponse:
+    """SSE 接口：每秒推送导入进度，done=True 后 5 秒结束并回收内存条目。"""
+    async def event_stream():
+        while True:
+            state = _progress.get(import_id)
+            if state is None:
+                yield f"data: {json.dumps({'error': 'not found'})}\n\n"
+                break
+            yield f"data: {json.dumps(state)}\n\n"
+            if state["done"]:
+                await asyncio.sleep(5)
+                _progress.pop(import_id, None)
+                break
+            await asyncio.sleep(1)
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 @router.delete("/{import_id}")
