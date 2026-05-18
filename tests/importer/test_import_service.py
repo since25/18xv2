@@ -29,7 +29,7 @@ def test_batch_insert_sets_parent_id_correctly(db_session):
 
 
 def test_batch_insert_single_flush_not_n_flushes(db_session, monkeypatch):
-    """验证不再发生 N 次 flush：flush 调用次数应 ≤ 2。"""
+    """验证不再发生 N 次 flush：flush 调用次数应 ≤ 2（1次显式+commit内部1次）。"""
     flush_count = 0
     original_flush = db_session.flush
 
@@ -43,7 +43,7 @@ def test_batch_insert_single_flush_not_n_flushes(db_session, monkeypatch):
     svc = TreeImportService(db_session)
     svc.import_tree(filename="test.txt", raw_bytes=TREE_WITH_NESTED_FOLDERS)
 
-    # 原来 N 个 folder 就有 N 次 flush；现在最多 2 次（阶段1 + 可选阶段2）
+    # 原来 N 个 folder 就有 N 次 flush；现在 ≤ 2（1次显式flush + commit内部1次）
     assert flush_count <= 2
 
 
