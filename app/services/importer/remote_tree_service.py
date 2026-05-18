@@ -191,6 +191,8 @@ class RemoteTreeFetchService:
 
         # 更新已有占位记录（不 INSERT 新行）
         tree_import = self.db.get(TreeImport, import_id)
+        if tree_import is None:
+            raise ValueError(f"TreeImport 占位记录不存在：import_id={import_id}")
         tree_import.status = "processing"
         self.db.commit()
 
