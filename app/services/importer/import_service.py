@@ -22,54 +22,67 @@ class TreeImportService:
             status="processing",
         )
         self.db.add(tree_import)
-        self.db.flush()
+        # 不在此处 flush，让 tree_import 与 folder_nodes 在同一次 flush 中写入
 
-        folder_path_to_id: dict[str, int] = {}
-        db_nodes: list[TreeNode] = []
-        db_files: list[NodeFile] = []
         seen_paths: set[str] = set()
         skipped_duplicates = 0
+        folder_parsed = []
+        file_parsed = []
         for parsed in parsed_nodes:
             if parsed.raw_path in seen_paths:
                 skipped_duplicates += 1
                 continue
             seen_paths.add(parsed.raw_path)
             if parsed.node_type == "folder":
-                node = TreeNode(
-                    import_id=tree_import.id,
-                    raw_name=parsed.name,
-                    normalized_name=normalize_folder_name(parsed.name),
-                    raw_path=parsed.raw_path,
-                    parent_path=parsed.parent_path,
-                    depth=parsed.depth,
-                    node_type=parsed.node_type,
-                    parent_id=folder_path_to_id.get(parsed.parent_path or ""),
-                    fingerprint_hint=parsed.fingerprint_hint,
-                )
-                self.db.add(node)
-                self.db.flush()
-                folder_path_to_id[parsed.raw_path] = node.id
-                db_nodes.append(node)
-                continue
+                folder_parsed.append(parsed)
+            else:
+                file_parsed.append(parsed)
 
-            node_file = NodeFile(
-                import_id=tree_import.id,
-                folder_node_id=folder_path_to_id.get(parsed.parent_path or ""),
-                raw_name=parsed.name,
-                normalized_name=parsed.name.strip(),
-                raw_path=parsed.raw_path,
-                parent_path=parsed.parent_path,
-                depth=parsed.depth,
-                file_ext=Path(parsed.name).suffix.lower() or None,
-                fingerprint_hint=parsed.fingerprint_hint,
+        # 阶段 1：批量插入全部 folder 节点（parent_id 暂为 None），一次 flush 拿到所有 id
+        # 使用 tree_import 关联对象而非 import_id，避免在 flush 之前读取未赋值的 id
+        folder_nodes = [
+            TreeNode(
+                tree_import=tree_import,
+                raw_name=p.name,
+                normalized_name=normalize_folder_name(p.name),
+                raw_path=p.raw_path,
+                parent_path=p.parent_path,
+                depth=p.depth,
+                node_type="folder",
+                parent_id=None,
+                fingerprint_hint=p.fingerprint_hint,
             )
-            self.db.add(node_file)
-            db_files.append(node_file)
+            for p in folder_parsed
+        ]
+        self.db.add_all(folder_nodes)
+        self.db.flush()  # 唯一一次显式 flush，同时拿到 tree_import.id 和所有 folder node id
+
+        # 阶段 2：回填 parent_id（利用已有 id）
+        path_to_id: dict[str, int] = {n.raw_path: n.id for n in folder_nodes}
+        for node in folder_nodes:
+            node.parent_id = path_to_id.get(node.parent_path or "")
+
+        # 阶段 3：批量插入 file 节点，统一 commit
+        file_nodes = [
+            NodeFile(
+                tree_import=tree_import,
+                folder_node_id=path_to_id.get(p.parent_path or ""),
+                raw_name=p.name,
+                normalized_name=p.name.strip(),
+                raw_path=p.raw_path,
+                parent_path=p.parent_path,
+                depth=p.depth,
+                file_ext=Path(p.name).suffix.lower() or None,
+                fingerprint_hint=p.fingerprint_hint,
+            )
+            for p in file_parsed
+        ]
+        self.db.add_all(file_nodes)
 
         tree_import.status = "completed"
-        tree_import.note = f"Imported {len(db_nodes)} folders and {len(db_files)} files"
+        tree_import.note = f"folders={len(folder_nodes)}, files={len(file_nodes)}"
         if skipped_duplicates:
-            tree_import.note += f", skipped {skipped_duplicates} duplicate paths"
+            tree_import.note += f", skipped={skipped_duplicates}"
         self.db.commit()
         self.db.refresh(tree_import)
         return tree_import
