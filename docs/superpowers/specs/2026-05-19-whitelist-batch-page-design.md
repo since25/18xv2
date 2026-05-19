@@ -93,21 +93,23 @@ class WhitelistCandidate(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
 
-    # 去重键（业务唯一）
-    source_tid: Mapped[str] = mapped_column(String(64), index=True)
-    source_magnet: Mapped[str] = mapped_column(Text)
+    # 去重键（业务唯一）；source_tid 用 Integer 与 MagnetDownloadTask 对齐
+    source_tid: Mapped[int] = mapped_column(Integer, index=True, nullable=False)
+    source_magnet: Mapped[str] = mapped_column(Text, nullable=False)
 
     # 资源元信息（扫描时落盘，提交时无需重查外部库）
     source_title: Mapped[str] = mapped_column(Text)
     source_section: Mapped[str | None] = mapped_column(String(64))
     source_detail_url: Mapped[str | None] = mapped_column(Text)
 
-    # 关键词命中
+    # 关键词命中；同一磁力可被多个白名单关键词命中，每对 (tid, magnet, keyword) 一行
+    # RESTRICT：禁止删除还有 candidate 引用的关键词，避免误删失史
     matched_keyword_entry_id: Mapped[int] = mapped_column(
-        ForeignKey("keyword_entries.id", ondelete="CASCADE"), index=True)
+        ForeignKey("keyword_entries.id", ondelete="RESTRICT"),
+        index=True, nullable=False)
     matched_keyword: Mapped[str] = mapped_column(String(255))
     matched_alias: Mapped[str | None] = mapped_column(String(255))
-    match_score: Mapped[float] = mapped_column(Float, default=0.0)
+    match_score: Mapped[float] = mapped_column(Float, default=0.0)  # 列表默认按此降序
 
     # 重复检查快照
     last_scanned_tree_import_id: Mapped[int | None] = mapped_column(
@@ -125,17 +127,19 @@ class WhitelistCandidate(Base):
     magnet_task_id: Mapped[int | None] = mapped_column(
         ForeignKey("magnet_download_tasks.id", ondelete="SET NULL"))
     dismissed_at: Mapped[datetime | None]
-    dismissed_reason: Mapped[str | None] = mapped_column(String(255))
     submitted_at: Mapped[datetime | None]
     failure_reason: Mapped[str | None] = mapped_column(Text)
+    # ↑ 冗余存一份失败原因（不走 magnet_task_id JOIN），列表渲染更快
 
     # 时间戳
     first_seen_at: Mapped[datetime] = mapped_column(default=func.now())
     last_scanned_at: Mapped[datetime] = mapped_column(default=func.now())
 
     __table_args__ = (
-        UniqueConstraint("source_tid", "source_magnet",
-                         name="uq_whitelist_candidate_source"),
+        # 业务唯一：同一磁力 × 同一关键词 唯一；若 A、B 两个关键词都命中同一磁力，
+        # 会产生两行 candidate（独立审核/丢弃/提交）。本次迭代不做"合并显示"。
+        UniqueConstraint("source_tid", "source_magnet", "matched_keyword_entry_id",
+                         name="uq_whitelist_candidate_source_keyword"),
         Index("ix_whitelist_candidate_lifecycle_keyword",
               "lifecycle_status", "matched_keyword_entry_id"),
     )
@@ -152,11 +156,11 @@ lifecycle_status 状态流转：
        pending  ─────[用户勾选 + 提交成功]─────▶  submitted ────[查看任务详情]
           │                                            ▲
           │                                            │
-          ├─────[用户提交但 115 失败]─────▶ failed   [duplicate_skipped 视同]
+          ├─────[用户提交但 115 失败]─────▶ failed
           │                                  │
           │                                  │
-          │                              [DELETE /candidates/{id}
-          │                               或手动重置后回到 pending]
+          │                              [POST /candidates/{id}/restore]
+          │                              [或 DELETE /candidates/{id} 物理删除]
           │
           └─────[用户点丢弃]─────────▶  dismissed
                                           │
@@ -225,15 +229,20 @@ def scan(
                 keyword_entry=entry, limit=per_keyword_limit
             )
             for cand in raw_candidates:
+                # 注意：unique 键是 (tid, magnet, keyword_entry_id)，所以同一磁力在不同
+                # 关键词下各自独立查询；同一 entry.id 下只有 0 或 1 行
                 existing = self.db.scalar(select(WhitelistCandidate).where(
                     WhitelistCandidate.source_tid == cand.source_tid,
                     WhitelistCandidate.source_magnet == cand.source_magnet,
+                    WhitelistCandidate.matched_keyword_entry_id == entry.id,
                 ))
-                # 低成本状态直接跳过
+                # 低成本状态直接跳过；即便跳过也刷新 last_scanned_at 以反映"还活着"
                 if existing and existing.lifecycle_status in {"submitted", "dismissed"}:
+                    existing.last_scanned_at = datetime.now(UTC)
                     skipped_count += 1
                     continue
                 if existing and existing.duplicate_status == "task_exists":
+                    existing.last_scanned_at = datetime.now(UTC)
                     skipped_count += 1
                     continue
 
@@ -303,6 +312,8 @@ def submit_selected(
     submitted = failed = skipped = 0
     for idx, cand in enumerate(candidates):
         progress_cb("提交到 115", idx, len(candidates))
+        # 防御并发：扫描可能并行改写过 cand，重新拉取最新状态再决定
+        self.db.refresh(cand)
         if cand.lifecycle_status != "pending":
             skipped += 1
             continue
@@ -326,6 +337,10 @@ def submit_selected(
                 failed += 1
             self.db.commit()
         except Exception as exc:
+            # 关键：如果异常发生在 create_and_submit_tasks 内部的 flush/commit，
+            # session 已处于 failed 状态，必须先 rollback() 才能继续写 cand
+            self.db.rollback()
+            cand = self.db.merge(cand)   # rollback 后 ORM 实例脱管，重新挂回
             cand.lifecycle_status = "failed"
             cand.failure_reason = str(exc)
             self.db.commit()
@@ -344,7 +359,14 @@ def submit_selected(
 | `GET /whitelist-batch/jobs/active` | 查询进行中的 job（页面刷新时用） | — | `{scan?: {...}, submit?: {...}}` |
 | `GET /whitelist-batch/candidates` | 列出候选 | `lifecycle_status?, matched_keyword_entry_id?, duplicate_status?, search?, page, page_size` | `{items: [...], total, page, page_size}` |
 | `POST /whitelist-batch/candidates/{id}/dismiss` | 标记丢弃 | `{reason?}` | `{candidate_id, lifecycle_status: "dismissed"}` |
-| `POST /whitelist-batch/candidates/{id}/restore` | 反丢弃 | — | `{candidate_id, lifecycle_status: "pending"}` |
+| `POST /whitelist-batch/candidates/{id}/restore` | 反丢弃 / 失败重置 | — | `{candidate_id, lifecycle_status: "pending"}` |
+
+> **restore 语义**：合法源状态 = `dismissed` 或 `failed`。从 `submitted` 调用 restore 返回 400。restore 不会重新跑 duplicate 检查（廉价操作）；下次扫描或下次提交时该候选会被正常处理。
+
+> **Pydantic schemas（关键字段）**：
+> - `ScanJobRequest`: `{tree_import_id: int, keyword_entry_ids: list[int] | None = None, per_keyword_limit: int = 10}`
+> - `SubmitJobRequest`: `{candidate_ids: list[int], force_submit: bool = False}` — `force_submit` 透传到 `_blocking_submit` 再透传到 `submit_selected`
+> - `DismissRequest`: `{reason: str | None = None}` — 字段保留以备未来 UI 用，本次迭代后端忽略
 | `DELETE /whitelist-batch/candidates/{id}` | 物理删除 | — | `{ok: true}` |
 
 #### 错误规范
@@ -368,7 +390,7 @@ def submit_selected(
 
 ```python
 # app/api/routes/whitelist_batch.py
-import asyncio, itertools, json, logging
+import asyncio, json, logging, uuid
 from app.services.whitelist.candidate_service import WhitelistCandidateService
 
 router = APIRouter(prefix="/whitelist-batch", tags=["whitelist-batch"])
@@ -376,11 +398,12 @@ logger = logging.getLogger(__name__)
 
 _scan_lock = asyncio.Lock()
 _submit_lock = asyncio.Lock()
-_jobs: dict[int, dict] = {}
-_job_id_counter = itertools.count(1)
+# job_id 用 uuid4 字符串，避免重启后 itertools.count 复用 id 与陈旧前端订阅冲突
+_jobs: dict[str, dict] = {}
+_JOB_RETENTION_SECONDS = 600   # done 后 10 分钟内可被 SSE/active 查到，再被 sweeper 清理
 
-def _new_job(job_type: str) -> int:
-    job_id = next(_job_id_counter)
+def _new_job(job_type: str) -> str:
+    job_id = str(uuid.uuid4())
     _jobs[job_id] = {
         "job_id": job_id,
         "job_type": job_type,
@@ -418,7 +441,8 @@ def _blocking_scan(job_id, payload):
             per_keyword_limit=payload.per_keyword_limit,
             progress_cb=cb,
         )
-        _jobs[job_id].update(stage="完成", summary=summary.dict(), done=True)
+        # Pydantic v2：用 model_dump() 而非已弃用的 .dict()
+        _jobs[job_id].update(stage="完成", summary=summary.model_dump(), done=True)
     except Exception as exc:
         logger.exception("scan job %s 失败", job_id)
         _jobs[job_id].update(stage="失败", error=str(exc), done=True)
@@ -429,19 +453,35 @@ def _blocking_scan(job_id, payload):
 # submit_jobs / _run_submit_job / _blocking_submit 同模板
 
 @router.get("/jobs/{job_id}/progress")
-async def job_progress(job_id: int) -> StreamingResponse:
+async def job_progress(job_id: str) -> StreamingResponse:
+    """SSE 进度推送。
+    - 每秒一帧 data: {...}；
+    - 每 20s 一帧 ': keepalive\\n\\n' 注释帧（防止中间代理空闲超时断流）；
+    - done 后再推一帧告知客户端，然后断开；
+    - 不在此处 pop 任务；由 _sweep_jobs 后台任务在 _JOB_RETENTION_SECONDS 后清理，
+      避免"多 tab 订阅同一 job、tab A 已 pop 导致 tab B 看到 not found"的竞态。
+    """
     async def event_stream():
+        last_emit = asyncio.get_event_loop().time()
+        sent_done = False
         while True:
             state = _jobs.get(job_id)
             if state is None:
                 yield f"data: {json.dumps({'error': 'not found'})}\n\n"
                 break
             yield f"data: {json.dumps(state)}\n\n"
+            last_emit = asyncio.get_event_loop().time()
             if state["done"]:
-                await asyncio.sleep(5)
-                _jobs.pop(job_id, None)
-                break
+                if sent_done:
+                    break          # 推完最后一帧就断
+                sent_done = True
+                await asyncio.sleep(1)
+                continue
+            # 心跳：未到 1s 也至少每 20s 输出一帧注释保活
             await asyncio.sleep(1)
+            if asyncio.get_event_loop().time() - last_emit >= 20:
+                yield ": keepalive\n\n"
+                last_emit = asyncio.get_event_loop().time()
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 @router.get("/jobs/active")
@@ -449,23 +489,34 @@ async def active_jobs():
     scan = next((j for j in _jobs.values() if j["job_type"] == "scan" and not j["done"]), None)
     submit = next((j for j in _jobs.values() if j["job_type"] == "submit" and not j["done"]), None)
     return {"scan": scan, "submit": submit}
+
+async def _sweep_jobs():
+    """后台 sweeper：定期清理已完成超过 _JOB_RETENTION_SECONDS 的 job。在 lifespan 启动。"""
+    while True:
+        await asyncio.sleep(60)
+        now = datetime.now(UTC)
+        expired = [
+            jid for jid, j in _jobs.items()
+            if j["done"] and j["finished_at"]
+            and (now - datetime.fromisoformat(j["finished_at"])).total_seconds() > _JOB_RETENTION_SECONDS
+        ]
+        for jid in expired:
+            _jobs.pop(jid, None)
 ```
 
-### 4.6 服务启动清理
+### 4.6 服务启动 / 停止
 
 ```python
-# app/main.py lifespan 已经清理 TreeImport pending，这里追加：
-from app.models.whitelist import WhitelistCandidate
+# app/main.py lifespan
+# 1. 不需要清理 WhitelistCandidate 残留 ——
+#    scan() 是"每关键词一 commit"，崩溃只会丢最后一个关键词的中间态，
+#    所有已写入 DB 的行都带完整 duplicate_status，下次扫描会幂等覆盖。
+# 2. 启动后台 sweeper 定期回收完成的 job
+from app.api.routes.whitelist_batch import _sweep_jobs
+app.state.whitelist_job_sweeper = asyncio.create_task(_sweep_jobs())
 
-with _SessionLocal() as _s:
-    # 兜底：清理 duplicate_status 为 NULL 的残留（理论上不该出现，
-    # 因为 scan 是每关键词一 commit；这是双保险）
-    interrupted_cand = _s.query(WhitelistCandidate).filter(
-        WhitelistCandidate.duplicate_status.is_(None)
-    ).delete()
-    _s.commit()
-    if interrupted_cand:
-        logger.info("lifespan: 清理 %d 条扫描中断的残留候选", interrupted_cand)
+# 关闭时：
+app.state.whitelist_job_sweeper.cancel()
 ```
 
 ---
@@ -610,6 +661,10 @@ async function handleSubmit() {
 | 服务器重启 → `_jobs` 丢失 | 刷新页面 → `GET /jobs/active` 返回空 → UI 进入"未运行"态 | 不卡死。candidate 表是事实来源 |
 | 用户提交时 candidate_ids 含非 pending 项 | `submit_selected` 跳过这些，summary `skipped: N` | 不报 400，仅 skipped 计数 |
 | `dismiss` 已 submitted 的候选 | 返回 400 | message.error |
+| 提交时 `cand.last_scanned_tree_import_id` 为 None | `_check_single_duplicate(None)` 返回 clear（"未选择目录树批次"），照常提交 | 行级 tooltip 标注"未做本地查重" |
+| 提交时该 tree_import 已被删除（FK SET NULL） | 同上：`last_scanned_tree_import_id` 已变 None | 同上 |
+| scan 与 submit 同时操作同一行 | scan 先 commit 改写 `duplicate_status`，submit 内 `db.refresh(cand)` 再判 `lifecycle_status`；submit 后 scan 端 last_scanned_at 也只刷新（不动 lifecycle） | 无感；最终一致 |
+| 多 SSE 客户端订阅同一 job 后 done | 任务保留 10 分钟由 sweeper 清理，多 tab 看完整帧不冲突 | 无感 |
 
 ---
 
@@ -619,32 +674,41 @@ async function handleSubmit() {
 
 **`tests/whitelist/test_candidate_service_scan.py`**
 - `test_scan_first_run_inserts_new_candidates`
-- `test_scan_second_run_skips_submitted`
-- `test_scan_second_run_skips_dismissed`
+- `test_scan_two_keywords_match_same_magnet_produces_two_rows` — 验证 (tid,magnet,keyword_id) 三元组唯一，同一磁力被两个白名单关键词命中产生 2 行
+- `test_scan_second_run_skips_submitted_and_updates_last_scanned_at`
+- `test_scan_second_run_skips_dismissed_and_updates_last_scanned_at`
 - `test_scan_re_evaluates_clear_status`
 - `test_scan_re_evaluates_duplicate_found_status`
-- `test_scan_skips_task_exists`
+- `test_scan_skips_task_exists_and_updates_last_scanned_at`
 - `test_scan_progress_cb_called_per_keyword`
 - `test_scan_commits_per_keyword`
 - `test_scan_keyword_failure_does_not_abort_job`
+- `test_target_path_recomputed_when_keyword_renamed_between_scans`
 
 **`tests/whitelist/test_candidate_service_submit.py`**
 - `test_submit_creates_magnet_task_and_links`
 - `test_submit_handles_single_failure_continues`
+- `test_submit_rolls_back_on_create_and_submit_failure` — 验证 PendingRollbackError 已被显式 rollback() 化解
 - `test_submit_skips_non_pending_candidates`
 - `test_submit_summary_counts_correct`
 - `test_submit_respects_offline_interval`
-- `test_submit_dismissed_or_submitted_id_in_payload_is_skipped`
+- `test_submit_uses_none_tree_import_id_when_candidate_never_scanned` — 验证 last_scanned_tree_import_id 为 None 时仍能提交（duplicate=clear）
+- `test_submit_refreshes_cand_before_acting` — 模拟并发：循环开始前预先把某行改成 dismissed，submit 内应跳过
 
 **`tests/whitelist/test_candidate_routes.py`**
 - `test_scan_jobs_returns_409_when_scan_locked`
 - `test_submit_jobs_returns_409_when_submit_locked`
 - `test_scan_and_submit_can_run_concurrently`
 - `test_jobs_progress_sse_streams_done_frame`
+- `test_jobs_progress_sse_emits_keepalive_when_idle` — 占位测：mock 慢回调，验证 30s 内有 `: keepalive` 帧
+- `test_jobs_progress_does_not_pop_on_close_allowing_second_subscription`
 - `test_dismiss_then_restore_round_trip`
+- `test_restore_failed_candidate_back_to_pending`
+- `test_restore_submitted_candidate_returns_400`
 - `test_dismiss_submitted_candidate_returns_400`
 - `test_get_active_jobs_returns_running_jobs`
 - `test_list_candidates_filters_by_lifecycle_and_keyword`
+- `test_job_id_is_uuid_not_sequential_integer`
 
 ### 7.2 前端
 
@@ -654,7 +718,17 @@ async function handleSubmit() {
 
 部署到服务器后逐项执行：
 
-1. **nginx SSE 支持**：检查 `docker/nginx.conf` 中 `/api/` location 添加 `proxy_buffering off;` `proxy_cache off;`，否则 SSE 会被缓冲
+1. **nginx SSE 支持**：修改 `docker/nginx.conf`，在 `/api/` location 内添加：
+   ```nginx
+   proxy_buffering off;
+   proxy_cache off;
+   proxy_http_version 1.1;
+   proxy_set_header Connection "";   # keep-alive 长连接
+   chunked_transfer_encoding on;
+   gzip off;                          # 防止 gzip 攒帧
+   # proxy_read_timeout 已是 300s，与 _JOB_RETENTION_SECONDS 协调
+   ```
+   配合后端 20s 心跳帧，对 nginx / 中间代理的 idle timeout 都安全
 2. **扫描 1 个关键词**：看 SSE 实时推，进度条秒级更新
 3. **候选勾 3 条 → 提交**：看到逐条进度，间隔 = `offline_submit_interval_seconds`
 4. **中途切走再回页面**：进度条按 `GET /jobs/active` 恢复
@@ -703,11 +777,14 @@ async function handleSubmit() {
 | 风险 | 缓解 |
 |---|---|
 | 大量候选（万级）扫描 commit 频繁 | 每关键词一 commit，commit 频率 ≈ 关键词数（百级），可接受 |
-| SSE 被 nginx 缓冲 | nginx.conf 加 `proxy_buffering off;` 并写进手动验收清单 |
+| SSE 被 nginx 缓冲 | nginx.conf 加 `proxy_buffering off;` + `proxy_http_version 1.1;` + 后端 20s 心跳帧 |
 | asyncio.Lock 的 locked()+create_task 非原子 | 同 §async-import：单用户场景下可接受，注释明确说明 |
 | 删除旧 API 破坏外部调用方 | 项目仅有前端调用，前端同步修改即可 |
 | 旧 in-memory 预览数据丢失 | 旧数据本来就不持久化，无影响 |
 | Postgres ON CONFLICT 与 SQLite 行为差异 | 用 ORM `select + add/update`，不依赖数据库特定 ON CONFLICT 语法 |
+| **多 worker 部署破坏 `_jobs` 共享** | **本设计依赖单 worker 部署假设**（uvicorn `--workers 1`）。若未来要上多 worker，需把 `_jobs` 换成 Redis 或 DB 表。当前 docker-compose 用 supervisord 单进程 uvicorn，符合假设 |
+| Scan 与 submit 并发改写同一行 | submit 内 `db.refresh(cand)` 重读最新 lifecycle 后再决定；scan 只在 skip 分支刷 last_scanned_at，不动 lifecycle；最终一致性见 §6 |
+| MagnetDownloadService._local_tree_match_cache 内存泄漏 | 每个 `_blocking_scan` 新建 service 实例，session 关闭即被 GC；不要做服务复用 |
 
 ---
 
