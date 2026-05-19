@@ -92,6 +92,7 @@ def test_submit_handles_single_failure_continues(db_session):
     db_session.refresh(c2)
     assert c1.lifecycle_status == "failed"
     assert c1.failure_reason == "boom"
+    assert c1.magnet_task_id == 11  # 即便 status=failed，magnet_task_id 也应回填
     assert c2.lifecycle_status == "submitted"
 
 
@@ -121,6 +122,10 @@ def test_submit_rolls_back_on_create_and_submit_failure(db_session):
     # c1 失败但 c2 必须能继续 → 验证 rollback 路径生效
     assert summary.submitted == 1
     assert summary.failed == 1
+    # c1 必须被打上 failed + failure_reason（来自 str(exc)）
+    db_session.refresh(c1)
+    assert c1.lifecycle_status == "failed"
+    assert c1.failure_reason and len(c1.failure_reason) > 0
 
 
 def test_submit_skips_non_pending_candidates(db_session):

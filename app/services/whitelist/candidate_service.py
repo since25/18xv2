@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 
 from app.models.keywords import KeywordEntry
 from app.models.whitelist import WhitelistCandidate
-from app.schemas.magnet_tasks import DuplicateCheckItemRequest
+from app.schemas.magnet_tasks import DuplicateCheckItemRequest, MagnetTaskCreateItem
 from app.schemas.whitelist import ScanSummary, SubmitSummary
 from app.services.tasks.organize_task_service import OrganizeTaskService
 
@@ -192,7 +192,6 @@ class WhitelistCandidateService:
 
 def _candidate_to_create_item(cand: WhitelistCandidate):
     """把 WhitelistCandidate 转成 MagnetTaskCreateItem。"""
-    from app.schemas.magnet_tasks import MagnetTaskCreateItem
     return MagnetTaskCreateItem(
         source_tid=cand.source_tid,
         source_title=cand.source_title,
