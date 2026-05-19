@@ -189,6 +189,72 @@ class WhitelistCandidateService:
 
         return SubmitSummary(submitted=submitted, failed=failed, skipped=skipped)
 
+    def list_candidates(
+        self, *,
+        lifecycle_status: str | None,
+        matched_keyword_entry_id: int | None,
+        duplicate_status: str | None,
+        search: str | None,
+        page: int,
+        page_size: int,
+    ) -> tuple[list[WhitelistCandidate], int]:
+        from sqlalchemy import func as _func, or_
+        base = select(WhitelistCandidate)
+        if lifecycle_status:
+            base = base.where(WhitelistCandidate.lifecycle_status == lifecycle_status)
+        if matched_keyword_entry_id:
+            base = base.where(
+                WhitelistCandidate.matched_keyword_entry_id == matched_keyword_entry_id
+            )
+        if duplicate_status:
+            base = base.where(WhitelistCandidate.duplicate_status == duplicate_status)
+        if search:
+            pattern = f"%{search}%"
+            base = base.where(or_(
+                WhitelistCandidate.source_title.ilike(pattern),
+                WhitelistCandidate.matched_keyword.ilike(pattern),
+            ))
+
+        total = self.db.scalar(
+            select(_func.count()).select_from(base.subquery())
+        ) or 0
+        items = list(self.db.scalars(
+            base.order_by(
+                WhitelistCandidate.match_score.desc(),
+                WhitelistCandidate.id.desc(),
+            )
+            .limit(page_size)
+            .offset((page - 1) * page_size)
+        ).all())
+        return items, total
+
+    def dismiss(self, *, candidate_id: int, reason: str | None) -> WhitelistCandidate:
+        """将候选标记为 dismissed。已提交的候选不允许丢弃。"""
+        cand = self.db.get(WhitelistCandidate, candidate_id)
+        if cand is None:
+            raise LookupError("候选不存在")
+        if cand.lifecycle_status == "submitted":
+            raise ValueError("已提交的候选不能丢弃")
+        cand.lifecycle_status = "dismissed"
+        cand.dismissed_at = datetime.now(UTC)
+        self.db.commit()
+        return cand
+
+    def restore(self, *, candidate_id: int) -> WhitelistCandidate:
+        """将 dismissed 或 failed 的候选恢复为 pending。"""
+        cand = self.db.get(WhitelistCandidate, candidate_id)
+        if cand is None:
+            raise LookupError("候选不存在")
+        if cand.lifecycle_status == "submitted":
+            raise ValueError("已提交的候选不能 restore")
+        if cand.lifecycle_status not in {"dismissed", "failed"}:
+            raise ValueError(f"当前状态 {cand.lifecycle_status} 不能 restore")
+        cand.lifecycle_status = "pending"
+        cand.dismissed_at = None
+        cand.failure_reason = None
+        self.db.commit()
+        return cand
+
 
 def _candidate_to_create_item(cand: WhitelistCandidate):
     """把 WhitelistCandidate 转成 MagnetTaskCreateItem。"""
