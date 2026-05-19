@@ -10,11 +10,16 @@ import asyncio
 import json
 import logging
 import uuid
+from collections.abc import Callable
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
+
+if TYPE_CHECKING:
+    from pydantic import BaseModel
 
 from app.api.deps import get_db
 from app.schemas.whitelist import (
@@ -31,7 +36,9 @@ from app.services.whitelist.candidate_service import WhitelistCandidateService
 router = APIRouter(prefix="/whitelist-batch", tags=["whitelist-batch"])
 logger = logging.getLogger(__name__)
 
-# 并发保护：scan 和 submit 各一把锁，互不阻塞但同类型同时只跑一个
+# 并发保护：scan 和 submit 各一把锁，互不阻塞但同类型同时只跑一个。
+# 注意：locked() 检查 + create_task 之间不是真正原子的，单用户场景下可接受
+# （事件循环单线程使并发 POST 极少），与 imports.py 同样取舍。
 _scan_lock = asyncio.Lock()
 _submit_lock = asyncio.Lock()
 # job_id 用 uuid4 字符串，避免重启后 id 复用导致陈旧前端订阅冲突
@@ -74,36 +81,54 @@ async def _run_scan_job(job_id: str, payload: ScanJobRequest) -> None:
         await asyncio.to_thread(_blocking_scan, job_id, payload)
 
 
-def _blocking_scan(job_id: str, payload: ScanJobRequest) -> None:
+def _run_blocking_job(
+    job_id: str,
+    work: Callable[..., "BaseModel"],
+) -> None:
+    """通用 blocking job runner：管理 SessionLocal 生命周期 + progress cb + done/error 双路径。
+
+    `work(session, cb) -> Pydantic Summary` 是真正干活的回调，由 scan/submit 各自传入。
+    """
     from app.db.session import SessionLocal
-    from app.services.client_115.client import Real115Client
-    from app.services.magnet_download_service import MagnetDownloadService
-    from app.services.source_article_db import SourceArticleDatabaseService
 
     session = SessionLocal()
     try:
         def cb(stage: str, current: int, total: int) -> None:
             _jobs[job_id].update(stage=stage, current=current, total=total)
 
-        magnet_svc = MagnetDownloadService(
-            session,
-            article_db=SourceArticleDatabaseService(),
-            client_115=Real115Client(),
-        )
-        svc = WhitelistCandidateService(session, magnet_svc=magnet_svc)
-        summary = svc.scan(
+        summary = work(session, cb)
+        _jobs[job_id].update(stage="完成", summary=summary.model_dump(), done=True)
+    except Exception as exc:
+        logger.exception("job %s 失败", job_id)
+        _jobs[job_id].update(stage="失败", error=str(exc), done=True)
+    finally:
+        _jobs[job_id]["finished_at"] = datetime.now(UTC).isoformat()
+        session.close()
+
+
+def _make_magnet_svc(session: Session):
+    """构造一个面向当前 session 的 MagnetDownloadService。"""
+    from app.services.client_115.client import Real115Client
+    from app.services.magnet_download_service import MagnetDownloadService
+    from app.services.source_article_db import SourceArticleDatabaseService
+
+    return MagnetDownloadService(
+        session,
+        article_db=SourceArticleDatabaseService(),
+        client_115=Real115Client(),
+    )
+
+
+def _blocking_scan(job_id: str, payload: ScanJobRequest) -> None:
+    def work(session, cb):
+        svc = WhitelistCandidateService(session, magnet_svc=_make_magnet_svc(session))
+        return svc.scan(
             tree_import_id=payload.tree_import_id,
             keyword_entry_ids=payload.keyword_entry_ids,
             per_keyword_limit=payload.per_keyword_limit,
             progress_cb=cb,
         )
-        _jobs[job_id].update(stage="完成", summary=summary.model_dump(), done=True)
-    except Exception as exc:
-        logger.exception("scan job %s 失败", job_id)
-        _jobs[job_id].update(stage="失败", error=str(exc), done=True)
-    finally:
-        _jobs[job_id]["finished_at"] = datetime.now(UTC).isoformat()
-        session.close()
+    _run_blocking_job(job_id, work)
 
 
 # ── Submit job ──────────────────────────────────────────────────────────
@@ -125,46 +150,32 @@ async def _run_submit_job(job_id: str, payload: SubmitJobRequest) -> None:
 
 
 def _blocking_submit(job_id: str, payload: SubmitJobRequest) -> None:
-    from app.db.session import SessionLocal
-    from app.services.client_115.client import Real115Client
-    from app.services.magnet_download_service import MagnetDownloadService
-    from app.services.source_article_db import SourceArticleDatabaseService
-
-    session = SessionLocal()
-    try:
-        def cb(stage: str, current: int, total: int) -> None:
-            _jobs[job_id].update(stage=stage, current=current, total=total)
-
-        magnet_svc = MagnetDownloadService(
-            session,
-            article_db=SourceArticleDatabaseService(),
-            client_115=Real115Client(),
-        )
-        svc = WhitelistCandidateService(session, magnet_svc=magnet_svc)
-        summary = svc.submit_selected(
+    def work(session, cb):
+        svc = WhitelistCandidateService(session, magnet_svc=_make_magnet_svc(session))
+        return svc.submit_selected(
             candidate_ids=payload.candidate_ids,
             force_submit=payload.force_submit,
             progress_cb=cb,
         )
-        _jobs[job_id].update(stage="完成", summary=summary.model_dump(), done=True)
-    except Exception as exc:
-        logger.exception("submit job %s 失败", job_id)
-        _jobs[job_id].update(stage="失败", error=str(exc), done=True)
-    finally:
-        _jobs[job_id]["finished_at"] = datetime.now(UTC).isoformat()
-        session.close()
+    _run_blocking_job(job_id, work)
 
 
 # ── SSE 进度 + active jobs ──────────────────────────────────────────────
 @router.get("/jobs/{job_id}/progress")
 async def job_progress(job_id: str) -> StreamingResponse:
-    """SSE 推送：每秒一帧；空闲 20s 输出 keepalive；done 后再推一帧后断开。
+    """SSE 推送：每秒一帧；done 后再推一帧后断开。
 
-    不在此处 pop job，避免多 tab 订阅同一 job 时 tab A 已 pop 导致 tab B 看到 not found。
+    不需要独立 keepalive — 每秒必发 data 已经穿透 nginx 等代理的 idle timeout。
+    不在此处 pop _jobs[job_id]，避免多 tab 订阅时第一个 tab pop 导致第二个 tab 见 not found；
     清理由 _sweep_jobs 后台任务在 _JOB_RETENTION_SECONDS 后完成。
     """
     async def event_stream():
-        last_emit = asyncio.get_event_loop().time()
+        """每秒 yield 一帧 data；done 后再推一帧后断开。
+
+        不需要独立 keepalive — 每秒必发 data 已经穿透 nginx 等代理的 idle timeout。
+        不在此处 pop _jobs[job_id]，避免多 tab 订阅时第一个 tab pop 导致第二个 tab 见 not found；
+        清理由 _sweep_jobs 后台任务在 _JOB_RETENTION_SECONDS 后完成。
+        """
         sent_done_once = False
         while True:
             state = _jobs.get(job_id)
@@ -172,17 +183,11 @@ async def job_progress(job_id: str) -> StreamingResponse:
                 yield f"data: {json.dumps({'error': 'not found'})}\n\n"
                 break
             yield f"data: {json.dumps(state)}\n\n"
-            last_emit = asyncio.get_event_loop().time()
             if state["done"]:
                 if sent_done_once:
                     break
                 sent_done_once = True
-                await asyncio.sleep(1)
-                continue
             await asyncio.sleep(1)
-            if asyncio.get_event_loop().time() - last_emit >= 20:
-                yield ": keepalive\n\n"
-                last_emit = asyncio.get_event_loop().time()
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
@@ -198,17 +203,20 @@ async def active_jobs() -> ActiveJobsResponse:
         None,
     )
     return ActiveJobsResponse(
-        scan=JobFrame(**scan) if scan else None,
-        submit=JobFrame(**submit) if submit else None,
+        scan=JobFrame.model_validate(scan) if scan else None,
+        submit=JobFrame.model_validate(submit) if submit else None,
     )
 
 
 # ── Sweeper：后台清理已完成超过保留期的 job ─────────────────────────────
+_SWEEP_INTERVAL_SECONDS = 60
+
+
 async def _sweep_jobs() -> None:
-    """每 60s 扫描一次，回收已完成且超过 _JOB_RETENTION_SECONDS 的 job。"""
+    """每 _SWEEP_INTERVAL_SECONDS 扫描一次，回收已完成且超过 _JOB_RETENTION_SECONDS 的 job。"""
     while True:
         try:
-            await asyncio.sleep(60)
+            await asyncio.sleep(_SWEEP_INTERVAL_SECONDS)
             now = datetime.now(UTC)
             expired = []
             for jid, j in list(_jobs.items()):
