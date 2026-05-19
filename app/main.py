@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -52,7 +53,16 @@ async def lifespan(app: FastAPI):
         if interrupted:
             logger.info("lifespan: 清理 %d 条残留 pending 导入记录 → interrupted", interrupted)
 
+    # 启动白名单 job sweeper
+    from app.api.routes.whitelist_batch import _sweep_jobs
+    app.state.whitelist_job_sweeper = asyncio.create_task(_sweep_jobs())
+    logger.info("白名单 sweeper 已启动")
+
     yield
+
+    sweeper = getattr(app.state, "whitelist_job_sweeper", None)
+    if sweeper is not None:
+        sweeper.cancel()
     logger.info("Shutting down")
 
 
@@ -81,6 +91,7 @@ from app.api.routes import (  # noqa: E402 — import after app creation
     qr_login,
     strategy,
     tasks,
+    whitelist_batch,
 )
 
 
@@ -120,6 +131,7 @@ app.include_router(tasks.router)
 app.include_router(qr_login.router)
 app.include_router(open_auth.router)
 app.include_router(files_115.router)
+app.include_router(whitelist_batch.router)
 
 
 @app.get("/healthz")
