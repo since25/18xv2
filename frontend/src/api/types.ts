@@ -294,39 +294,6 @@ export interface MagnetTaskBatchSummaryListResponse {
   total: number
   batches: MagnetTaskBatchSummary[]
 }
-export interface WhitelistBatchCandidate {
-  source_tid: number
-  source_title: string
-  source_magnet: string
-  source_detail_url: string | null
-  source_section: string | null
-  matched_keyword: string | null
-  matched_alias: string | null
-  match_score: number
-  keyword_entry_id: number | null
-  duplicate_status: string
-  duplicate_reason: string | null
-  matched_import_id: number | null
-  matched_import_label: string | null
-  target_path: string
-}
-export interface WhitelistBatchPreviewResponse {
-  scanned_keyword_count: number
-  total_candidates: number
-  selected_candidates: number
-  candidates: WhitelistBatchCandidate[]
-}
-export interface WhitelistBatchSubmitResponse {
-  scanned_keyword_count: number
-  total_candidates: number
-  selected_candidates: number
-  created_count: number
-  submitted_count: number
-  duplicate_skipped_count: number
-  failed_count: number
-  tasks: MagnetTask[]
-}
-
 // ── 授权 / QR 登录 ────────────────────────────────────────────
 export interface QrLoginClientOption {
   app: string

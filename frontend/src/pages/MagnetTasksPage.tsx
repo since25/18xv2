@@ -8,9 +8,7 @@ import {
   InputNumber,
   Popconfirm,
   Select,
-  Segmented,
   Space,
-  Statistic,
   Table,
   Tag,
   Tooltip,
@@ -23,8 +21,6 @@ import { Link } from 'react-router-dom'
 import { api } from '@/api/client'
 import type {
   ImportListResponse,
-  KeywordEntry,
-  KeywordEntryListResponse,
   MagnetArticleCandidate,
   MagnetArticleSearchResponse,
   MagnetDuplicateCheckItem,
@@ -35,8 +31,6 @@ import type {
   MagnetTaskBatchSummaryListResponse,
   RemoteFetchRequest,
   TreeImport,
-  WhitelistBatchCandidate,
-  WhitelistBatchPreviewResponse,
 } from '@/api/types'
 import { formatDateTime } from '@/utils/format'
 
@@ -70,19 +64,6 @@ export default function MagnetTasksPage() {
   const [submitting, setSubmitting] = useState(false)
   const [loadingTasks, setLoadingTasks] = useState(false)
   const [clearingTasks, setClearingTasks] = useState(false)
-  const [whitelistEntries, setWhitelistEntries] = useState<KeywordEntry[]>([])
-  const [selectedWhitelistKeywordIds, setSelectedWhitelistKeywordIds] = useState<number[]>([])
-  const [perKeywordLimit, setPerKeywordLimit] = useState(10)
-  const [totalLimit, setTotalLimit] = useState(100)
-  const [submitLimit, setSubmitLimit] = useState(20)
-  const [batchPreview, setBatchPreview] = useState<WhitelistBatchCandidate[]>([])
-  const [previewingBatch, setPreviewingBatch] = useState(false)
-  const [submittingBatch, setSubmittingBatch] = useState(false)
-  const [batchStats, setBatchStats] = useState<WhitelistBatchPreviewResponse | null>(null)
-  const [selectedBatchPreviewKeys, setSelectedBatchPreviewKeys] = useState<Array<string | number>>([])
-  const [batchPreviewSearch, setBatchPreviewSearch] = useState('')
-  const [batchDuplicateFilter, setBatchDuplicateFilter] = useState<'all' | 'clear' | 'duplicate_found' | 'task_exists'>('all')
-
   const [treeImports, setTreeImports] = useState<TreeImport[]>([])
   const [selectedTreeImportId, setSelectedTreeImportId] = useState<number | null>(null)
   const [remoteCid, setRemoteCid] = useState('')
@@ -94,33 +75,6 @@ export default function MagnetTasksPage() {
     () => candidates.filter((item) => selectedRowKeys.includes(item.source_tid)),
     [candidates, selectedRowKeys],
   )
-
-  const getBatchPreviewRowKey = (record: WhitelistBatchCandidate) => `${record.source_tid}-${record.keyword_entry_id ?? 'na'}`
-
-  const filteredBatchPreview = useMemo(() => {
-    const needle = batchPreviewSearch.trim().toLowerCase()
-    return batchPreview.filter((item) => {
-      if (batchDuplicateFilter !== 'all' && item.duplicate_status !== batchDuplicateFilter) {
-        return false
-      }
-      if (!needle) {
-        return true
-      }
-      const haystacks = [
-        item.source_title,
-        item.matched_keyword ?? '',
-        item.matched_alias ?? '',
-        item.target_path,
-        String(item.source_tid),
-      ]
-      return haystacks.some((value) => value.toLowerCase().includes(needle))
-    })
-  }, [batchDuplicateFilter, batchPreview, batchPreviewSearch])
-
-  const selectedBatchPreviewItems = useMemo(() => {
-    const selected = new Set(selectedBatchPreviewKeys.map(String))
-    return batchPreview.filter((item) => selected.has(getBatchPreviewRowKey(item)))
-  }, [batchPreview, selectedBatchPreviewKeys])
 
   const ensureTreeImportSelected = () => {
     if (selectedTreeImportId !== null) {
@@ -146,15 +100,6 @@ export default function MagnetTasksPage() {
     try {
       const response = await api.get<ImportListResponse>('/imports/data?limit=100')
       setTreeImports(response.items ?? [])
-    } catch (error: unknown) {
-      message.error((error as Error).message)
-    }
-  }
-
-  const loadWhitelistEntries = async () => {
-    try {
-      const response = await api.get<KeywordEntryListResponse>('/keywords?keyword_type=whitelist&status=active&limit=5000')
-      setWhitelistEntries(response.entries ?? [])
     } catch (error: unknown) {
       message.error((error as Error).message)
     }
@@ -188,7 +133,6 @@ export default function MagnetTasksPage() {
     const timer = window.setTimeout(() => {
       void loadTaskBatches()
       void loadTreeImports()
-      void loadWhitelistEntries()
     }, 0)
 
     return () => window.clearTimeout(timer)
@@ -300,77 +244,6 @@ export default function MagnetTasksPage() {
     }
   }
 
-  const previewWhitelistBatch = async () => {
-    if (!ensureTreeImportSelected()) {
-      return
-    }
-
-    setPreviewingBatch(true)
-    try {
-      const response = await api.post<WhitelistBatchPreviewResponse>('/magnet-tasks/whitelist-batch/preview', {
-        tree_import_id: selectedTreeImportId,
-        keyword_entry_ids: selectedWhitelistKeywordIds,
-        per_keyword_limit: perKeywordLimit,
-        total_limit: totalLimit,
-        submit_limit: submitLimit,
-        force_submit: false,
-      })
-      setBatchPreview(response.candidates ?? [])
-      setBatchStats(response)
-      setSelectedBatchPreviewKeys([])
-      message.success(`批量预览完成，筛出 ${response.selected_candidates} 条可提交候选`)
-    } catch (error: unknown) {
-      message.error((error as Error).message)
-    } finally {
-      setPreviewingBatch(false)
-    }
-  }
-
-  const submitWhitelistBatch = async () => {
-    if (!ensureTreeImportSelected()) {
-      return
-    }
-    if (!selectedBatchPreviewItems.length) {
-      message.warning('请先在预览结果里勾选准备提交的候选项')
-      return
-    }
-
-    setSubmittingBatch(true)
-    try {
-      const itemsToSubmit = selectedBatchPreviewItems.slice(0, submitLimit)
-      const response = await api.post<MagnetTaskBatchResponse>('/magnet-tasks/submit', {
-        items: itemsToSubmit.map((item) => ({
-          source_tid: item.source_tid,
-          source_title: item.source_title,
-          source_magnet: item.source_magnet,
-          source_detail_url: item.source_detail_url,
-          source_section: item.source_section,
-          matched_keyword: item.matched_keyword,
-          matched_alias: item.matched_alias,
-          match_score: item.match_score,
-          keyword_entry_id: item.keyword_entry_id,
-          target_path: item.target_path,
-        })),
-        force_submit: false,
-        tree_import_id: selectedTreeImportId ?? null,
-      })
-      message.success(
-        `批量任务完成，创建 ${response.created_count} 条，提交 ${response.submitted_count} 条，跳过 ${response.duplicate_skipped_count} 条`,
-      )
-      await loadTaskBatches()
-      const submittedTidSet = new Set(response.tasks.map((item) => item.source_tid))
-      const submittedKeySet = new Set(
-        itemsToSubmit.filter((item) => submittedTidSet.has(item.source_tid)).map((item) => getBatchPreviewRowKey(item)),
-      )
-      setBatchPreview((current) => current.filter((item) => !submittedKeySet.has(getBatchPreviewRowKey(item))))
-      setSelectedBatchPreviewKeys((current) => current.filter((key) => !submittedKeySet.has(String(key))))
-    } catch (error: unknown) {
-      message.error((error as Error).message)
-    } finally {
-      setSubmittingBatch(false)
-    }
-  }
-
   const candidateColumns: ColumnsType<MagnetArticleCandidate> = [
     {
       title: '候选资源',
@@ -415,39 +288,6 @@ export default function MagnetTasksPage() {
           </div>
         )
       },
-    },
-  ]
-
-  const batchPreviewColumns: ColumnsType<WhitelistBatchCandidate> = [
-    {
-      title: '白名单命中资源',
-      dataIndex: 'source_title',
-      render: (value: string, record) => (
-        <div>
-          <Text strong>{value}</Text>
-          <div className="meta-tags">
-            <Tag>{`tid ${record.source_tid}`}</Tag>
-            <Tag>{`score ${record.match_score}`}</Tag>
-            {record.matched_keyword && <Tag color="blue">{record.matched_keyword}</Tag>}
-            {record.matched_alias && <Tag>{`别名 ${record.matched_alias}`}</Tag>}
-            <Tag color={DUPLICATE_COLOR[record.duplicate_status] ?? 'default'}>{record.duplicate_status}</Tag>
-          </div>
-          <div className="ellipsis-stack">
-            {record.source_detail_url && <div>{record.source_detail_url}</div>}
-            <div>{record.target_path}</div>
-            <div>{record.source_magnet.slice(0, 120)}...</div>
-            {record.duplicate_reason && <div>{record.duplicate_reason}</div>}
-            {record.matched_import_id ? (
-              <div>
-                {`命中批次 #${record.matched_import_id} · ${record.matched_import_label ?? '未命名批次'}`}
-                <Link style={{ marginLeft: 8 }} to={`/nodes?import_id=${record.matched_import_id}`}>
-                  查看内容
-                </Link>
-              </div>
-            ) : null}
-          </div>
-        </div>
-      ),
     },
   ]
 
@@ -523,75 +363,6 @@ export default function MagnetTasksPage() {
           <Button icon={<ReloadOutlined />} onClick={() => void loadTaskBatches()} loading={loadingTasks}>
             刷新最近任务
           </Button>
-        </Space>
-      </Card>
-
-      <Card className="soft-card" style={{ marginBottom: 16 }} title="白名单批处理">
-        <Space direction="vertical" size={14} style={{ width: '100%' }}>
-          <Alert
-            type="info"
-            showIcon
-            message="适合日常增量跑"
-            description="系统会按 active whitelist 批量检索外部库，跨关键词合并候选，再结合本地目录树去重。预览后可以人工筛掉误匹配，再提交到 115；提交时自动创建目录 /已整理/关键词/磁力名称。"
-          />
-          <Space wrap align="start">
-            <Select
-              mode="multiple"
-              showSearch
-              allowClear
-              maxTagCount={4}
-              placeholder="选择白名单关键词（留空则跑全部 active whitelist）"
-              style={{ width: 420 }}
-              value={selectedWhitelistKeywordIds}
-              onChange={(values) => setSelectedWhitelistKeywordIds(values)}
-              optionFilterProp="label"
-              filterOption={(input, option) => String(option?.label ?? '').toLowerCase().includes(input.toLowerCase())}
-              options={whitelistEntries.map((entry) => ({
-                value: entry.id,
-                label: `#${entry.id} · ${entry.canonical_name}`,
-              }))}
-            />
-            <InputNumber
-              min={1}
-              max={100}
-              addonBefore="每词"
-              value={perKeywordLimit}
-              onChange={(value) => setPerKeywordLimit(Number(value ?? 10))}
-            />
-            <InputNumber
-              min={1}
-              max={500}
-              addonBefore="总预览"
-              value={totalLimit}
-              onChange={(value) => setTotalLimit(Number(value ?? 100))}
-            />
-            <InputNumber
-              min={1}
-              max={100}
-              addonBefore="单次提交"
-              value={submitLimit}
-              onChange={(value) => setSubmitLimit(Number(value ?? 20))}
-            />
-            <Button icon={<ReloadOutlined />} onClick={() => void loadWhitelistEntries()}>
-              刷新白名单
-            </Button>
-            <Button type="primary" loading={previewingBatch} onClick={() => void previewWhitelistBatch()}>
-              预览批处理
-            </Button>
-            <Button loading={submittingBatch} onClick={() => void submitWhitelistBatch()}>
-              提交已勾选项到 115
-            </Button>
-          </Space>
-          <Text type="secondary">
-            每词：每个白名单关键词最多取多少条外部候选。总预览：本次预览页最多保留多少条合并后的候选。单次提交：每次点击提交时，最多提交多少条已勾选结果；如果勾选数量超过这个值，需要重复提交下一批。
-          </Text>
-          <Space size={16} wrap>
-            <Statistic title="Active 白名单" value={whitelistEntries.length} />
-            <Statistic title="已选关键词" value={selectedWhitelistKeywordIds.length || whitelistEntries.length} />
-            <Statistic title="本次预览候选" value={batchPreview.length} />
-            <Statistic title="已勾选候选" value={selectedBatchPreviewItems.length} />
-            <Statistic title="提交上限" value={submitLimit} />
-          </Space>
         </Space>
       </Card>
 
@@ -689,71 +460,6 @@ export default function MagnetTasksPage() {
           rowSelection={{
             selectedRowKeys,
             onChange: (keys) => setSelectedRowKeys(keys as Array<string | number>),
-          }}
-        />
-      </Card>
-
-      <Card className="soft-card" title={`白名单批处理预览（${batchPreview.length}）`} style={{ marginBottom: 16 }}>
-        {batchStats ? (
-          <Alert
-            style={{ marginBottom: 16 }}
-            type="success"
-            showIcon
-            message={`本次扫描 ${batchStats.scanned_keyword_count} 个白名单关键词，产出 ${batchStats.total_candidates} 条候选`}
-            description={`现在预览结果支持手动筛选和勾选。每次提交最多处理 ${submitLimit} 条已勾选结果，已提交的记录会从预览区移除，剩余部分可以继续复核后再提交。`}
-          />
-        ) : (
-          <Alert
-            style={{ marginBottom: 16 }}
-            type="info"
-            showIcon
-            message="还没有白名单批处理预览结果。"
-            description="先选择目录树批次，再点“预览批处理”。"
-          />
-        )}
-        <Space wrap style={{ marginBottom: 16 }}>
-          <Segmented
-            value={batchDuplicateFilter}
-            onChange={(value) => setBatchDuplicateFilter(value as 'all' | 'clear' | 'duplicate_found' | 'task_exists')}
-            options={[
-              { label: '全部', value: 'all' },
-              { label: 'clear', value: 'clear' },
-              { label: 'duplicate_found', value: 'duplicate_found' },
-              { label: 'task_exists', value: 'task_exists' },
-            ]}
-          />
-          <Input
-            style={{ width: 280 }}
-            placeholder="按标题 / 关键词 / 目标路径筛选"
-            value={batchPreviewSearch}
-            onChange={(event) => setBatchPreviewSearch(event.target.value)}
-          />
-          <Button
-            onClick={() => setSelectedBatchPreviewKeys(filteredBatchPreview.map((item) => getBatchPreviewRowKey(item)))}
-          >
-            勾选当前筛选结果
-          </Button>
-          <Button
-            onClick={() => setSelectedBatchPreviewKeys(
-              filteredBatchPreview
-                .filter((item) => item.duplicate_status === 'clear')
-                .map((item) => getBatchPreviewRowKey(item)),
-            )}
-          >
-            仅勾选 clear
-          </Button>
-          <Button onClick={() => setSelectedBatchPreviewKeys([])}>
-            清空勾选
-          </Button>
-        </Space>
-        <Table
-          rowKey={(record) => `${record.source_tid}-${record.keyword_entry_id ?? 'na'}`}
-          dataSource={filteredBatchPreview}
-          columns={batchPreviewColumns}
-          pagination={{ pageSize: 10, showTotal: (total) => `共 ${total} 条` }}
-          rowSelection={{
-            selectedRowKeys: selectedBatchPreviewKeys,
-            onChange: (keys) => setSelectedBatchPreviewKeys(keys as Array<string | number>),
           }}
         />
       </Card>

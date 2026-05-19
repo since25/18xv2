@@ -29,6 +29,7 @@ import SettingsPage from './pages/SettingsPage'
 import KeywordExtractorPage from './pages/KeywordExtractorPage'
 import KeywordDuplicatesPage from './pages/KeywordDuplicatesPage'
 import MagnetTasksPage from './pages/MagnetTasksPage'
+import WhitelistBatchPage from './pages/WhitelistBatchPage'
 import AuthCenterPage from './pages/AuthCenterPage'
 import OpenAuthPage from './pages/OpenAuthPage'
 import QrLoginPage from './pages/QrLoginPage'
@@ -47,6 +48,7 @@ const NAV = [
   { key: '/organize-tasks', label: '整理任务',   icon: <ApartmentOutlined /> },
   { key: '/plans',          label: '整理计划',   icon: <OrderedListOutlined /> },
   { key: '/executor',       label: '执行日志',   icon: <HistoryOutlined /> },
+  { key: '/whitelist-batch', label: '白名单批处理', icon: <TagsOutlined /> },
   { key: '/magnet-tasks',   label: '磁力下载',   icon: <CloudDownloadOutlined /> },
   { key: '/auth-center',    label: '授权中心',   icon: <SafetyCertificateOutlined /> },
   { key: '/settings',       label: '系统状态',   icon: <SettingOutlined /> },
@@ -241,6 +243,7 @@ function AppRoutes() {
               <Route path="/plans" element={<PlansPage />} />
               <Route path="/plans/:id" element={<PlanDetailPage />} />
               <Route path="/executor" element={<ExecutorPage />} />
+              <Route path="/whitelist-batch" element={<WhitelistBatchPage />} />
               <Route path="/magnet-tasks" element={<MagnetTasksPage />} />
               <Route path="/auth-center" element={<AuthCenterPage />} />
               <Route path="/auth-center/open-api-qr" element={<OpenAuthPage />} />
