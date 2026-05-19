@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 from app.models.keywords import KeywordEntry
 from app.models.whitelist import WhitelistCandidate
 from app.schemas.magnet_tasks import DuplicateCheckItemRequest
-from app.schemas.whitelist import ScanSummary
+from app.schemas.whitelist import ScanSummary, SubmitSummary
 from app.services.tasks.organize_task_service import OrganizeTaskService
 
 logger = logging.getLogger(__name__)
@@ -134,3 +134,74 @@ class WhitelistCandidateService:
             scanned_keywords=len(entries),
             new=new, updated=updated, skipped=skipped, failed_keywords=failed,
         )
+
+    def submit_selected(
+        self, *,
+        candidate_ids: list[int],
+        force_submit: bool,
+        progress_cb: Callable[[str, int, int], None],
+    ) -> SubmitSummary:
+        if not candidate_ids:
+            raise ValueError("未选择有效的候选项")
+        candidates = list(self.db.scalars(
+            select(WhitelistCandidate).where(WhitelistCandidate.id.in_(candidate_ids))
+        ).all())
+        if not candidates:
+            raise ValueError("未选择有效的候选项")
+
+        submitted = failed = skipped = 0
+        for idx, cand in enumerate(candidates):
+            progress_cb("提交到 115", idx, len(candidates))
+            # 防御并发：scan 可能并行改写过 cand，重读最新状态
+            self.db.refresh(cand)
+            if cand.lifecycle_status != "pending":
+                skipped += 1
+                continue
+            try:
+                task = self.magnet_svc.create_and_submit_tasks(
+                    items=[_candidate_to_create_item(cand)],
+                    force_submit=force_submit,
+                    tree_import_id=cand.last_scanned_tree_import_id,
+                )[0]
+                cand.magnet_task_id = task.id
+                if task.status == "submitted":
+                    cand.lifecycle_status = "submitted"
+                    cand.submitted_at = datetime.now(UTC)
+                    submitted += 1
+                elif task.status == "duplicate_skipped":
+                    cand.lifecycle_status = "submitted"  # 已存在视同已处理
+                    cand.submitted_at = datetime.now(UTC)
+                    skipped += 1
+                else:  # "failed"
+                    cand.lifecycle_status = "failed"
+                    cand.failure_reason = task.failure_reason
+                    failed += 1
+                self.db.commit()
+            except Exception as exc:
+                # 关键：异常可能发生在 create_and_submit_tasks 内部的 flush/commit；
+                # session 已 failed，必须 rollback 才能继续写 cand
+                self.db.rollback()
+                cand = self.db.merge(cand)
+                cand.lifecycle_status = "failed"
+                cand.failure_reason = str(exc)
+                self.db.commit()
+                failed += 1
+
+        return SubmitSummary(submitted=submitted, failed=failed, skipped=skipped)
+
+
+def _candidate_to_create_item(cand: WhitelistCandidate):
+    """把 WhitelistCandidate 转成 MagnetTaskCreateItem。"""
+    from app.schemas.magnet_tasks import MagnetTaskCreateItem
+    return MagnetTaskCreateItem(
+        source_tid=cand.source_tid,
+        source_title=cand.source_title,
+        source_magnet=cand.source_magnet,
+        source_detail_url=cand.source_detail_url,
+        source_section=cand.source_section,
+        matched_keyword=cand.matched_keyword,
+        matched_alias=cand.matched_alias,
+        match_score=cand.match_score,
+        keyword_entry_id=cand.matched_keyword_entry_id,
+        target_path=cand.target_path,
+    )
