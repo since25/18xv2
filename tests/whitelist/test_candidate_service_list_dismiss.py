@@ -171,3 +171,27 @@ def test_restore_pending_candidate_raises(db_session):
     svc = WhitelistCandidateService(db_session, magnet_svc=MagicMock())
     with pytest.raises(ValueError, match="不能 restore"):
         svc.restore(candidate_id=c.id)
+
+
+def test_bulk_dismiss_pending_and_failed(db_session):
+    e = _make_entry(db_session)
+    c_p = _make_cand(db_session, e, tid=1, lifecycle="pending")
+    c_f = _make_cand(db_session, e, tid=2, lifecycle="failed")
+    c_s = _make_cand(db_session, e, tid=3, lifecycle="submitted")
+    c_d = _make_cand(db_session, e, tid=4, lifecycle="dismissed")
+
+    svc = WhitelistCandidateService(db_session, magnet_svc=MagicMock())
+    result = svc.bulk_dismiss(candidate_ids=[c_p.id, c_f.id, c_s.id, c_d.id, 9999])
+    assert result == {"dismissed": 2, "skipped": 3}
+
+    db_session.refresh(c_p)
+    db_session.refresh(c_f)
+    assert c_p.lifecycle_status == "dismissed"
+    assert c_f.lifecycle_status == "dismissed"
+    assert c_p.dismissed_at is not None
+
+
+def test_bulk_dismiss_empty_raises(db_session):
+    svc = WhitelistCandidateService(db_session, magnet_svc=MagicMock())
+    with pytest.raises(ValueError):
+        svc.bulk_dismiss(candidate_ids=[])

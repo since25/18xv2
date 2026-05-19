@@ -27,6 +27,10 @@ class DismissRequest(BaseModel):
     reason: str | None = Field(default=None, max_length=255)
 
 
+class BulkDismissRequest(BaseModel):
+    candidate_ids: list[int] = Field(min_length=1)
+
+
 # ── 汇总 ──────────────────────────────────────────────────────────────
 class ScanSummary(BaseModel):
     scanned_keywords: int

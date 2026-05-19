@@ -13,7 +13,7 @@ import type {
   ImportListResponse, KeywordEntry, KeywordEntryListResponse,
 } from '../api/types'
 import {
-  dismissCandidate, getActiveJobs, listCandidates, restoreCandidate,
+  bulkDismissCandidates, dismissCandidate, getActiveJobs, listCandidates, restoreCandidate,
   startScanJob, startSubmitJob, subscribeJobProgress,
   type JobFrame, type WhitelistCandidate,
 } from '../api/whitelistBatch'
@@ -204,6 +204,22 @@ export default function WhitelistBatchPage() {
     }
   }
 
+  async function handleBulkDismiss() {
+    const ids = Array.from(selectedIds)
+    if (ids.length === 0) {
+      message.warning('请先勾选要丢弃的候选项')
+      return
+    }
+    try {
+      const r = await bulkDismissCandidates(ids)
+      message.success(`批量丢弃完成：${r.dismissed} 条已丢弃，${r.skipped} 条跳过`)
+      setSelectedIds(new Set())
+      loadCandidates()
+    } catch (e: any) {
+      message.error(e?.message ?? '批量丢弃失败')
+    }
+  }
+
   const columns: ColumnsType<WhitelistCandidate> = [
     { title: '资源标题', dataIndex: 'source_title', width: 280, ellipsis: true },
     { title: '命中关键词', dataIndex: 'matched_keyword', width: 120 },
@@ -319,6 +335,17 @@ export default function WhitelistBatchPage() {
             extra={
               <Space>
                 <Button icon={<ReloadOutlined />} onClick={loadCandidates}>刷新</Button>
+                <Popconfirm
+                  title="批量丢弃"
+                  description={`确认丢弃勾选的 ${selectedIds.size} 条？下次扫描不会再出现。已提交项会自动跳过。`}
+                  okText="确认丢弃" okButtonProps={{ danger: true }}
+                  onConfirm={handleBulkDismiss}
+                  disabled={selectedIds.size === 0}
+                >
+                  <Button danger disabled={selectedIds.size === 0}>
+                    丢弃勾选（{selectedIds.size}）
+                  </Button>
+                </Popconfirm>
                 <Button
                   type="primary" icon={<CloudDownloadOutlined />}
                   disabled={selectedIds.size === 0 || submitRunning}
@@ -365,7 +392,8 @@ export default function WhitelistBatchPage() {
                 selectedRowKeys: Array.from(selectedIds),
                 onChange: (keys) => setSelectedIds(new Set(keys as number[])),
                 getCheckboxProps: (row) => ({
-                  disabled: row.lifecycle_status !== 'pending',
+                  // pending 可勾（提交/丢弃都行），failed 可勾（仅丢弃有效）
+                  disabled: !['pending', 'failed'].includes(row.lifecycle_status),
                 }),
               }}
             />

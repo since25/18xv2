@@ -24,6 +24,7 @@ if TYPE_CHECKING:
 from app.api.deps import get_db
 from app.schemas.whitelist import (
     ActiveJobsResponse,
+    BulkDismissRequest,
     CandidateListResponse,
     CandidateResponse,
     DismissRequest,
@@ -290,6 +291,19 @@ def restore_candidate(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return {"candidate_id": cand.id, "lifecycle_status": cand.lifecycle_status}
+
+
+@router.post("/candidates/bulk-dismiss")
+def bulk_dismiss_candidates(
+    payload: BulkDismissRequest,
+    db: Session = Depends(get_db),
+) -> dict:
+    svc = WhitelistCandidateService(db, magnet_svc=None)
+    try:
+        result = svc.bulk_dismiss(candidate_ids=payload.candidate_ids)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return result
 
 
 @router.delete("/candidates/{candidate_id}")

@@ -109,6 +109,13 @@ export function dismissCandidate(id: number, reason?: string) {
   )
 }
 
+export function bulkDismissCandidates(ids: number[]) {
+  return api.post<{ dismissed: number; skipped: number }>(
+    `/whitelist-batch/candidates/bulk-dismiss`,
+    { candidate_ids: ids },
+  )
+}
+
 export function restoreCandidate(id: number) {
   return api.post<{ candidate_id: number; lifecycle_status: string }>(
     `/whitelist-batch/candidates/${id}/restore`,

@@ -240,6 +240,32 @@ class WhitelistCandidateService:
         self.db.commit()
         return cand
 
+    def bulk_dismiss(self, *, candidate_ids: list[int]) -> dict:
+        """批量丢弃：一次性把多个 pending/failed 候选标 dismissed。
+
+        已 submitted 或已 dismissed 的 id 计入 skipped，不报错；
+        不存在的 id 也计入 skipped。一次 commit，性能好。
+        """
+        if not candidate_ids:
+            raise ValueError("未选择有效的候选项")
+        rows = list(self.db.scalars(
+            select(WhitelistCandidate).where(WhitelistCandidate.id.in_(candidate_ids))
+        ).all())
+        dismissed = 0
+        skipped = 0
+        now = datetime.now(UTC)
+        for cand in rows:
+            if cand.lifecycle_status in {"submitted", "dismissed"}:
+                skipped += 1
+                continue
+            cand.lifecycle_status = "dismissed"
+            cand.dismissed_at = now
+            dismissed += 1
+        # 请求的 id 中不存在的也算 skipped
+        skipped += len(candidate_ids) - len(rows)
+        self.db.commit()
+        return {"dismissed": dismissed, "skipped": skipped}
+
     def restore(self, *, candidate_id: int) -> WhitelistCandidate:
         """将 dismissed 或 failed 的候选恢复为 pending。"""
         cand = self.db.get(WhitelistCandidate, candidate_id)
