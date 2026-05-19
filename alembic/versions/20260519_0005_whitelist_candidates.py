@@ -24,7 +24,7 @@ def upgrade() -> None:
         sa.Column("source_tid", sa.Integer(), nullable=False, index=True),
         sa.Column("source_magnet", sa.Text(), nullable=False),
         sa.Column("source_title", sa.Text(), nullable=False),
-        sa.Column("source_section", sa.String(64), nullable=True),
+        sa.Column("source_section", sa.String(255), nullable=True),
         sa.Column("source_detail_url", sa.Text(), nullable=True),
         sa.Column(
             "matched_keyword_entry_id", sa.Integer(),
@@ -58,6 +58,8 @@ def upgrade() -> None:
         sa.Column("first_seen_at", sa.DateTime(timezone=True),
                   server_default=sa.func.now(), nullable=False),
         sa.Column("last_scanned_at", sa.DateTime(timezone=True),
+                  server_default=sa.func.now(), nullable=False),
+        sa.Column("updated_at", sa.DateTime(timezone=True),
                   server_default=sa.func.now(), nullable=False),
         sa.UniqueConstraint(
             "source_tid", "source_magnet", "matched_keyword_entry_id",

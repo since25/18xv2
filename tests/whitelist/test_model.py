@@ -27,7 +27,6 @@ def test_whitelist_candidate_can_be_created(db_session):
         source_title="测试资源",
         matched_keyword_entry_id=entry.id,
         matched_keyword=entry.canonical_name,
-        match_score=0.95,
         duplicate_status="clear",
         target_path="/已整理/演员A/测试资源",
         lifecycle_status="pending",
@@ -37,6 +36,10 @@ def test_whitelist_candidate_can_be_created(db_session):
     assert cand.id is not None
     assert cand.first_seen_at is not None
     assert cand.last_scanned_at is not None
+    assert cand.lifecycle_status == "pending"
+    # match_score not set → server_default "0" → either 0 or 0.0 depending on driver
+    assert cand.match_score in (0, 0.0)
+    assert cand.updated_at is not None
 
 
 def test_whitelist_candidate_unique_per_tid_magnet_keyword(db_session):

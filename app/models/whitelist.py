@@ -8,7 +8,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from sqlalchemy import (
-    Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func,
+    DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -25,8 +25,8 @@ class WhitelistCandidate(Base):
     source_magnet: Mapped[str] = mapped_column(Text, nullable=False)
 
     # 资源元信息（扫描时落盘，提交时无需重查外部库）
-    source_title: Mapped[str] = mapped_column(Text)
-    source_section: Mapped[str | None] = mapped_column(String(64))
+    source_title: Mapped[str] = mapped_column(Text, nullable=False)
+    source_section: Mapped[str | None] = mapped_column(String(255))
     source_detail_url: Mapped[str | None] = mapped_column(Text)
 
     # 关键词命中；同一磁力可被多关键词命中各占一行
@@ -35,9 +35,9 @@ class WhitelistCandidate(Base):
         ForeignKey("keyword_entries.id", ondelete="RESTRICT"),
         index=True, nullable=False,
     )
-    matched_keyword: Mapped[str] = mapped_column(String(255))
+    matched_keyword: Mapped[str] = mapped_column(String(255), nullable=False)
     matched_alias: Mapped[str | None] = mapped_column(String(255))
-    match_score: Mapped[float] = mapped_column(Float, default=0.0)
+    match_score: Mapped[float] = mapped_column(Float, server_default="0", nullable=False)
 
     # 重复检查快照
     last_scanned_tree_import_id: Mapped[int | None] = mapped_column(
@@ -46,7 +46,7 @@ class WhitelistCandidate(Base):
     duplicate_status: Mapped[str] = mapped_column(String(32))
     duplicate_reason: Mapped[str | None] = mapped_column(Text)
     matched_import_label: Mapped[str | None] = mapped_column(String(255))
-    target_path: Mapped[str] = mapped_column(Text)
+    target_path: Mapped[str] = mapped_column(Text, nullable=False)
 
     # 生命周期
     lifecycle_status: Mapped[str] = mapped_column(
@@ -55,13 +55,19 @@ class WhitelistCandidate(Base):
     magnet_task_id: Mapped[int | None] = mapped_column(
         ForeignKey("magnet_download_tasks.id", ondelete="SET NULL"),
     )
-    dismissed_at: Mapped[datetime | None]
-    submitted_at: Mapped[datetime | None]
+    dismissed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     failure_reason: Mapped[str | None] = mapped_column(Text)
 
     # 时间戳
     first_seen_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    # 注意：last_scanned_at 由 scan 服务显式写入（每条候选评估时刷新）；
+    # 不用 onupdate=func.now() 因为 dismiss/restore 等操作不应触发它。
     last_scanned_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(), onupdate=func.now(), nullable=False,
+    )
 
     __table_args__ = (
         UniqueConstraint(
