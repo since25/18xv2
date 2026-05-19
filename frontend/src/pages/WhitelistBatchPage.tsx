@@ -87,14 +87,14 @@ export default function WhitelistBatchPage() {
       if (data.scan) {
         setScanJob(data.scan)
         subscribeJobProgress(data.scan.job_id, (frame) => {
-          if ('error' in frame) return
+          if (!('job_id' in frame)) return
           setScanJob(frame)
         }, () => loadCandidates())
       }
       if (data.submit) {
         setSubmitJob(data.submit)
         subscribeJobProgress(data.submit.job_id, (frame) => {
-          if ('error' in frame) return
+          if (!('job_id' in frame)) return
           setSubmitJob(frame)
         }, () => loadCandidates())
       }
@@ -135,13 +135,17 @@ export default function WhitelistBatchPage() {
       })
       setScanJob(EMPTY_FRAME(resp.job_id, 'scan', 0))
       subscribeJobProgress(resp.job_id, (frame) => {
-        if ('error' in frame) {
+        if (!('job_id' in frame)) {
           message.error(`SSE 错误：${frame.error}`)
           return
         }
         setScanJob(frame)
-      }, () => {
-        message.success('扫描完成')
+      }, (finalFrame) => {
+        if (finalFrame.error) {
+          message.error(`扫描失败：${finalFrame.error}`)
+        } else {
+          message.success('扫描完成')
+        }
         loadCandidates()
       })
     } catch (e: any) {
@@ -161,12 +165,15 @@ export default function WhitelistBatchPage() {
       const resp = await startSubmitJob({ candidate_ids: ids })
       setSubmitJob(EMPTY_FRAME(resp.job_id, 'submit', ids.length))
       subscribeJobProgress(resp.job_id, (frame) => {
-        if ('error' in frame) return
+        if (!('job_id' in frame)) return
         setSubmitJob(frame)
-      }, () => {
-        // 用最新一次 frame 的 summary
-        const s = (submitJob?.summary || {}) as { submitted?: number; failed?: number; skipped?: number }
-        message.success(`提交完成：成功 ${s.submitted ?? 0}，失败 ${s.failed ?? 0}，跳过 ${s.skipped ?? 0}`)
+      }, (finalFrame) => {
+        if (finalFrame.error) {
+          message.error(`提交失败：${finalFrame.error}`)
+        } else {
+          const s = (finalFrame.summary || {}) as { submitted?: number; failed?: number; skipped?: number }
+          message.success(`提交完成：成功 ${s.submitted ?? 0}，失败 ${s.failed ?? 0}，跳过 ${s.skipped ?? 0}`)
+        }
         setSelectedIds(new Set())
         loadCandidates()
       })

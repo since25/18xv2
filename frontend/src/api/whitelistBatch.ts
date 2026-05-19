@@ -120,10 +120,11 @@ export function deleteCandidate(id: number) {
 }
 
 // SSE 订阅辅助：返回 unsubscribe 函数
+// onDone 接收最终帧；调用方据 finalFrame.error 区分成功/失败
 export function subscribeJobProgress(
   jobId: string,
   onFrame: (frame: JobFrame | { error: string }) => void,
-  onDone?: () => void,
+  onDone?: (finalFrame: JobFrame) => void,
 ): () => void {
   const es = new EventSource(`/api/whitelist-batch/jobs/${jobId}/progress`)
   es.onmessage = (ev) => {
@@ -131,7 +132,7 @@ export function subscribeJobProgress(
     onFrame(data)
     if (data.done) {
       es.close()
-      onDone?.()
+      onDone?.(data as JobFrame)
     }
   }
   es.onerror = () => es.close()
