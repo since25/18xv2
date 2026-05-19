@@ -14,7 +14,7 @@ import logging
 from collections.abc import Callable
 from datetime import datetime, UTC
 
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.keywords import KeywordEntry
@@ -198,7 +198,7 @@ class WhitelistCandidateService:
         page: int,
         page_size: int,
     ) -> tuple[list[WhitelistCandidate], int]:
-        from sqlalchemy import func as _func, or_
+        """按 lifecycle / keyword / duplicate / 模糊搜索过滤候选，返回 (items, total) 元组。"""
         base = select(WhitelistCandidate)
         if lifecycle_status:
             base = base.where(WhitelistCandidate.lifecycle_status == lifecycle_status)
@@ -216,7 +216,7 @@ class WhitelistCandidateService:
             ))
 
         total = self.db.scalar(
-            select(_func.count()).select_from(base.subquery())
+            select(func.count()).select_from(base.subquery())
         ) or 0
         items = list(self.db.scalars(
             base.order_by(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
 import pytest
@@ -134,7 +135,7 @@ def test_dismiss_nonexistent_raises_lookup_error(db_session):
 def test_restore_dismissed_candidate(db_session):
     e = _make_entry(db_session)
     c = _make_cand(db_session, e, tid=1, lifecycle="dismissed")
-    c.dismissed_at = __import__("datetime").datetime.now(__import__("datetime").UTC)
+    c.dismissed_at = datetime.now(UTC)
     db_session.commit()
     svc = WhitelistCandidateService(db_session, magnet_svc=MagicMock())
     svc.restore(candidate_id=c.id)
