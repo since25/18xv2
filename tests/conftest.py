@@ -12,6 +12,7 @@ from app.models import keywords as _keywords_models  # noqa: F401
 from app.models import organization as _organization_models  # noqa: F401
 from app.models import tasks as _task_models  # noqa: F401
 from app.models import tree as _tree_models  # noqa: F401
+from app.models import whitelist as _whitelist_models  # noqa: F401
 from app.services.client_115.client import Fake115Client
 
 
