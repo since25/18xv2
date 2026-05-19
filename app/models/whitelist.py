@@ -63,7 +63,7 @@ class WhitelistCandidate(Base):
     first_seen_at: Mapped[datetime] = mapped_column(server_default=func.now())
     # 注意：last_scanned_at 由 scan 服务显式写入（每条候选评估时刷新）；
     # 不用 onupdate=func.now() 因为 dismiss/restore 等操作不应触发它。
-    last_scanned_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    last_scanned_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(), onupdate=func.now(), nullable=False,
