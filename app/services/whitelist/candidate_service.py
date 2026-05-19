@@ -72,11 +72,11 @@ class WhitelistCandidateService:
                     ))
                     # 低成本状态：刷新 last_scanned_at 但不动其它字段
                     if existing and existing.lifecycle_status in {"submitted", "dismissed"}:
-                        existing.last_scanned_at = datetime.now(UTC).replace(tzinfo=None)
+                        existing.last_scanned_at = datetime.now(UTC)
                         skipped += 1
                         continue
                     if existing and existing.duplicate_status == "task_exists":
-                        existing.last_scanned_at = datetime.now(UTC).replace(tzinfo=None)
+                        existing.last_scanned_at = datetime.now(UTC)
                         skipped += 1
                         continue
 
@@ -121,7 +121,7 @@ class WhitelistCandidateService:
                         existing.matched_import_label = dup.matched_import_label
                         existing.target_path = target_path
                         existing.last_scanned_tree_import_id = tree_import_id
-                        existing.last_scanned_at = datetime.now(UTC).replace(tzinfo=None)
+                        existing.last_scanned_at = datetime.now(UTC)
                         updated += 1
                 self.db.commit()
             except Exception:

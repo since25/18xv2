@@ -22,6 +22,11 @@ from app.services.magnet_download_service import DuplicateCheckResult
 from app.services.whitelist.candidate_service import WhitelistCandidateService
 
 
+def _to_naive(dt):
+    """SQLite 读 DateTime(timezone=True) 列时返回 naive UTC；比较前统一去掉 tzinfo 以兼容两种数据库。"""
+    return dt.replace(tzinfo=None) if dt.tzinfo is not None else dt
+
+
 def _make_entry(db, name="演员A"):
     e = KeywordEntry(
         canonical_name=name,
@@ -137,13 +142,13 @@ def test_scan_two_keywords_match_same_magnet_produces_two_rows(db_session):
 def test_scan_second_run_skips_submitted_and_updates_last_scanned_at(db_session):
     entry = _make_entry(db_session, "演员A")
     tree = _make_tree(db_session)
-    earlier = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=1)
+    earlier = datetime.now(UTC) - timedelta(days=1)
     db_session.add(WhitelistCandidate(
         source_tid=42, source_magnet="magnet:?xt=urn:btih:42",
         source_title="老资源", matched_keyword_entry_id=entry.id,
         matched_keyword=entry.canonical_name, duplicate_status="clear",
         target_path="/x", lifecycle_status="submitted",
-        last_scanned_at=earlier,
+        last_scanned_at=_to_naive(earlier),
     ))
     db_session.commit()
 
@@ -165,19 +170,19 @@ def test_scan_second_run_skips_submitted_and_updates_last_scanned_at(db_session)
 
     row = db_session.scalar(select(WhitelistCandidate))
     assert row.lifecycle_status == "submitted"
-    assert row.last_scanned_at > earlier
+    assert _to_naive(row.last_scanned_at) > _to_naive(earlier)
 
 
 def test_scan_second_run_skips_dismissed_and_updates_last_scanned_at(db_session):
     entry = _make_entry(db_session, "演员A")
     tree = _make_tree(db_session)
-    earlier = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=1)
+    earlier = datetime.now(UTC) - timedelta(days=1)
     db_session.add(WhitelistCandidate(
         source_tid=99, source_magnet="magnet:?xt=urn:btih:99",
         source_title="t", matched_keyword_entry_id=entry.id,
         matched_keyword=entry.canonical_name, duplicate_status="clear",
         target_path="/x", lifecycle_status="dismissed",
-        last_scanned_at=earlier,
+        last_scanned_at=_to_naive(earlier),
     ))
     db_session.commit()
 
@@ -193,7 +198,7 @@ def test_scan_second_run_skips_dismissed_and_updates_last_scanned_at(db_session)
     assert summary.skipped == 1
     magnet_svc._check_single_duplicate.assert_not_called()
     row = db_session.scalar(select(WhitelistCandidate))
-    assert row.last_scanned_at > earlier
+    assert _to_naive(row.last_scanned_at) > _to_naive(earlier)
 
 
 def test_scan_skips_task_exists_and_updates_last_scanned_at(db_session):
