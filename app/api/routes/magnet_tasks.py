@@ -20,10 +20,6 @@ from app.schemas.magnet_tasks import (
     MagnetTaskBatchSummaryResponse,
     MagnetTaskCreateRequest,
     MagnetTaskResponse,
-    WhitelistBatchPreviewResponse,
-    WhitelistBatchRequest,
-    WhitelistBatchCandidateResponse,
-    WhitelistBatchSubmitResponse,
 )
 from app.services.client_115.client import Real115Client
 from app.services.magnet_download_service import MagnetDownloadService
@@ -146,80 +142,6 @@ def submit_magnet_tasks(
         created_count=len(tasks),
         submitted_count=sum(1 for task in tasks if task.status == "submitted"),
         duplicate_skipped_count=sum(1 for task in tasks if task.status == "duplicate_skipped"),
-        tasks=[MagnetTaskResponse.model_validate(task) for task in tasks],
-    )
-
-
-@router.post("/whitelist-batch/preview", response_model=WhitelistBatchPreviewResponse)
-def preview_whitelist_batch(
-    payload: WhitelistBatchRequest,
-    db: Session = Depends(get_db),
-    client_115: Real115Client = Depends(get_115_client),
-    article_db: SourceArticleDatabaseService = Depends(get_source_article_db),
-) -> WhitelistBatchPreviewResponse:
-    service = MagnetDownloadService(db, article_db=article_db, client_115=client_115)
-    try:
-        preview_run = service.preview_whitelist_batch(
-            tree_import_id=payload.tree_import_id,
-            keyword_entry_ids=payload.keyword_entry_ids,
-            per_keyword_limit=payload.per_keyword_limit,
-            total_limit=payload.total_limit,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return WhitelistBatchPreviewResponse(
-        scanned_keyword_count=preview_run.scanned_keyword_count,
-        total_candidates=preview_run.total_candidates,
-        selected_candidates=len(preview_run.preview_items),
-        candidates=[
-            WhitelistBatchCandidateResponse(
-                source_tid=item.item.source_tid,
-                source_title=item.item.source_title,
-                source_magnet=item.item.source_magnet,
-                source_detail_url=item.item.source_detail_url,
-                source_section=item.item.source_section,
-                matched_keyword=item.item.matched_keyword,
-                matched_alias=item.item.matched_alias,
-                match_score=item.item.match_score,
-                keyword_entry_id=item.item.keyword_entry_id,
-                duplicate_status=item.duplicate_status,
-                duplicate_reason=item.duplicate_reason,
-                matched_import_id=item.matched_import_id,
-                matched_import_label=item.matched_import_label,
-                target_path=item.target_path,
-            )
-            for item in preview_run.preview_items
-        ],
-    )
-
-
-@router.post("/whitelist-batch/submit", response_model=WhitelistBatchSubmitResponse)
-def submit_whitelist_batch(
-    payload: WhitelistBatchRequest,
-    db: Session = Depends(get_db),
-    client_115: Real115Client = Depends(get_115_client),
-    article_db: SourceArticleDatabaseService = Depends(get_source_article_db),
-) -> WhitelistBatchSubmitResponse:
-    service = MagnetDownloadService(db, article_db=article_db, client_115=client_115)
-    try:
-        preview_run, tasks = service.submit_whitelist_batch(
-            tree_import_id=payload.tree_import_id,
-            keyword_entry_ids=payload.keyword_entry_ids,
-            per_keyword_limit=payload.per_keyword_limit,
-            total_limit=payload.total_limit,
-            submit_limit=payload.submit_limit,
-            force_submit=payload.force_submit,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return WhitelistBatchSubmitResponse(
-        scanned_keyword_count=preview_run.scanned_keyword_count,
-        total_candidates=preview_run.total_candidates,
-        selected_candidates=min(len(preview_run.preview_items), payload.submit_limit),
-        created_count=len(tasks),
-        submitted_count=sum(1 for task in tasks if task.status == "submitted"),
-        duplicate_skipped_count=sum(1 for task in tasks if task.status == "duplicate_skipped"),
-        failed_count=sum(1 for task in tasks if task.status == "failed"),
         tasks=[MagnetTaskResponse.model_validate(task) for task in tasks],
     )
 
