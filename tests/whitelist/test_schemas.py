@@ -82,8 +82,8 @@ def test_job_frame_job_type_restricted_to_scan_or_submit():
         )
 
 
-def test_active_jobs_response_can_be_all_null():
-    r = ActiveJobsResponse(scan=None, submit=None)
+def test_active_jobs_response_defaults_to_all_none():
+    r = ActiveJobsResponse()
     assert r.model_dump() == {"scan": None, "submit": None}
 
 
@@ -94,13 +94,16 @@ def test_candidate_response_from_orm(db_session):
 
     e = KeywordEntry(canonical_name="A", canonical_name_normalized="a",
                      keyword_type="whitelist", status="active")
-    db_session.add(e); db_session.commit()
+    db_session.add(e)
+    db_session.commit()
     c = WhitelistCandidate(
         source_tid=1, source_magnet="m", source_title="t",
         matched_keyword_entry_id=e.id, matched_keyword="A",
         duplicate_status="clear", target_path="/x",
     )
-    db_session.add(c); db_session.commit(); db_session.refresh(c)
+    db_session.add(c)
+    db_session.commit()
+    db_session.refresh(c)
 
     resp = CandidateResponse.model_validate(c)
     assert resp.id == c.id
@@ -112,3 +115,29 @@ def test_candidate_list_response_shape():
     cl = CandidateListResponse(items=[], total=0, page=1, page_size=100)
     assert cl.total == 0
     assert cl.items == []
+
+
+def test_candidate_list_response_with_items(db_session):
+    from app.models.keywords import KeywordEntry
+    from app.models.whitelist import WhitelistCandidate
+
+    e = KeywordEntry(canonical_name="A", canonical_name_normalized="a",
+                     keyword_type="whitelist", status="active")
+    db_session.add(e)
+    db_session.commit()
+    c = WhitelistCandidate(
+        source_tid=99, source_magnet="m", source_title="t",
+        matched_keyword_entry_id=e.id, matched_keyword="A",
+        duplicate_status="clear", target_path="/x",
+    )
+    db_session.add(c)
+    db_session.commit()
+    db_session.refresh(c)
+
+    cl = CandidateListResponse(
+        items=[CandidateResponse.model_validate(c)],
+        total=1, page=1, page_size=100,
+    )
+    assert cl.total == 1
+    assert len(cl.items) == 1
+    assert cl.items[0].source_tid == 99

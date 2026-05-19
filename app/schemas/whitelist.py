@@ -6,7 +6,9 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
+
+from app.schemas.common import ORMModel
 
 
 # ── 请求 ──────────────────────────────────────────────────────────────
@@ -48,21 +50,19 @@ class JobFrame(BaseModel):
     current: int
     total: int
     done: bool
-    error: str | None
-    summary: dict | None
-    started_at: str
-    finished_at: str | None
+    error: str | None = None
+    summary: ScanSummary | SubmitSummary | None = None
+    started_at: datetime
+    finished_at: datetime | None = None
 
 
 class ActiveJobsResponse(BaseModel):
-    scan: JobFrame | None
-    submit: JobFrame | None
+    scan: JobFrame | None = None
+    submit: JobFrame | None = None
 
 
 # ── 候选行 ────────────────────────────────────────────────────────────
-class CandidateResponse(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
+class CandidateResponse(ORMModel):
     id: int
     source_tid: int
     source_magnet: str
