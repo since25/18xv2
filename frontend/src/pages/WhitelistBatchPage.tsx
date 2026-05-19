@@ -58,7 +58,7 @@ export default function WhitelistBatchPage() {
   const [candidates, setCandidates] = useState<WhitelistCandidate[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
-  const pageSize = 100
+  const [pageSize, setPageSize] = useState(100)
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
 
   // —— 筛选 ——
@@ -106,7 +106,7 @@ export default function WhitelistBatchPage() {
   useEffect(() => {
     loadCandidates()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, filterLifecycle, filterKeywordId, filterDuplicate, searchText])
+  }, [page, pageSize, filterLifecycle, filterKeywordId, filterDuplicate, searchText])
 
   function loadCandidates() {
     listCandidates({
@@ -400,8 +400,17 @@ export default function WhitelistBatchPage() {
             <Pagination
               style={{ marginTop: 12, textAlign: 'right' }}
               current={page} pageSize={pageSize} total={total}
-              showSizeChanger={false}
-              onChange={setPage}
+              showSizeChanger
+              pageSizeOptions={[100, 200, 500]}
+              showTotal={(t) => `共 ${t} 条`}
+              onChange={(p, ps) => {
+                setPage(p)
+                if (ps !== pageSize) setPageSize(ps)
+              }}
+              onShowSizeChange={(_p, ps) => {
+                setPageSize(ps)
+                setPage(1)
+              }}
             />
           </>
         )}
