@@ -259,10 +259,10 @@ class MagnetDownloadService:
                 matched_nodes=result.matched_nodes,
             )
             for item in items
-            for result in [self._check_single_duplicate(item, tree_import_id=tree_import_id)]
+            for result in [self.check_single_duplicate(item, tree_import_id=tree_import_id)]
         ]
 
-    def _check_single_duplicate(
+    def check_single_duplicate(
         self,
         item: DuplicateCheckItemRequest,
         *,
@@ -574,7 +574,7 @@ class MagnetDownloadService:
                 matched_keyword=item.matched_keyword,
                 matched_alias=item.matched_alias,
             )
-            duplicate_result = self._check_single_duplicate(duplicate_input, tree_import_id=tree_import_id)
+            duplicate_result = self.check_single_duplicate(duplicate_input, tree_import_id=tree_import_id)
             task = MagnetDownloadTask(
                 batch_id=batch_id,
                 keyword_entry_id=item.keyword_entry_id,
@@ -669,9 +669,9 @@ class MagnetDownloadService:
                         matched_keyword=candidate.matched_keyword,
                         matched_alias=candidate.matched_alias,
                     )
-                    duplicate_result = self._check_single_duplicate(duplicate_input, tree_import_id=tree_import_id)
+                    duplicate_result = self.check_single_duplicate(duplicate_input, tree_import_id=tree_import_id)
                     duplicate_cache[dedupe_key] = duplicate_result
-                target_path = self._build_target_path(
+                target_path = self.build_target_path(
                     keyword_dir=directory_names[entry.id],
                     source_title=candidate.source_title,
                 )
@@ -854,7 +854,7 @@ class MagnetDownloadService:
         return "/" + "/".join(parts)
 
     @classmethod
-    def _build_target_path(cls, *, keyword_dir: str, source_title: str) -> str:
+    def build_target_path(cls, *, keyword_dir: str, source_title: str) -> str:
         safe_leaf = cls._sanitize_target_name(source_title)
         return str(PurePosixPath("/已整理") / keyword_dir / safe_leaf)
 

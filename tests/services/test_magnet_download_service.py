@@ -108,7 +108,7 @@ def test_local_duplicate_check_requires_more_than_single_broad_keyword(db_sessio
         client_115=Fake115Client(),
     )
 
-    result = service._check_single_duplicate(
+    result = service.check_single_duplicate(
         DuplicateCheckItemRequest(
             source_tid=1001,
             source_title="Julia Newcomer Collection Vol.1",
@@ -145,7 +145,7 @@ def test_local_duplicate_check_reports_specific_batch_and_path_for_strong_match(
         client_115=Fake115Client(),
     )
 
-    result = service._check_single_duplicate(
+    result = service.check_single_duplicate(
         DuplicateCheckItemRequest(
             source_tid=1002,
             source_title="IPX-123 Julia 完整版",
@@ -208,7 +208,7 @@ def test_duplicate_check_without_tree_import_does_not_call_115_search(db_session
         client_115=_Exploding115Client(),
     )
 
-    result = service._check_single_duplicate(
+    result = service.check_single_duplicate(
         DuplicateCheckItemRequest(
             source_tid=3001,
             source_title="IPX-123 Julia",

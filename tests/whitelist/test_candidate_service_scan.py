@@ -85,8 +85,8 @@ def _make_service(db, *, candidates_per_entry: dict[int, list], dup_result):
     def fake_build(*, keyword_entry, limit):
         return candidates_per_entry.get(keyword_entry.id, [])
     magnet_svc.build_candidates_for_keyword_entry.side_effect = fake_build
-    magnet_svc._check_single_duplicate.return_value = dup_result
-    magnet_svc._build_target_path.side_effect = (
+    magnet_svc.check_single_duplicate.return_value = dup_result
+    magnet_svc.build_target_path.side_effect = (
         lambda *, keyword_dir, source_title: f"/已整理/{keyword_dir}/{source_title}"
     )
     return WhitelistCandidateService(db, magnet_svc=magnet_svc), magnet_svc
@@ -166,7 +166,7 @@ def test_scan_second_run_skips_submitted_and_updates_last_scanned_at(db_session)
     assert summary.skipped == 1
     assert summary.new == 0
     assert summary.updated == 0
-    magnet_svc._check_single_duplicate.assert_not_called()
+    magnet_svc.check_single_duplicate.assert_not_called()
 
     row = db_session.scalar(select(WhitelistCandidate))
     assert row.lifecycle_status == "submitted"
@@ -196,7 +196,7 @@ def test_scan_second_run_skips_dismissed_and_updates_last_scanned_at(db_session)
         per_keyword_limit=10, progress_cb=lambda *a: None,
     )
     assert summary.skipped == 1
-    magnet_svc._check_single_duplicate.assert_not_called()
+    magnet_svc.check_single_duplicate.assert_not_called()
     row = db_session.scalar(select(WhitelistCandidate))
     assert _to_naive(row.last_scanned_at) > _to_naive(earlier)
 
@@ -222,11 +222,11 @@ def test_scan_skips_task_exists_and_updates_last_scanned_at(db_session):
         per_keyword_limit=10, progress_cb=lambda *a: None,
     )
     assert summary.skipped == 1
-    magnet_svc._check_single_duplicate.assert_not_called()
+    magnet_svc.check_single_duplicate.assert_not_called()
 
 
 def test_scan_re_evaluates_clear_status(db_session):
-    """已存在 clear 候选，重扫应重新调 _check_single_duplicate。"""
+    """已存在 clear 候选，重扫应重新调 check_single_duplicate。"""
     entry = _make_entry(db_session, "演员A")
     tree_a = _make_tree(db_session)
     tree_b = _make_tree(db_session)
@@ -249,7 +249,7 @@ def test_scan_re_evaluates_clear_status(db_session):
         per_keyword_limit=10, progress_cb=lambda *a: None,
     )
     assert summary.updated == 1
-    magnet_svc._check_single_duplicate.assert_called_once()
+    magnet_svc.check_single_duplicate.assert_called_once()
     row = db_session.scalar(select(WhitelistCandidate))
     assert row.duplicate_status == "duplicate_found"
     assert row.last_scanned_tree_import_id == tree_b.id
@@ -266,8 +266,8 @@ def test_scan_keyword_failure_does_not_abort_job(db_session):
             raise RuntimeError("外部库挂了")
         return [_fake_article(1)]
     magnet_svc.build_candidates_for_keyword_entry.side_effect = fake_build
-    magnet_svc._check_single_duplicate.return_value = _dup_clear()
-    magnet_svc._build_target_path.side_effect = (
+    magnet_svc.check_single_duplicate.return_value = _dup_clear()
+    magnet_svc.build_target_path.side_effect = (
         lambda *, keyword_dir, source_title: "/x"
     )
     svc = WhitelistCandidateService(db_session, magnet_svc=magnet_svc)

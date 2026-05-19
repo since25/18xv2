@@ -2,8 +2,8 @@
 
 依赖 MagnetDownloadService 的底层 API：
 - build_candidates_for_keyword_entry
-- _check_single_duplicate
-- _build_target_path
+- check_single_duplicate
+- build_target_path
 - create_and_submit_tasks
 
 详见 docs/superpowers/specs/2026-05-19-whitelist-batch-page-design.md §4
@@ -54,7 +54,6 @@ class WhitelistCandidateService:
     ) -> ScanSummary:
         entries = self._load_whitelist_entries(keyword_entry_ids)
         directory_names = OrganizeTaskService._build_keyword_directory_names(entries)
-        progress_cb("加载关键词", 0, len(entries))
 
         new = updated = skipped = failed = 0
 
@@ -88,10 +87,10 @@ class WhitelistCandidateService:
                         matched_keyword=cand.matched_keyword,
                         matched_alias=cand.matched_alias,
                     )
-                    dup = self.magnet_svc._check_single_duplicate(
+                    dup = self.magnet_svc.check_single_duplicate(
                         dup_input, tree_import_id=tree_import_id,
                     )
-                    target_path = self.magnet_svc._build_target_path(
+                    target_path = self.magnet_svc.build_target_path(
                         keyword_dir=directory_names[entry.id],
                         source_title=cand.source_title,
                     )
@@ -124,9 +123,11 @@ class WhitelistCandidateService:
                         existing.last_scanned_at = datetime.now(UTC)
                         updated += 1
                 self.db.commit()
-            except Exception:
+            except Exception as exc:
                 self.db.rollback()
-                logger.exception("scan 关键词 %s 失败", entry.canonical_name)
+                logger.exception(
+                    "scan 关键词 %s 失败 (%s)", entry.canonical_name, type(exc).__name__,
+                )
                 failed += 1
 
         return ScanSummary(
