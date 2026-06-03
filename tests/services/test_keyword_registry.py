@@ -4,8 +4,10 @@ KeywordRegistryService 单元测试。覆盖 create/duplicate/alias/merge 关键
 from __future__ import annotations
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.models.whitelist import WhitelistCandidate
 from app.services.keywords.registry_service import KeywordRegistryService, normalize_keyword_text
 
 
@@ -56,6 +58,29 @@ class TestMergeEntries:
         alias_values = [a.alias for a in result.aliases]
         # 合并后副词条的 canonical name 成为主词条的 alias
         assert "副词条" in alias_values
+
+
+class TestDeleteEntry:
+    def test_delete_entry_removes_whitelist_candidates(self, db_session: Session):
+        svc = KeywordRegistryService(db_session)
+        entry = svc.create_entry(canonical_name="待删白名单", keyword_type="whitelist")
+        candidate = WhitelistCandidate(
+            source_tid=1001,
+            source_magnet="magnet:?xt=urn:btih:delete-me",
+            source_title="候选资源",
+            matched_keyword_entry_id=entry.id,
+            matched_keyword=entry.canonical_name,
+            duplicate_status="clear",
+            target_path="/target",
+        )
+        db_session.add(candidate)
+        db_session.commit()
+
+        assert svc.delete_entry(entry.id) is True
+
+        remaining = db_session.scalars(select(WhitelistCandidate)).all()
+        assert remaining == []
+        assert svc.find_entry_by_keyword("待删白名单") is None
 
 
 class TestScanDuplicateKeywords:

@@ -12,6 +12,7 @@ from sqlalchemy import Select, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.keywords import KeywordAlias, KeywordEntry, KeywordHit, KeywordLibraryEntry, KeywordOperationLog
+from app.models.whitelist import WhitelistCandidate
 
 
 def normalize_keyword_text(raw: str) -> str:
@@ -503,6 +504,9 @@ class KeywordRegistryService:
             },
             synchronize_session=False,
         )
+        self.db.query(WhitelistCandidate).filter(
+            WhitelistCandidate.matched_keyword_entry_id == entry_id
+        ).delete(synchronize_session=False)
         self.db.delete(entry)
         self.db.commit()
         return True
