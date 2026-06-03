@@ -34,3 +34,7 @@ env/
 .pytest_cache/
 .omx/
 .playwright-mcp/
+
+# postgres runtime data
+data/postgres/
+data/*.db.bak*
