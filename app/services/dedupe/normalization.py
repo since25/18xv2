@@ -18,7 +18,8 @@ QUALITY_TAG_RE = re.compile(
     re.IGNORECASE,
 )
 COPY_MARKER_RE = re.compile(
-    r"(?:\(\s*\d+\s*\)\s*$|(?<![A-Za-z0-9])(?:copy|副本|复制)(?![A-Za-z0-9]))",
+    r"(?:[\s._-]+(?:copy|副本|复制)(?:[\s._-]*\d{1,3})?\s*$"
+    r"|[\s._-]+(?:\(\s*\d{1,3}\s*\)|（\s*\d{1,3}\s*）|_\d{1,3})\s*$)",
     re.IGNORECASE,
 )
 SITE_PREFIX_RE = re.compile(r"^\s*(?P<prefix>[^@]{1,80})@\s*")
@@ -41,6 +42,14 @@ class NormalizedFilename:
     normalized_name: str
     tokens: list[str]
     applied_rules: list[str]
+
+
+class InvalidDedupeRegexError(ValueError):
+    def __init__(self, pattern_index: int, pattern: str, message: str):
+        super().__init__(f"Invalid dedupe regex at index {pattern_index}: {message}")
+        self.pattern_index = pattern_index
+        self.pattern = pattern
+        self.message = message
 
 
 def normalize_filename(raw_name: str, rules: DedupeRuleSet | None = None) -> NormalizedFilename:
@@ -120,10 +129,13 @@ def _remove_noise_words(name: str, rules: DedupeRuleSet, applied_rules: list[str
 
 def _apply_custom_regexes(name: str, rules: DedupeRuleSet, applied_rules: list[str]) -> str:
     updated = name
-    for pattern_text in rules.regex_patterns:
+    for index, pattern_text in enumerate(rules.regex_patterns):
         if not pattern_text:
             continue
-        pattern = re.compile(pattern_text, re.IGNORECASE)
+        try:
+            pattern = re.compile(pattern_text, re.IGNORECASE)
+        except re.error as exc:
+            raise InvalidDedupeRegexError(index, pattern_text, str(exc)) from exc
         updated = _sub_with_rule(pattern, " ", updated, "custom_regex", applied_rules)
     return updated
 
