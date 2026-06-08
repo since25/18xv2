@@ -35,6 +35,8 @@ env/
 .omx/
 .playwright-mcp/
 .superpowers/
+.worktrees
+.worktrees/
 
 # postgres runtime data
 data/postgres/
