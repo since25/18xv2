@@ -54,15 +54,22 @@ async def lifespan(app: FastAPI):
             logger.info("lifespan: 清理 %d 条残留 pending 导入记录 → interrupted", interrupted)
 
     # 启动白名单 job sweeper
-    from app.api.routes.whitelist_batch import _sweep_jobs
-    app.state.whitelist_job_sweeper = asyncio.create_task(_sweep_jobs())
+    from app.api.routes.whitelist_batch import _sweep_jobs as _sweep_whitelist_jobs
+    app.state.whitelist_job_sweeper = asyncio.create_task(_sweep_whitelist_jobs())
     logger.info("白名单 sweeper 已启动")
+
+    from app.api.routes.dedupe import _sweep_jobs as _sweep_dedupe_jobs
+    app.state.dedupe_job_sweeper = asyncio.create_task(_sweep_dedupe_jobs())
+    logger.info("文件去重 sweeper 已启动")
 
     yield
 
     sweeper = getattr(app.state, "whitelist_job_sweeper", None)
     if sweeper is not None:
         sweeper.cancel()
+    dedupe_sweeper = getattr(app.state, "dedupe_job_sweeper", None)
+    if dedupe_sweeper is not None:
+        dedupe_sweeper.cancel()
     logger.info("Shutting down")
 
 
@@ -74,6 +81,7 @@ from app.api.routes import (  # noqa: E402 — import after app creation
     auth,
     auth_code,
     cleanup,
+    dedupe,
     extractor,
     files_115,
     home,
@@ -120,6 +128,7 @@ app.include_router(extractor.router)
 app.include_router(keywords.router)
 app.include_router(keywords.legacy_router)
 app.include_router(cleanup.router)
+app.include_router(dedupe.router)
 app.include_router(local_cleanup.router)
 app.include_router(local_organize.router)
 app.include_router(local_tree_export.router)
