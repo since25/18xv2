@@ -34,6 +34,7 @@ env/
 .pytest_cache/
 .omx/
 .playwright-mcp/
+.superpowers/
 
 # postgres runtime data
 data/postgres/
