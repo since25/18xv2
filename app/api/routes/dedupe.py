@@ -13,11 +13,17 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
-from app.models.dedupe import DedupeCandidate, DedupeGroup
+from app.models.dedupe import DedupeCandidate, DedupeDeletePlan, DedupeDeletePlanItem, DedupeGroup
 from app.schemas.dedupe import (
     DedupeActiveJobsResponse,
     DedupeCandidateResponse,
     DedupeConfirmJobRequest,
+    DedupeDeletePlanCreateRequest,
+    DedupeDeletePlanDetailResponse,
+    DedupeDeletePlanExecuteRequest,
+    DedupeDeletePlanItemResponse,
+    DedupeDeletePlanListResponse,
+    DedupeDeletePlanResponse,
     DedupeGroupDetailResponse,
     DedupeGroupListResponse,
     DedupeGroupResponse,
@@ -27,6 +33,7 @@ from app.schemas.dedupe import (
 )
 from app.services.dedupe.normalization import DedupeRuleSet
 from app.services.dedupe.confirmation_service import DedupeConfirmationService
+from app.services.dedupe.delete_plan_service import DedupeDeletePlanService
 from app.services.dedupe.scan_service import DedupeScanOptions, DedupeScanService
 
 router = APIRouter(prefix="/dedupe", tags=["dedupe"])
@@ -34,6 +41,7 @@ logger = logging.getLogger(__name__)
 
 _scan_lock = asyncio.Lock()
 _confirm_lock = asyncio.Lock()
+_delete_lock = asyncio.Lock()
 _jobs: dict[str, dict] = {}
 _JOB_RETENTION_SECONDS = 600
 _SWEEP_INTERVAL_SECONDS = 60
@@ -136,6 +144,88 @@ def _blocking_confirm(job_id: str, payload: DedupeConfirmJobRequest) -> None:
         )
     except Exception as exc:
         logger.exception("dedupe confirm job %s failed", job_id)
+        _jobs[job_id].update(stage="失败", error=str(exc), done=True)
+    finally:
+        _jobs[job_id]["finished_at"] = datetime.now(UTC).isoformat()
+        session.close()
+
+
+@router.post("/delete-plans")
+def create_delete_plan(
+    payload: DedupeDeletePlanCreateRequest,
+    db: Session = Depends(get_db),
+) -> dict:
+    try:
+        plan = DedupeDeletePlanService(db, client=None).create_plan(
+            name=payload.name,
+            candidate_ids=payload.candidate_ids,
+            rate_limit_seconds=payload.rate_limit_seconds,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"plan_id": plan.id, "status": plan.status, "total_items": plan.total_items}
+
+
+@router.get("/delete-plans", response_model=DedupeDeletePlanListResponse)
+def list_delete_plans(db: Session = Depends(get_db)) -> DedupeDeletePlanListResponse:
+    plans = list(db.scalars(select(DedupeDeletePlan).order_by(DedupeDeletePlan.id.desc())).all())
+    return DedupeDeletePlanListResponse(
+        items=[DedupeDeletePlanResponse.model_validate(plan) for plan in plans],
+        total=len(plans),
+    )
+
+
+@router.get("/delete-plans/{plan_id}", response_model=DedupeDeletePlanDetailResponse)
+def get_delete_plan(plan_id: int, db: Session = Depends(get_db)) -> DedupeDeletePlanDetailResponse:
+    plan = db.get(DedupeDeletePlan, plan_id)
+    if plan is None:
+        raise HTTPException(status_code=404, detail="Delete plan not found")
+    items = list(
+        db.scalars(
+            select(DedupeDeletePlanItem)
+            .where(DedupeDeletePlanItem.plan_id == plan_id)
+            .order_by(DedupeDeletePlanItem.id.asc())
+        ).all()
+    )
+    return DedupeDeletePlanDetailResponse(
+        plan=DedupeDeletePlanResponse.model_validate(plan),
+        items=[DedupeDeletePlanItemResponse.model_validate(item) for item in items],
+    )
+
+
+@router.post("/delete-plans/{plan_id}/execute-jobs")
+async def start_delete_job(plan_id: int, payload: DedupeDeletePlanExecuteRequest) -> dict:
+    if not payload.confirm:
+        raise HTTPException(status_code=400, detail="confirm must be true")
+    if _delete_lock.locked():
+        raise HTTPException(status_code=409, detail="已有去重删除任务在运行")
+    job_id = _new_job("delete")
+    asyncio.create_task(_run_delete_job(job_id, plan_id))
+    return {"job_id": job_id, "status": "pending"}
+
+
+async def _run_delete_job(job_id: str, plan_id: int) -> None:
+    async with _delete_lock:
+        await asyncio.to_thread(_blocking_delete, job_id, plan_id)
+
+
+def _blocking_delete(job_id: str, plan_id: int) -> None:
+    from app.db.session import SessionLocal
+    from app.services.client_115.client import Real115Client
+
+    session = SessionLocal()
+    try:
+        _jobs[job_id].update(stage="限流删除", current=0, total=0)
+        summary = DedupeDeletePlanService(session, Real115Client()).execute_plan(plan_id, confirm=True)
+        _jobs[job_id].update(
+            stage="完成",
+            current=summary.total,
+            total=summary.total,
+            done=True,
+            summary=asdict(summary),
+        )
+    except Exception as exc:
+        logger.exception("dedupe delete job %s failed", job_id)
         _jobs[job_id].update(stage="失败", error=str(exc), done=True)
     finally:
         _jobs[job_id]["finished_at"] = datetime.now(UTC).isoformat()

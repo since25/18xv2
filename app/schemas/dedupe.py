@@ -28,6 +28,16 @@ class DedupeConfirmJobRequest(BaseModel):
     candidate_ids: list[int] = Field(min_length=1)
 
 
+class DedupeDeletePlanCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    candidate_ids: list[int] = Field(min_length=1)
+    rate_limit_seconds: float = Field(default=2.0, ge=0.0, le=30.0)
+
+
+class DedupeDeletePlanExecuteRequest(BaseModel):
+    confirm: bool = False
+
+
 class DedupeGroupResponse(ORMModel):
     id: int
     scan_run_id: int
@@ -67,6 +77,50 @@ class DedupeGroupListResponse(BaseModel):
     total: int
     page: int
     page_size: int
+
+
+class DedupeDeletePlanResponse(ORMModel):
+    id: int
+    name: str
+    source_scan_run_id: int | None
+    tree_import_id: int
+    status: str
+    rate_limit_seconds: float
+    total_items: int
+    deleted_count: int
+    failed_count: int
+    skipped_count: int
+    created_at: datetime | None = None
+    confirmed_at: datetime | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+
+
+class DedupeDeletePlanItemResponse(ORMModel):
+    id: int
+    plan_id: int
+    candidate_id: int
+    node_file_id: int
+    remote_file_id: str
+    raw_path: str
+    remote_path: str | None
+    confirmation_level: str
+    delete_reason: str
+    status: str
+    error_message: str | None
+    deleted_at: datetime | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class DedupeDeletePlanDetailResponse(BaseModel):
+    plan: DedupeDeletePlanResponse
+    items: list[DedupeDeletePlanItemResponse]
+
+
+class DedupeDeletePlanListResponse(BaseModel):
+    items: list[DedupeDeletePlanResponse]
+    total: int
 
 
 class DedupeScanSummary(BaseModel):

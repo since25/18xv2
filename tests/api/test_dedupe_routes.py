@@ -55,6 +55,8 @@ def client(tmp_path, monkeypatch):
             _dedupe._scan_lock = asyncio.Lock()
         if hasattr(_dedupe, "_confirm_lock") and _dedupe._confirm_lock.locked():
             _dedupe._confirm_lock = asyncio.Lock()
+        if hasattr(_dedupe, "_delete_lock") and _dedupe._delete_lock.locked():
+            _dedupe._delete_lock = asyncio.Lock()
 
         async def fake_run_scan_job(job_id, payload):
             _dedupe._jobs[job_id].update(stage="完成", done=True)
@@ -65,6 +67,11 @@ def client(tmp_path, monkeypatch):
                 _dedupe._jobs[job_id].update(stage="完成", done=True)
 
             monkeypatch.setattr(_dedupe, "_run_confirm_job", fake_run_confirm_job)
+        if hasattr(_dedupe, "_run_delete_job"):
+            async def fake_run_delete_job(job_id, plan_id):
+                _dedupe._jobs[job_id].update(stage="完成", done=True)
+
+            monkeypatch.setattr(_dedupe, "_run_delete_job", fake_run_delete_job)
 
     yield TestClient(_main.app, raise_server_exceptions=False)
 
@@ -155,6 +162,71 @@ def _seed_group(client) -> tuple[int, int, int]:
         db.close()
 
 
+def _seed_delete_candidate(client) -> int:
+    from app.models.dedupe import DedupeCandidate, DedupeGroup, DedupeRemoteConfirmation, DedupeScanRun
+    from app.models.tree import NodeFile, TreeImport
+
+    db = _db_session_from_client(client)
+    try:
+        tree_import = TreeImport(source_filename="sample.txt", status="completed", source_type="file_upload")
+        db.add(tree_import)
+        db.flush()
+        node = NodeFile(
+            tree_import=tree_import,
+            raw_name="Example (1).mp4",
+            normalized_name="Example (1).mp4",
+            raw_path="根目录/重复/Example (1).mp4",
+            parent_path="根目录/重复",
+            depth=2,
+            file_ext=".mp4",
+            fingerprint_hint="delete",
+        )
+        db.add(node)
+        db.flush()
+        scan_run = DedupeScanRun(tree_import_id=tree_import.id, status="completed")
+        db.add(scan_run)
+        db.flush()
+        group = DedupeGroup(
+            scan_run_id=scan_run.id,
+            tree_import_id=tree_import.id,
+            group_key="delete-group",
+            representative_name="Example.mp4",
+            normalized_name="example",
+            score_max=1.0,
+            confidence_level="verified_duplicate",
+            status="confirmed",
+        )
+        db.add(group)
+        db.flush()
+        candidate = DedupeCandidate(
+            group_id=group.id,
+            node_file_id=node.id,
+            raw_name=node.raw_name,
+            raw_path=node.raw_path,
+            file_ext=node.file_ext,
+            normalized_name="example",
+            similarity_score=1.0,
+            suggested_action="delete",
+            user_action="delete",
+        )
+        db.add(candidate)
+        db.flush()
+        db.add(
+            DedupeRemoteConfirmation(
+                candidate_id=candidate.id,
+                status="resolved",
+                remote_file_id="file-1",
+                remote_path="重复/Example (1).mp4",
+                sha1="sha",
+                size_bytes=1000,
+            )
+        )
+        db.commit()
+        return candidate.id
+    finally:
+        db.close()
+
+
 def test_scan_job_endpoint_returns_uuid(client):
     resp = client.post("/dedupe/scan-jobs", json={"tree_import_id": 1})
 
@@ -212,3 +284,51 @@ def test_review_group_persists_user_actions(client):
     assert detail["group"]["review_note"] == "人工确认"
     actions = {item["id"]: item["user_action"] for item in detail["candidates"]}
     assert actions == {keep_id: "keep", delete_id: "delete"}
+
+
+def test_create_delete_plan_and_fetch_detail(client):
+    candidate_id = _seed_delete_candidate(client)
+
+    resp = client.post(
+        "/dedupe/delete-plans",
+        json={"name": "delete duplicates", "candidate_ids": [candidate_id], "rate_limit_seconds": 0},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "draft"
+    assert body["total_items"] == 1
+
+    detail = client.get(f"/dedupe/delete-plans/{body['plan_id']}")
+    assert detail.status_code == 200
+    detail_body = detail.json()
+    assert detail_body["plan"]["id"] == body["plan_id"]
+    assert detail_body["items"][0]["candidate_id"] == candidate_id
+    assert detail_body["items"][0]["remote_file_id"] == "file-1"
+
+
+def test_execute_delete_plan_job_requires_confirm(client):
+    candidate_id = _seed_delete_candidate(client)
+    plan = client.post(
+        "/dedupe/delete-plans",
+        json={"name": "delete duplicates", "candidate_ids": [candidate_id], "rate_limit_seconds": 0},
+    ).json()
+
+    resp = client.post(f"/dedupe/delete-plans/{plan['plan_id']}/execute-jobs", json={"confirm": False})
+
+    assert resp.status_code == 400
+
+
+def test_execute_delete_plan_job_endpoint_returns_uuid(client):
+    candidate_id = _seed_delete_candidate(client)
+    plan = client.post(
+        "/dedupe/delete-plans",
+        json={"name": "delete duplicates", "candidate_ids": [candidate_id], "rate_limit_seconds": 0},
+    ).json()
+
+    resp = client.post(f"/dedupe/delete-plans/{plan['plan_id']}/execute-jobs", json={"confirm": True})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "pending"
+    uuid.UUID(body["job_id"])
