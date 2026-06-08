@@ -192,7 +192,7 @@ export default function OrganizeTasksPage() {
       })
     } catch (e: unknown) { message.error((e as Error).message) }
     finally {
-      setNodeDetailsLoading(prev => Object.fromEntries(Object.entries(prev).map(([k, _]) => [k, false])))
+      setNodeDetailsLoading(prev => Object.fromEntries(Object.keys(prev).map(k => [k, false])))
     }
   }
 

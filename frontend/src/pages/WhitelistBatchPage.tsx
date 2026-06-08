@@ -42,6 +42,22 @@ const EMPTY_FRAME = (job_id: string, job_type: 'scan' | 'submit', total: number)
   started_at: new Date().toISOString(), finished_at: null,
 })
 
+function errorMessage(error: unknown, fallback: string) {
+  return error instanceof Error ? error.message : fallback
+}
+
+function errorStatus(error: unknown) {
+  if (typeof error === 'object' && error !== null && 'status' in error) {
+    const status = (error as { status?: unknown }).status
+    return typeof status === 'number' ? status : undefined
+  }
+  return undefined
+}
+
+function summaryValue(summary: Record<string, number> | null, key: string) {
+  return summary?.[key] ?? 0
+}
+
 export default function WhitelistBatchPage() {
   // —— 基础数据 ——
   const [treeImports, setTreeImports] = useState<{ id: number; source_filename: string }[]>([])
@@ -148,9 +164,9 @@ export default function WhitelistBatchPage() {
         }
         loadCandidates()
       })
-    } catch (e: any) {
-      if (e?.status === 409) message.warning('已有扫描任务在运行')
-      else message.error('扫描启动失败')
+    } catch (error: unknown) {
+      if (errorStatus(error) === 409) message.warning('已有扫描任务在运行')
+      else message.error(errorMessage(error, '扫描启动失败'))
     }
   }
 
@@ -177,9 +193,9 @@ export default function WhitelistBatchPage() {
         setSelectedIds(new Set())
         loadCandidates()
       })
-    } catch (e: any) {
-      if (e?.status === 409) message.warning('已有提交任务在运行')
-      else message.error('提交启动失败')
+    } catch (error: unknown) {
+      if (errorStatus(error) === 409) message.warning('已有提交任务在运行')
+      else message.error(errorMessage(error, '提交启动失败'))
     }
   }
 
@@ -189,8 +205,8 @@ export default function WhitelistBatchPage() {
       await dismissCandidate(cand.id)
       message.success(`已丢弃 ${cand.source_title}`)
       loadCandidates()
-    } catch (e: any) {
-      message.error(e?.message ?? '丢弃失败')
+    } catch (error: unknown) {
+      message.error(errorMessage(error, '丢弃失败'))
     }
   }
 
@@ -199,8 +215,8 @@ export default function WhitelistBatchPage() {
       await restoreCandidate(cand.id)
       message.success('已恢复为 pending')
       loadCandidates()
-    } catch (e: any) {
-      message.error(e?.message ?? '恢复失败')
+    } catch (error: unknown) {
+      message.error(errorMessage(error, '恢复失败'))
     }
   }
 
@@ -215,8 +231,8 @@ export default function WhitelistBatchPage() {
       message.success(`批量丢弃完成：${r.dismissed} 条已丢弃，${r.skipped} 条跳过`)
       setSelectedIds(new Set())
       loadCandidates()
-    } catch (e: any) {
-      message.error(e?.message ?? '批量丢弃失败')
+    } catch (error: unknown) {
+      message.error(errorMessage(error, '批量丢弃失败'))
     }
   }
 
@@ -319,10 +335,10 @@ export default function WhitelistBatchPage() {
               <div style={{ marginTop: 4 }}>{scanJob.current}/{scanJob.total}</div>
               {scanJob.summary && (
                 <Space size="large" style={{ marginTop: 12 }}>
-                  <Statistic title="新增" value={(scanJob.summary as any).new ?? 0} />
-                  <Statistic title="更新" value={(scanJob.summary as any).updated ?? 0} />
-                  <Statistic title="跳过" value={(scanJob.summary as any).skipped ?? 0} />
-                  <Statistic title="失败关键词" value={(scanJob.summary as any).failed_keywords ?? 0} />
+                  <Statistic title="新增" value={summaryValue(scanJob.summary, 'new')} />
+                  <Statistic title="更新" value={summaryValue(scanJob.summary, 'updated')} />
+                  <Statistic title="跳过" value={summaryValue(scanJob.summary, 'skipped')} />
+                  <Statistic title="失败关键词" value={summaryValue(scanJob.summary, 'failed_keywords')} />
                 </Space>
               )}
               {scanJob.error && <div style={{ color: 'red', marginTop: 8 }}>错误：{scanJob.error}</div>}
@@ -425,9 +441,9 @@ export default function WhitelistBatchPage() {
           <div style={{ marginTop: 4 }}>{submitJob.current}/{submitJob.total}</div>
           {submitJob.summary && (
             <Space size="large" style={{ marginTop: 12 }}>
-              <Statistic title="成功" value={(submitJob.summary as any).submitted ?? 0} />
-              <Statistic title="失败" value={(submitJob.summary as any).failed ?? 0} />
-              <Statistic title="跳过" value={(submitJob.summary as any).skipped ?? 0} />
+              <Statistic title="成功" value={summaryValue(submitJob.summary, 'submitted')} />
+              <Statistic title="失败" value={summaryValue(submitJob.summary, 'failed')} />
+              <Statistic title="跳过" value={summaryValue(submitJob.summary, 'skipped')} />
             </Space>
           )}
           {submitJob.error && <div style={{ color: 'red', marginTop: 8 }}>错误：{submitJob.error}</div>}

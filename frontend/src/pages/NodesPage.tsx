@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Button, Card, Input, InputNumber, Select, Space, Table, Tag, Typography, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { useSearchParams } from 'react-router-dom'
@@ -20,7 +20,7 @@ export default function NodesPage() {
   const [loadingImports, setLoadingImports] = useState(false)
   const [loadingEntries, setLoadingEntries] = useState(false)
 
-  const loadImports = async () => {
+  const loadImports = useCallback(async () => {
     setLoadingImports(true)
     try {
       const response = await api.get<ImportListResponse>('/imports/data?limit=200')
@@ -30,9 +30,9 @@ export default function NodesPage() {
     } finally {
       setLoadingImports(false)
     }
-  }
+  }, [])
 
-  const loadEntries = async () => {
+  const loadEntries = useCallback(async () => {
     if (!selectedImportId) {
       setEntries([])
       setTotal(0)
@@ -56,15 +56,21 @@ export default function NodesPage() {
     } finally {
       setLoadingEntries(false)
     }
-  }
+  }, [maxDepth, query, selectedImportId])
 
   useEffect(() => {
-    void loadImports()
-  }, [])
+    const timer = window.setTimeout(() => {
+      void loadImports()
+    }, 0)
+    return () => window.clearTimeout(timer)
+  }, [loadImports])
 
   useEffect(() => {
-    void loadEntries()
-  }, [selectedImportId])
+    const timer = window.setTimeout(() => {
+      void loadEntries()
+    }, 0)
+    return () => window.clearTimeout(timer)
+  }, [loadEntries])
 
   const columns: ColumnsType<TreeImportEntry> = [
     {
