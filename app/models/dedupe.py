@@ -69,7 +69,9 @@ class DedupeGroup(Base):
     status: Mapped[str] = mapped_column(
         String(32), default="pending_review", server_default="pending_review", nullable=False, index=True
     )
-    suggested_keep_candidate_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    suggested_keep_candidate_id: Mapped[int | None] = mapped_column(
+        ForeignKey("dedupe_candidates.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     review_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
@@ -77,7 +79,15 @@ class DedupeGroup(Base):
     )
 
     scan_run: Mapped["DedupeScanRun"] = relationship(back_populates="groups")
-    candidates: Mapped[list["DedupeCandidate"]] = relationship(back_populates="group", cascade="all, delete-orphan")
+    candidates: Mapped[list["DedupeCandidate"]] = relationship(
+        back_populates="group",
+        cascade="all, delete-orphan",
+        foreign_keys="DedupeCandidate.group_id",
+    )
+    suggested_keep_candidate: Mapped["DedupeCandidate | None"] = relationship(
+        foreign_keys=[suggested_keep_candidate_id],
+        post_update=True,
+    )
 
 
 class DedupeCandidate(Base):
@@ -112,7 +122,7 @@ class DedupeCandidate(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
 
-    group: Mapped["DedupeGroup"] = relationship(back_populates="candidates")
+    group: Mapped["DedupeGroup"] = relationship(back_populates="candidates", foreign_keys=[group_id])
     confirmations: Mapped[list["DedupeRemoteConfirmation"]] = relationship(
         back_populates="candidate", cascade="all, delete-orphan"
     )
@@ -167,7 +177,10 @@ class DedupeDeletePlan(Base):
 
 class DedupeDeletePlanItem(Base):
     __tablename__ = "dedupe_delete_plan_items"
-    __table_args__ = (Index("ix_dedupe_plan_items_status", "status"),)
+    __table_args__ = (
+        UniqueConstraint("plan_id", "candidate_id", name="uq_dedupe_delete_plan_items_plan_candidate"),
+        Index("ix_dedupe_plan_items_status", "status"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     plan_id: Mapped[int] = mapped_column(

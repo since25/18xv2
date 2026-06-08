@@ -56,7 +56,12 @@ def upgrade() -> None:
         sa.Column("score_max", sa.Float(), nullable=False, server_default="0.0"),
         sa.Column("confidence_level", sa.String(32), nullable=False, server_default="filename_suspected"),
         sa.Column("status", sa.String(32), nullable=False, server_default="pending_review"),
-        sa.Column("suggested_keep_candidate_id", sa.Integer(), nullable=True),
+        sa.Column(
+            "suggested_keep_candidate_id",
+            sa.Integer(),
+            sa.ForeignKey("dedupe_candidates.id", ondelete="SET NULL"),
+            nullable=True,
+        ),
         sa.Column("review_note", sa.Text(), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
@@ -66,6 +71,7 @@ def upgrade() -> None:
     op.create_index("ix_dedupe_groups_tree_import_id", "dedupe_groups", ["tree_import_id"])
     op.create_index("ix_dedupe_groups_confidence_level", "dedupe_groups", ["confidence_level"])
     op.create_index("ix_dedupe_groups_status", "dedupe_groups", ["status"])
+    op.create_index("ix_dedupe_groups_suggested_keep_candidate_id", "dedupe_groups", ["suggested_keep_candidate_id"])
     op.create_index("ix_dedupe_groups_status_confidence", "dedupe_groups", ["status", "confidence_level"])
 
     op.create_table(
@@ -169,6 +175,7 @@ def upgrade() -> None:
         sa.Column("deleted_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.UniqueConstraint("plan_id", "candidate_id", name="uq_dedupe_delete_plan_items_plan_candidate"),
     )
     op.create_index("ix_dedupe_delete_plan_items_plan_id", "dedupe_delete_plan_items", ["plan_id"])
     op.create_index("ix_dedupe_delete_plan_items_candidate_id", "dedupe_delete_plan_items", ["candidate_id"])
@@ -189,6 +196,7 @@ def downgrade() -> None:
     op.drop_index("ix_dedupe_candidates_node_file_id", table_name="dedupe_candidates")
     op.drop_index("ix_dedupe_candidates_group_id", table_name="dedupe_candidates")
     op.drop_index("ix_dedupe_groups_status_confidence", table_name="dedupe_groups")
+    op.drop_index("ix_dedupe_groups_suggested_keep_candidate_id", table_name="dedupe_groups")
     op.drop_index("ix_dedupe_groups_status", table_name="dedupe_groups")
     op.drop_index("ix_dedupe_groups_confidence_level", table_name="dedupe_groups")
     op.drop_index("ix_dedupe_groups_tree_import_id", table_name="dedupe_groups")

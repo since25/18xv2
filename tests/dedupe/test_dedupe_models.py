@@ -99,6 +99,7 @@ def test_dedupe_group_schema_contract():
     )
     assert "ix_dedupe_groups_status" in _single_column_index_names("dedupe_groups", "status")
     assert _has_index("dedupe_groups", "ix_dedupe_groups_status_confidence", ["status", "confidence_level"])
+    assert _fk_ondelete("dedupe_groups", "suggested_keep_candidate_id") == "SET NULL"
 
 
 def test_dedupe_candidate_schema_contract():
@@ -148,6 +149,12 @@ def test_dedupe_delete_plan_schema_contract():
 
 
 def test_dedupe_delete_plan_item_schema_contract():
+    table = _table("dedupe_delete_plan_items")
+    unique_constraint_names = {
+        constraint.name for constraint in table.constraints if isinstance(constraint, UniqueConstraint)
+    }
+    assert "uq_dedupe_delete_plan_items_plan_candidate" in unique_constraint_names
+
     assert "ix_dedupe_delete_plan_items_plan_id" in _single_column_index_names(
         "dedupe_delete_plan_items", "plan_id"
     )
