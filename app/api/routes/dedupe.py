@@ -17,6 +17,7 @@ from app.models.dedupe import DedupeCandidate, DedupeGroup
 from app.schemas.dedupe import (
     DedupeActiveJobsResponse,
     DedupeCandidateResponse,
+    DedupeConfirmJobRequest,
     DedupeGroupDetailResponse,
     DedupeGroupListResponse,
     DedupeGroupResponse,
@@ -25,12 +26,14 @@ from app.schemas.dedupe import (
     DedupeScanJobRequest,
 )
 from app.services.dedupe.normalization import DedupeRuleSet
+from app.services.dedupe.confirmation_service import DedupeConfirmationService
 from app.services.dedupe.scan_service import DedupeScanOptions, DedupeScanService
 
 router = APIRouter(prefix="/dedupe", tags=["dedupe"])
 logger = logging.getLogger(__name__)
 
 _scan_lock = asyncio.Lock()
+_confirm_lock = asyncio.Lock()
 _jobs: dict[str, dict] = {}
 _JOB_RETENTION_SECONDS = 600
 _SWEEP_INTERVAL_SECONDS = 60
@@ -96,6 +99,43 @@ def _blocking_scan(job_id: str, payload: DedupeScanJobRequest) -> None:
         )
     except Exception as exc:
         logger.exception("dedupe scan job %s failed", job_id)
+        _jobs[job_id].update(stage="失败", error=str(exc), done=True)
+    finally:
+        _jobs[job_id]["finished_at"] = datetime.now(UTC).isoformat()
+        session.close()
+
+
+@router.post("/confirm-jobs")
+async def start_confirm_job(payload: DedupeConfirmJobRequest) -> dict:
+    if _confirm_lock.locked():
+        raise HTTPException(status_code=409, detail="已有去重确认任务在运行")
+    job_id = _new_job("confirm")
+    asyncio.create_task(_run_confirm_job(job_id, payload))
+    return {"job_id": job_id, "status": "pending"}
+
+
+async def _run_confirm_job(job_id: str, payload: DedupeConfirmJobRequest) -> None:
+    async with _confirm_lock:
+        await asyncio.to_thread(_blocking_confirm, job_id, payload)
+
+
+def _blocking_confirm(job_id: str, payload: DedupeConfirmJobRequest) -> None:
+    from app.db.session import SessionLocal
+    from app.services.client_115.client import Real115Client
+
+    session = SessionLocal()
+    try:
+        _jobs[job_id].update(stage="远端确认", current=0, total=len(payload.candidate_ids))
+        summary = DedupeConfirmationService(session, Real115Client()).confirm_candidates(payload.candidate_ids)
+        _jobs[job_id].update(
+            stage="完成",
+            current=summary.requested,
+            total=summary.requested,
+            done=True,
+            summary=asdict(summary),
+        )
+    except Exception as exc:
+        logger.exception("dedupe confirm job %s failed", job_id)
         _jobs[job_id].update(stage="失败", error=str(exc), done=True)
     finally:
         _jobs[job_id]["finished_at"] = datetime.now(UTC).isoformat()

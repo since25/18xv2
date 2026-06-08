@@ -24,6 +24,10 @@ class DedupeReviewRequest(BaseModel):
     note: str | None = None
 
 
+class DedupeConfirmJobRequest(BaseModel):
+    candidate_ids: list[int] = Field(min_length=1)
+
+
 class DedupeGroupResponse(ORMModel):
     id: int
     scan_run_id: int

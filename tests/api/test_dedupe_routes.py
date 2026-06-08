@@ -53,11 +53,18 @@ def client(tmp_path, monkeypatch):
         _dedupe._jobs.clear()
         if _dedupe._scan_lock.locked():
             _dedupe._scan_lock = asyncio.Lock()
+        if hasattr(_dedupe, "_confirm_lock") and _dedupe._confirm_lock.locked():
+            _dedupe._confirm_lock = asyncio.Lock()
 
         async def fake_run_scan_job(job_id, payload):
             _dedupe._jobs[job_id].update(stage="完成", done=True)
 
         monkeypatch.setattr(_dedupe, "_run_scan_job", fake_run_scan_job)
+        if hasattr(_dedupe, "_run_confirm_job"):
+            async def fake_run_confirm_job(job_id, payload):
+                _dedupe._jobs[job_id].update(stage="完成", done=True)
+
+            monkeypatch.setattr(_dedupe, "_run_confirm_job", fake_run_confirm_job)
 
     yield TestClient(_main.app, raise_server_exceptions=False)
 
@@ -150,6 +157,15 @@ def _seed_group(client) -> tuple[int, int, int]:
 
 def test_scan_job_endpoint_returns_uuid(client):
     resp = client.post("/dedupe/scan-jobs", json={"tree_import_id": 1})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "pending"
+    uuid.UUID(body["job_id"])
+
+
+def test_confirm_job_endpoint_returns_uuid(client):
+    resp = client.post("/dedupe/confirm-jobs", json={"candidate_ids": [1]})
 
     assert resp.status_code == 200
     body = resp.json()
