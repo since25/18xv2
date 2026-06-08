@@ -118,3 +118,55 @@ def test_scope_path_prefix_limits_scan(db_session) -> None:
     assert scan_run.total_files == 1
     assert scan_run.total_groups == 0
     assert scan_run.total_candidates == 0
+
+
+def test_empty_extension_filter_scans_zero_files(db_session) -> None:
+    import_id = _seed_import(db_session)
+
+    summary = DedupeScanService(db_session).scan(
+        DedupeScanOptions(tree_import_id=import_id, included_extensions=[])
+    )
+
+    assert summary.total_files == 0
+    assert summary.total_groups == 0
+    assert summary.total_candidates == 0
+
+    scan_run = db_session.get(DedupeScanRun, summary.scan_run_id)
+    assert scan_run is not None
+    assert scan_run.included_extensions == ""
+    assert scan_run.status == "completed"
+    assert scan_run.total_files == 0
+
+
+def test_scan_rejects_remote_snapshot_imports(db_session) -> None:
+    tree_import = TreeImport(
+        source_filename="remote-snapshot",
+        status="completed",
+        note="test",
+        source_type="remote_115",
+    )
+    db_session.add(tree_import)
+    db_session.flush()
+    db_session.add(
+        NodeFile(
+            tree_import=tree_import,
+            raw_name="Example.mp4",
+            normalized_name="Example.mp4",
+            raw_path="根目录/远端/Example.mp4",
+            parent_path="根目录/远端",
+            depth=2,
+            file_ext=".mp4",
+            fingerprint_hint="remote",
+            remote_file_id="115-file-id",
+        )
+    )
+    db_session.commit()
+
+    try:
+        DedupeScanService(db_session).scan(DedupeScanOptions(tree_import_id=tree_import.id))
+    except ValueError as exc:
+        assert "file_upload" in str(exc)
+    else:
+        raise AssertionError("remote_115 imports should not be accepted by local filename scan")
+
+    assert db_session.query(DedupeScanRun).count() == 0

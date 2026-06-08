@@ -18,6 +18,7 @@ from app.services.dedupe.normalization import DedupeRuleSet, normalize_filename
 
 
 MEDIA_EXTENSIONS = [".mp4", ".mkv", ".avi", ".mov"]
+LOCAL_TREE_SOURCE_TYPE = "file_upload"
 _COPY_MARKER_HINT_RE = re.compile(
     r"(?:\(\s*\d{1,3}\s*\)|（\s*\d{1,3}\s*）|copy|副本|复制)",
     re.IGNORECASE,
@@ -58,6 +59,11 @@ class DedupeScanService:
         tree_import = self.db.get(TreeImport, options.tree_import_id)
         if tree_import is None:
             raise ValueError(f"TreeImport {options.tree_import_id} does not exist")
+        if tree_import.source_type != LOCAL_TREE_SOURCE_TYPE:
+            raise ValueError(
+                f"Dedupe local filename scan only accepts {LOCAL_TREE_SOURCE_TYPE!r} tree imports; "
+                f"got {tree_import.source_type!r}"
+            )
 
         included_extensions = _normalize_extensions(options.included_extensions)
         scan_run = DedupeScanRun(
@@ -105,9 +111,10 @@ class DedupeScanService:
             raise
 
     def _load_node_files(self, options: DedupeScanOptions, included_extensions: list[str]) -> list[NodeFile]:
+        if not included_extensions:
+            return []
         query = self.db.query(NodeFile).filter(NodeFile.import_id == options.tree_import_id)
-        if included_extensions:
-            query = query.filter(func.lower(NodeFile.file_ext).in_(included_extensions))
+        query = query.filter(func.lower(NodeFile.file_ext).in_(included_extensions))
         if options.scope_path_prefix:
             query = query.filter(NodeFile.raw_path.startswith(options.scope_path_prefix))
         return list(query.order_by(NodeFile.raw_path.asc(), NodeFile.id.asc()).all())
