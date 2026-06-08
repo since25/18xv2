@@ -17,6 +17,10 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
+def _dialect_name() -> str:
+    return op.get_bind().dialect.name
+
+
 def upgrade() -> None:
     op.create_table(
         "dedupe_scan_runs",
@@ -59,7 +63,6 @@ def upgrade() -> None:
         sa.Column(
             "suggested_keep_candidate_id",
             sa.Integer(),
-            sa.ForeignKey("dedupe_candidates.id", ondelete="SET NULL"),
             nullable=True,
         ),
         sa.Column("review_note", sa.Text(), nullable=True),
@@ -95,6 +98,16 @@ def upgrade() -> None:
     op.create_index("ix_dedupe_candidates_group_id", "dedupe_candidates", ["group_id"])
     op.create_index("ix_dedupe_candidates_node_file_id", "dedupe_candidates", ["node_file_id"])
     op.create_index("ix_dedupe_candidates_user_action", "dedupe_candidates", ["user_action"])
+
+    if _dialect_name() != "sqlite":
+        op.create_foreign_key(
+            "fk_dedupe_groups_suggested_keep_candidate_id",
+            "dedupe_groups",
+            "dedupe_candidates",
+            ["suggested_keep_candidate_id"],
+            ["id"],
+            ondelete="SET NULL",
+        )
 
     op.create_table(
         "dedupe_remote_confirmations",
@@ -184,6 +197,13 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    if _dialect_name() != "sqlite":
+        op.drop_constraint(
+            "fk_dedupe_groups_suggested_keep_candidate_id",
+            "dedupe_groups",
+            type_="foreignkey",
+        )
+
     op.drop_index("ix_dedupe_plan_items_status", table_name="dedupe_delete_plan_items")
     op.drop_index("ix_dedupe_delete_plan_items_node_file_id", table_name="dedupe_delete_plan_items")
     op.drop_index("ix_dedupe_delete_plan_items_candidate_id", table_name="dedupe_delete_plan_items")
