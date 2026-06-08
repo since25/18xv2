@@ -18,8 +18,9 @@ QUALITY_TAG_RE = re.compile(
     re.IGNORECASE,
 )
 COPY_MARKER_RE = re.compile(
-    r"(?:[\s._-]+(?:copy|副本|复制)(?:[\s._-]*\d{1,3})?\s*$"
-    r"|[\s._-]+(?:\(\s*\d{1,3}\s*\)|（\s*\d{1,3}\s*）|_\d{1,3})\s*$)",
+    r"(?:[\s._-]+copy[\s._-]*\d{1,3}\s*$"
+    r"|[\s._-]+(?:副本|复制)(?:[\s._-]*\d{1,3})?\s*$"
+    r"|(?:[\s.-]+_?\d{1,3}|_\d{1,3}|[\s._-]+(?:\(\s*\d{1,3}\s*\)|（\s*\d{1,3}\s*）))\s*$)",
     re.IGNORECASE,
 )
 SITE_PREFIX_RE = re.compile(r"^\s*(?P<prefix>[^@]{1,80})@\s*")

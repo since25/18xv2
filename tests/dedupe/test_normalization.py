@@ -40,10 +40,26 @@ def test_normalize_removes_numeric_copy_suffix_without_dropping_series_number() 
     assert "copy_marker" in result.applied_rules
 
 
+@pytest.mark.parametrize("raw_name", ["Movie_1.mkv", "Movie.Title_1.mkv"])
+def test_normalize_removes_plain_numeric_copy_suffix(raw_name: str) -> None:
+    result = normalize_filename(raw_name, DedupeRuleSet())
+    expected = "movie title" if "Title" in raw_name else "movie"
+
+    assert result.normalized_name == expected
+    assert "copy_marker" in result.applied_rules
+
+
 def test_normalize_preserves_copy_as_title_word() -> None:
     result = normalize_filename("Copy.1986.1080p.mkv", DedupeRuleSet())
 
     assert result.normalized_name == "copy 1986"
+    assert "copy_marker" not in result.applied_rules
+
+
+def test_normalize_preserves_trailing_copy_as_title_word() -> None:
+    result = normalize_filename("Movie.Title.Copy.mkv", DedupeRuleSet())
+
+    assert result.normalized_name == "movie title copy"
     assert "copy_marker" not in result.applied_rules
 
 
@@ -66,3 +82,5 @@ def test_invalid_custom_regex_raises_domain_error() -> None:
         normalize_filename("sample.mp4", DedupeRuleSet(regex_patterns=["("]))
 
     assert exc_info.value.pattern_index == 0
+    assert exc_info.value.pattern == "("
+    assert exc_info.value.message
