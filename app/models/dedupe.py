@@ -3,13 +3,11 @@ from __future__ import annotations
 from datetime import datetime
 
 from sqlalchemy import (
-    BigInteger,
     DateTime,
     Float,
     ForeignKey,
     Index,
     Integer,
-    JSON,
     String,
     Text,
     UniqueConstraint,
@@ -24,17 +22,21 @@ class DedupeScanRun(Base):
     __tablename__ = "dedupe_scan_runs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    tree_import_id: Mapped[int] = mapped_column(ForeignKey("tree_imports.id", ondelete="CASCADE"), nullable=False)
-    status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False)
+    tree_import_id: Mapped[int] = mapped_column(
+        ForeignKey("tree_imports.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    status: Mapped[str] = mapped_column(String(32), default="pending", server_default="pending", nullable=False, index=True)
     scope_path_prefix: Mapped[str | None] = mapped_column(Text, nullable=True)
-    included_extensions: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
-    candidate_threshold: Mapped[float] = mapped_column(Float, nullable=False)
-    high_confidence_threshold: Mapped[float] = mapped_column(Float, nullable=False)
-    rules_snapshot_json: Mapped[dict[str, object] | None] = mapped_column(JSON, nullable=True)
-    total_files: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    total_groups: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    total_candidates: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    summary_json: Mapped[dict[str, object] | None] = mapped_column(JSON, nullable=True)
+    included_extensions: Mapped[str] = mapped_column(
+        Text, default=".mp4,.mkv,.avi,.mov", server_default=".mp4,.mkv,.avi,.mov", nullable=False
+    )
+    candidate_threshold: Mapped[float] = mapped_column(Float, default=0.82, server_default="0.82", nullable=False)
+    high_confidence_threshold: Mapped[float] = mapped_column(Float, default=0.92, server_default="0.92", nullable=False)
+    rules_snapshot_json: Mapped[str] = mapped_column(Text, default="{}", server_default="{}", nullable=False)
+    total_files: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    total_groups: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    total_candidates: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    summary_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -46,19 +48,27 @@ class DedupeScanRun(Base):
 class DedupeGroup(Base):
     __tablename__ = "dedupe_groups"
     __table_args__ = (
-        UniqueConstraint("scan_run_id", "group_key", name="uq_dedupe_groups_scan_run_group_key"),
+        UniqueConstraint("scan_run_id", "group_key", name="uq_dedupe_groups_run_key"),
         Index("ix_dedupe_groups_status_confidence", "status", "confidence_level"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    scan_run_id: Mapped[int] = mapped_column(ForeignKey("dedupe_scan_runs.id", ondelete="CASCADE"), nullable=False)
-    tree_import_id: Mapped[int] = mapped_column(ForeignKey("tree_imports.id", ondelete="CASCADE"), nullable=False)
-    group_key: Mapped[str] = mapped_column(String(512), nullable=False)
-    representative_name: Mapped[str] = mapped_column(String(512), nullable=False)
-    normalized_name: Mapped[str] = mapped_column(String(512), nullable=False)
-    score_max: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
-    confidence_level: Mapped[str] = mapped_column(String(32), nullable=False)
-    status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False)
+    scan_run_id: Mapped[int] = mapped_column(
+        ForeignKey("dedupe_scan_runs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    tree_import_id: Mapped[int] = mapped_column(
+        ForeignKey("tree_imports.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    group_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    representative_name: Mapped[str] = mapped_column(Text, nullable=False)
+    normalized_name: Mapped[str] = mapped_column(Text, nullable=False)
+    score_max: Mapped[float] = mapped_column(Float, default=0.0, server_default="0.0", nullable=False)
+    confidence_level: Mapped[str] = mapped_column(
+        String(32), default="filename_suspected", server_default="filename_suspected", nullable=False, index=True
+    )
+    status: Mapped[str] = mapped_column(
+        String(32), default="pending_review", server_default="pending_review", nullable=False, index=True
+    )
     suggested_keep_candidate_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     review_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
@@ -78,16 +88,24 @@ class DedupeCandidate(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    group_id: Mapped[int] = mapped_column(ForeignKey("dedupe_groups.id", ondelete="CASCADE"), nullable=False)
-    node_file_id: Mapped[int] = mapped_column(ForeignKey("node_files.id", ondelete="RESTRICT"), nullable=False)
-    raw_name: Mapped[str] = mapped_column(String(512), nullable=False)
+    group_id: Mapped[int] = mapped_column(
+        ForeignKey("dedupe_groups.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    node_file_id: Mapped[int] = mapped_column(
+        ForeignKey("node_files.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    raw_name: Mapped[str] = mapped_column(Text, nullable=False)
     raw_path: Mapped[str] = mapped_column(Text, nullable=False)
     file_ext: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    normalized_name: Mapped[str] = mapped_column(String(512), nullable=False)
-    similarity_score: Mapped[float] = mapped_column(Float, nullable=False)
-    suggested_action: Mapped[str] = mapped_column(String(32), nullable=False)
+    normalized_name: Mapped[str] = mapped_column(Text, nullable=False)
+    similarity_score: Mapped[float] = mapped_column(Float, default=0.0, server_default="0.0", nullable=False)
+    suggested_action: Mapped[str] = mapped_column(
+        String(32), default="undecided", server_default="undecided", nullable=False
+    )
     suggested_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
-    user_action: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    user_action: Mapped[str] = mapped_column(
+        String(32), default="undecided", server_default="undecided", nullable=False
+    )
     user_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
@@ -104,17 +122,19 @@ class DedupeRemoteConfirmation(Base):
     __tablename__ = "dedupe_remote_confirmations"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    candidate_id: Mapped[int] = mapped_column(ForeignKey("dedupe_candidates.id", ondelete="CASCADE"), nullable=False)
-    status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False)
+    candidate_id: Mapped[int] = mapped_column(
+        ForeignKey("dedupe_candidates.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    status: Mapped[str] = mapped_column(String(32), default="pending", server_default="pending", nullable=False, index=True)
     remote_file_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     remote_parent_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     remote_path: Mapped[str | None] = mapped_column(Text, nullable=True)
-    remote_name: Mapped[str | None] = mapped_column(String(512), nullable=True)
-    sha1: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    size_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
-    file_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    remote_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sha1: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    file_status: Mapped[str | None] = mapped_column(String(64), nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
-    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    confirmed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     candidate: Mapped["DedupeCandidate"] = relationship(back_populates="confirmations")
 
@@ -127,14 +147,16 @@ class DedupeDeletePlan(Base):
     source_scan_run_id: Mapped[int | None] = mapped_column(
         ForeignKey("dedupe_scan_runs.id", ondelete="SET NULL"), nullable=True
     )
-    tree_import_id: Mapped[int] = mapped_column(ForeignKey("tree_imports.id", ondelete="CASCADE"), nullable=False)
-    status: Mapped[str] = mapped_column(String(32), default="draft", nullable=False)
+    tree_import_id: Mapped[int] = mapped_column(
+        ForeignKey("tree_imports.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    status: Mapped[str] = mapped_column(String(32), default="draft", server_default="draft", nullable=False, index=True)
     confirm_token: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    rate_limit_seconds: Mapped[float] = mapped_column(Float, default=1.0, nullable=False)
-    total_items: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    deleted_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    failed_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    skipped_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    rate_limit_seconds: Mapped[float] = mapped_column(Float, default=2.0, server_default="2.0", nullable=False)
+    total_items: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    deleted_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    failed_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    skipped_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -148,15 +170,21 @@ class DedupeDeletePlanItem(Base):
     __table_args__ = (Index("ix_dedupe_plan_items_status", "status"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    plan_id: Mapped[int] = mapped_column(ForeignKey("dedupe_delete_plans.id", ondelete="CASCADE"), nullable=False)
-    candidate_id: Mapped[int] = mapped_column(ForeignKey("dedupe_candidates.id", ondelete="RESTRICT"), nullable=False)
-    node_file_id: Mapped[int] = mapped_column(ForeignKey("node_files.id", ondelete="RESTRICT"), nullable=False)
-    remote_file_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    plan_id: Mapped[int] = mapped_column(
+        ForeignKey("dedupe_delete_plans.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    candidate_id: Mapped[int] = mapped_column(
+        ForeignKey("dedupe_candidates.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    node_file_id: Mapped[int] = mapped_column(
+        ForeignKey("node_files.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    remote_file_id: Mapped[str] = mapped_column(String(64), nullable=False)
     raw_path: Mapped[str] = mapped_column(Text, nullable=False)
     remote_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     confirmation_level: Mapped[str] = mapped_column(String(32), nullable=False)
     delete_reason: Mapped[str] = mapped_column(Text, nullable=False)
-    status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="pending", server_default="pending", nullable=False)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
