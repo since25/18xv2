@@ -256,7 +256,11 @@ body {
   outline-offset: 2px;
 }
 
+.ant-segmented:focus-visible,
 .ant-select-focused .ant-select-selector,
+.ant-select:has(.ant-select-input:focus-visible),
+.ant-select-focused .ant-select-content,
+.ant-segmented:has(.ant-segmented-item-input:focus-visible),
 .ant-input-affix-wrapper:focus-within,
 .ant-pagination-item:focus-visible,
 .ant-pagination-prev:focus-visible .ant-pagination-item-link,
