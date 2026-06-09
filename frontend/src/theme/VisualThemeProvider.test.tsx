@@ -1,8 +1,9 @@
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { beforeEach, describe, expect, it } from 'vitest'
-import { useVisualTheme, VisualThemeProvider } from './VisualThemeProvider'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { VisualThemeProvider } from './VisualThemeProvider'
 import { THEME_STORAGE_KEY } from './storage'
+import { useVisualTheme } from './useVisualTheme'
 
 function createTestStorage() {
   const values = new Map<string, string>()
@@ -18,17 +19,16 @@ function createTestStorage() {
   } as Storage
 }
 
-const testStorage = createTestStorage()
+const originalWindowLocalStorage = Object.getOwnPropertyDescriptor(window, 'localStorage')
+const originalGlobalLocalStorage = Object.getOwnPropertyDescriptor(globalThis, 'localStorage')
 
-Object.defineProperty(window, 'localStorage', {
-  value: testStorage,
-  configurable: true,
-})
-
-Object.defineProperty(globalThis, 'localStorage', {
-  value: testStorage,
-  configurable: true,
-})
+function restoreDescriptor(target: object, key: PropertyKey, descriptor?: PropertyDescriptor) {
+  if (descriptor) {
+    Object.defineProperty(target, key, descriptor)
+    return
+  }
+  Reflect.deleteProperty(target, key)
+}
 
 function ThemeProbe() {
   const { mode, setMode } = useVisualTheme()
@@ -42,7 +42,22 @@ function ThemeProbe() {
 
 describe('VisualThemeProvider', () => {
   beforeEach(() => {
+    const testStorage = createTestStorage()
+    Object.defineProperty(window, 'localStorage', {
+      value: testStorage,
+      configurable: true,
+    })
+    Object.defineProperty(globalThis, 'localStorage', {
+      value: testStorage,
+      configurable: true,
+    })
     localStorage.clear()
+    document.documentElement.removeAttribute('data-theme')
+  })
+
+  afterEach(() => {
+    restoreDescriptor(window, 'localStorage', originalWindowLocalStorage)
+    restoreDescriptor(globalThis, 'localStorage', originalGlobalLocalStorage)
     document.documentElement.removeAttribute('data-theme')
   })
 

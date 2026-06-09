@@ -59,5 +59,9 @@ export const NAV_GROUPS: NavGroup[] = [
 export const NAV_ITEMS = NAV_GROUPS.flatMap((group) => group.items)
 
 export function getSelectedNavKey(pathname: string) {
-  return NAV_ITEMS.find((item) => pathname.startsWith(item.key))?.key ?? ''
+  return (
+    NAV_ITEMS.slice().sort((a, b) => b.key.length - a.key.length).find(
+      (item) => pathname === item.key || pathname.startsWith(`${item.key}/`),
+    )?.key ?? ''
+  )
 }

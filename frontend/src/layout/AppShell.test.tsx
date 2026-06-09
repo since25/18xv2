@@ -1,5 +1,5 @@
 import { MemoryRouter } from 'react-router-dom'
-import { render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it } from 'vitest'
 import { VisualThemeProvider } from '@/theme'
@@ -22,7 +22,8 @@ describe('AppShell', () => {
     expect(screen.getByText('文件去重')).toBeInTheDocument()
     expect(screen.getByText('Page content')).toBeInTheDocument()
 
-    await userEvent.click(screen.getByText('墨灰'))
+    const themeControl = screen.getByLabelText('主题模式')
+    await userEvent.click(within(themeControl).getByText('墨灰'))
 
     expect(document.documentElement).toHaveAttribute('data-theme', 'graphite')
   })
