@@ -399,10 +399,17 @@ body {
 
   .app-main {
     margin-left: 0;
+    width: 100% !important;
+    flex: none !important;
   }
 
   .app-shell {
     display: block;
+  }
+
+  .app-content,
+  .app-topbar {
+    width: 100%;
   }
 
   .app-topbar {

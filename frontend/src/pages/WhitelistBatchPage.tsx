@@ -354,7 +354,7 @@ export default function WhitelistBatchPage() {
 
       <Card title="候选列表" className="soft-card"
             extra={
-              <Space>
+              <Space wrap>
                 <Button icon={<ReloadOutlined />} onClick={loadCandidates}>刷新</Button>
                 <Popconfirm
                   title="批量丢弃"
