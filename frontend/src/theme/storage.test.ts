@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   THEME_STORAGE_KEY,
   normalizeThemeMode,
@@ -16,6 +16,10 @@ function storageWith(seed?: Record<string, string>) {
 }
 
 describe('theme storage', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
   it('normalizes unknown values to comfort', () => {
     expect(normalizeThemeMode(null)).toBe('comfort')
     expect(normalizeThemeMode('graphite')).toBe('graphite')
@@ -36,5 +40,16 @@ describe('theme storage', () => {
     const storage = storageWith()
     writeStoredTheme('graphite', storage)
     expect(storage.getItem(THEME_STORAGE_KEY)).toBe('graphite')
+  })
+
+  it('reads comfort when no browser window is available', () => {
+    vi.stubGlobal('window', undefined)
+    expect(() => readStoredTheme()).not.toThrow()
+    expect(readStoredTheme()).toBe('comfort')
+  })
+
+  it('ignores writes when no browser window is available', () => {
+    vi.stubGlobal('window', undefined)
+    expect(() => writeStoredTheme('graphite')).not.toThrow()
   })
 })
