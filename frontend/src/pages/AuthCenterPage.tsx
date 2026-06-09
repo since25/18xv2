@@ -2,11 +2,12 @@ import { Alert, Button, Card, Descriptions, Space, Typography } from 'antd'
 import { LinkOutlined, SafetyCertificateOutlined } from '@ant-design/icons'
 import { api } from '@/api/client'
 import type { SystemStatusResponse } from '@/api/types'
+import PageScaffold from '@/layout/PageScaffold'
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { formatDateTime } from '@/utils/format'
 
-const { Paragraph, Text, Title } = Typography
+const { Paragraph, Text } = Typography
 
 export default function AuthCenterPage() {
   const [status, setStatus] = useState<SystemStatusResponse | null>(null)
@@ -23,16 +24,11 @@ export default function AuthCenterPage() {
   }, [])
 
   return (
-    <div className="page-shell">
-      <div className="page-header">
-        <div>
-          <Title level={4} style={{ margin: 0 }}>授权中心</Title>
-          <Paragraph type="secondary" style={{ margin: '6px 0 0' }}>
-            把 Open API Token 授权和 Cookie 扫码入口放到一个地方，避免后续测试时在多个页面来回找。
-          </Paragraph>
-        </div>
-      </div>
-
+    <PageScaffold
+      title="授权中心"
+      titleLevel={4}
+      description="把 Open API Token 授权和 Cookie 扫码入口放到一个地方，避免后续测试时在多个页面来回找。"
+    >
       {error && <Alert type="error" showIcon message={error} />}
 
       <Card className="soft-card">
@@ -95,6 +91,6 @@ export default function AuthCenterPage() {
           description="Cookie 扫码和 Open API 扫码是两条独立链路。主系统的 Open API token 失效后，优先重新走 Open API 扫码授权。"
         />
       </Space>
-    </div>
+    </PageScaffold>
   )
 }

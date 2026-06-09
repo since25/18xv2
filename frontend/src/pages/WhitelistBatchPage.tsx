@@ -12,13 +12,14 @@ import { api } from '../api/client'
 import type {
   ImportListResponse, KeywordEntry, KeywordEntryListResponse,
 } from '../api/types'
+import DataToolbar from '@/layout/DataToolbar'
 import {
   bulkDismissCandidates, dismissCandidate, getActiveJobs, listCandidates, restoreCandidate,
   startScanJob, startSubmitJob, subscribeJobProgress,
   type JobFrame, type WhitelistCandidate,
 } from '../api/whitelistBatch'
 
-const { Title } = Typography
+const { Title, Text } = Typography
 
 const LIFECYCLE_OPTIONS = [
   { label: '全部 lifecycle', value: '' },
@@ -293,7 +294,7 @@ export default function WhitelistBatchPage() {
 
       <Card title="扫描控制台" className="soft-card">
         <Space direction="vertical" size="small" style={{ width: '100%' }}>
-          <Space wrap>
+          <DataToolbar>
             <Select
               style={{ minWidth: 280 }}
               placeholder="选择目录树批次"
@@ -324,7 +325,7 @@ export default function WhitelistBatchPage() {
             >
               开始扫描
             </Button>
-          </Space>
+          </DataToolbar>
 
           {scanJob && (
             <Card size="small" type="inner" title={`扫描进度（${scanJob.stage}）`}>
@@ -341,7 +342,11 @@ export default function WhitelistBatchPage() {
                   <Statistic title="失败关键词" value={summaryValue(scanJob.summary, 'failed_keywords')} />
                 </Space>
               )}
-              {scanJob.error && <div style={{ color: 'red', marginTop: 8 }}>错误：{scanJob.error}</div>}
+              {scanJob.error && (
+                <div style={{ marginTop: 8 }}>
+                  <Text type="danger">错误：{scanJob.error}</Text>
+                </div>
+              )}
             </Card>
           )}
         </Space>
@@ -372,30 +377,32 @@ export default function WhitelistBatchPage() {
               </Space>
             }
       >
-        <Space style={{ marginBottom: 12 }} wrap>
-          <Select
-            style={{ width: 160 }} value={filterLifecycle}
-            onChange={(v) => { setFilterLifecycle(v); setPage(1) }}
-            options={LIFECYCLE_OPTIONS}
-          />
-          <Select
-            style={{ width: 220 }} value={filterKeywordId} allowClear
-            placeholder="按关键词筛选"
-            onChange={(v) => { setFilterKeywordId(v); setPage(1) }}
-            options={keywords.map((k) => ({ value: k.id, label: k.canonical_name }))}
-            showSearch optionFilterProp="label"
-          />
-          <Select
-            style={{ width: 180 }} value={filterDuplicate}
-            onChange={(v) => { setFilterDuplicate(v); setPage(1) }}
-            options={DUPLICATE_OPTIONS}
-          />
-          <Input.Search
-            placeholder="搜索标题/关键词" style={{ width: 240 }}
-            allowClear
-            onSearch={(v) => { setSearchText(v); setPage(1) }}
-          />
-        </Space>
+        <div style={{ marginBottom: 12 }}>
+          <DataToolbar>
+            <Select
+              style={{ width: 160 }} value={filterLifecycle}
+              onChange={(v) => { setFilterLifecycle(v); setPage(1) }}
+              options={LIFECYCLE_OPTIONS}
+            />
+            <Select
+              style={{ width: 220 }} value={filterKeywordId} allowClear
+              placeholder="按关键词筛选"
+              onChange={(v) => { setFilterKeywordId(v); setPage(1) }}
+              options={keywords.map((k) => ({ value: k.id, label: k.canonical_name }))}
+              showSearch optionFilterProp="label"
+            />
+            <Select
+              style={{ width: 180 }} value={filterDuplicate}
+              onChange={(v) => { setFilterDuplicate(v); setPage(1) }}
+              options={DUPLICATE_OPTIONS}
+            />
+            <Input.Search
+              placeholder="搜索标题/关键词" style={{ width: 240 }}
+              allowClear
+              onSearch={(v) => { setSearchText(v); setPage(1) }}
+            />
+          </DataToolbar>
+        </div>
 
         {candidates.length === 0 ? (
           <Empty description="没有候选；试试扫描或更换筛选" />
@@ -446,7 +453,11 @@ export default function WhitelistBatchPage() {
               <Statistic title="跳过" value={summaryValue(submitJob.summary, 'skipped')} />
             </Space>
           )}
-          {submitJob.error && <div style={{ color: 'red', marginTop: 8 }}>错误：{submitJob.error}</div>}
+          {submitJob.error && (
+            <div style={{ marginTop: 8 }}>
+              <Text type="danger">错误：{submitJob.error}</Text>
+            </div>
+          )}
         </Card>
       )}
     </Space>

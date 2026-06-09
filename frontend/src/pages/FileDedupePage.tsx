@@ -14,7 +14,6 @@ import {
   Row,
   Select,
   Space,
-  Statistic,
   Table,
   Tag,
   Typography,
@@ -32,6 +31,8 @@ import {
 
 import { api } from '../api/client'
 import type { ImportListResponse, TreeImport } from '../api/types'
+import DataToolbar from '@/layout/DataToolbar'
+import PageScaffold from '@/layout/PageScaffold'
 import {
   createDedupeDeletePlan,
   getDedupeActiveJobs,
@@ -49,7 +50,7 @@ import {
   type DedupeJobFrame,
 } from '../api/dedupe'
 
-const { Text, Title } = Typography
+const { Text } = Typography
 
 const STATUS_OPTIONS = [
   { label: '全部状态', value: '' },
@@ -435,20 +436,17 @@ export default function FileDedupePage() {
   const confirmRunning = !!confirmJob && !confirmJob.done
   const deleteRunning = !!deleteJob && !deleteJob.done
   const latestPlan = deletePlans[0]
+  const pageStats = useMemo(() => [
+    { key: 'candidate-groups', label: '候选组', value: total },
+    { key: 'delete-plans', label: '删除计划', value: deletePlans.length },
+  ], [deletePlans.length, total])
 
   return (
-    <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-      <div className="page-header">
-        <div>
-          <Title level={3} style={{ margin: 0 }}>文件去重</Title>
-          <Text type="secondary">扫描阶段只分析本地目录树，不调用 115 文件搜索 API。</Text>
-        </div>
-        <Space wrap>
-          <Statistic title="候选组" value={total} />
-          <Statistic title="删除计划" value={deletePlans.length} />
-        </Space>
-      </div>
-
+    <PageScaffold
+      title="文件去重"
+      description="扫描阶段只分析本地目录树，不调用 115 文件搜索 API。"
+      stats={pageStats}
+    >
       <Row gutter={[16, 16]} align="top">
         <Col xs={24} xl={6}>
           <Card title="扫描与规则" className="soft-card">
@@ -517,10 +515,12 @@ export default function FileDedupePage() {
             className="soft-card"
             extra={<Button icon={<ReloadOutlined />} onClick={() => void loadGroups()}>刷新</Button>}
           >
-            <Space wrap style={{ marginBottom: 12 }}>
-              <Select style={{ width: 140 }} value={statusFilter} options={STATUS_OPTIONS} onChange={(value) => { setStatusFilter(value); setPage(1) }} />
-              <Select style={{ width: 140 }} value={confidenceFilter} options={CONFIDENCE_OPTIONS} onChange={(value) => { setConfidenceFilter(value); setPage(1) }} />
-            </Space>
+            <div style={{ marginBottom: 12 }}>
+              <DataToolbar>
+                <Select style={{ width: 140 }} value={statusFilter} options={STATUS_OPTIONS} onChange={(value) => { setStatusFilter(value); setPage(1) }} />
+                <Select style={{ width: 140 }} value={confidenceFilter} options={CONFIDENCE_OPTIONS} onChange={(value) => { setConfidenceFilter(value); setPage(1) }} />
+              </DataToolbar>
+            </div>
             <Table
               rowKey="id"
               loading={loadingGroups}
@@ -624,7 +624,7 @@ export default function FileDedupePage() {
           </Card>
         </Col>
       </Row>
-    </Space>
+    </PageScaffold>
   )
 }
 

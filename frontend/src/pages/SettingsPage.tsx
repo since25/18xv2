@@ -4,9 +4,10 @@ import type { ColumnsType } from 'antd/es/table'
 import { ReloadOutlined } from '@ant-design/icons'
 import { api } from '@/api/client'
 import type { CookieStatusItem, SystemStatusResponse } from '@/api/types'
+import PageScaffold from '@/layout/PageScaffold'
 import { formatDateTime } from '@/utils/format'
 
-const { Title } = Typography
+const { Text } = Typography
 
 const TOKEN_STATUS_META: Record<string, { color: string; label: string }> = {
   ok: { color: 'green', label: '可用' },
@@ -46,7 +47,9 @@ export default function SettingsPage() {
       render: (val: string, rec) => (
         <div>
           <div>{val}</div>
-          <div style={{ fontSize: 12, color: '#888' }}>{rec.app}</div>
+          <div>
+            <Text type="secondary" style={{ fontSize: 12 }}>{rec.app}</Text>
+          </div>
         </div>
       ),
     },
@@ -56,7 +59,9 @@ export default function SettingsPage() {
       render: (val: string, rec) => (
         <div>
           <div>{val}</div>
-          <div style={{ fontSize: 12, color: '#888' }}>{rec.saved_path}</div>
+          <div>
+            <Text type="secondary" style={{ fontSize: 12 }}>{rec.saved_path}</Text>
+          </div>
         </div>
       ),
     },
@@ -78,21 +83,22 @@ export default function SettingsPage() {
       render: (val: string, rec) => (
         <div>
           <Tag color={val === 'ok' ? 'green' : 'red'}>{val === 'ok' ? '可用' : '失效'}</Tag>
-          {rec.error && <div style={{ fontSize: 12, color: '#ff4d4f', marginTop: 4 }}>{rec.error}</div>}
+          {rec.error && (
+            <div style={{ marginTop: 4 }}>
+              <Text type="danger" style={{ fontSize: 12 }}>{rec.error}</Text>
+            </div>
+          )}
         </div>
       ),
     },
   ]
 
   return (
-    <div className="page-shell">
-      <div className="page-header">
-        <div>
-          <Title level={4} style={{ margin: 0 }}>系统状态</Title>
-        </div>
-        <Button icon={<ReloadOutlined />} onClick={() => void load()} loading={loading}>刷新检查</Button>
-      </div>
-
+    <PageScaffold
+      title="系统状态"
+      titleLevel={4}
+      actions={<Button icon={<ReloadOutlined />} onClick={() => void load()} loading={loading}>刷新检查</Button>}
+    >
       {err && <Alert type="error" message={err} style={{ marginBottom: 16 }} />}
 
       {loading && <Spin style={{ display: 'block', margin: '32px auto' }} />}
@@ -113,7 +119,7 @@ export default function SettingsPage() {
               )}
               {status.token_error && (
                 <Descriptions.Item label="错误">
-                  <span style={{ color: '#ff4d4f', fontSize: 12 }}>{status.token_error}</span>
+                  <Text type="danger" style={{ fontSize: 12 }}>{status.token_error}</Text>
                 </Descriptions.Item>
               )}
               {status.token_error_at && (
@@ -126,7 +132,7 @@ export default function SettingsPage() {
 
           <Card className="soft-card" title={`Cookies（${status.cookies.length} 条记录）`} style={{ marginBottom: 16 }}>
             {status.cookies.length === 0 ? (
-              <div style={{ color: '#888' }}>暂无 QR 登录记录。请先到「QR 扫码授权」页面登录。</div>
+              <Text type="secondary">暂无 QR 登录记录。请先到「QR 扫码授权」页面登录。</Text>
             ) : (
               <Table
                 rowKey="saved_path"
@@ -146,6 +152,6 @@ export default function SettingsPage() {
           <a href="/auth-center">授权中心</a>
         </Space>
       </Card>
-    </div>
+    </PageScaffold>
   )
 }

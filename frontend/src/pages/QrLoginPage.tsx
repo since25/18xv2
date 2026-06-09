@@ -14,6 +14,7 @@ import {
 } from 'antd'
 import { QrcodeOutlined, ReloadOutlined } from '@ant-design/icons'
 import { api } from '@/api/client'
+import PageScaffold from '@/layout/PageScaffold'
 import type {
   QrLoginClientOption,
   QrLoginClientsResponse,
@@ -23,7 +24,7 @@ import type {
 } from '@/api/types'
 import { formatDateTime } from '@/utils/format'
 
-const { Paragraph, Text, Title } = Typography
+const { Text } = Typography
 
 const STATUS_LABEL: Record<number, string> = {
   0: '等待扫码',
@@ -143,16 +144,11 @@ export default function QrLoginPage() {
   }
 
   return (
-    <div className="page-shell">
-      <div className="page-header">
-        <div>
-          <Title level={4} style={{ margin: 0 }}>扫码登录</Title>
-          <Paragraph type="secondary" style={{ margin: '6px 0 0' }}>
-            在 React 前端里直接发起 115 Cookie 扫码登录，生成二维码并轮询扫码结果。
-          </Paragraph>
-        </div>
-      </div>
-
+    <PageScaffold
+      title="扫码登录"
+      titleLevel={4}
+      description="在 React 前端里直接发起 115 Cookie 扫码登录，生成二维码并轮询扫码结果。"
+    >
       <Row gutter={[16, 16]}>
         <Col xs={24} lg={9}>
           <Card className="soft-card" title="创建扫码会话">
@@ -254,6 +250,6 @@ export default function QrLoginPage() {
           ))}
         </div>
       </Card>
-    </div>
+    </PageScaffold>
   )
 }

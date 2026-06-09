@@ -26,6 +26,7 @@ import type {
   KeywordOperationLog,
   SimilarKeywordPreviewResponse,
 } from '@/api/types'
+import DataToolbar from '@/layout/DataToolbar'
 import { formatDateTime, splitTextareaLines } from '@/utils/format'
 
 const { Paragraph, Text, Title } = Typography
@@ -461,43 +462,45 @@ export default function KeywordsPage() {
 
         <Col xs={24} xl={16}>
           <Card className="soft-card" title="关键词列表">
-            <Space wrap style={{ marginBottom: 12 }}>
-              <Input.Search
-                allowClear
-                style={{ width: 240 }}
-                placeholder="搜索标准名或别名"
-                value={queryDraft}
-                onChange={(event) => {
-                  setQueryDraft(event.target.value)
-                  if (!event.target.value) {
-                    setQuery('')
-                  }
-                }}
-                onSearch={(value) => setQuery(value.trim())}
-              />
-              <Select
-                allowClear
-                style={{ width: 140 }}
-                placeholder="类型"
-                options={TYPE_OPTIONS}
-                value={typeFilter}
-                onChange={setTypeFilter}
-              />
-              <Select
-                allowClear
-                style={{ width: 140 }}
-                placeholder="状态"
-                options={[
-                  { label: 'active', value: 'active' },
-                  { label: 'disabled', value: 'disabled' },
-                ]}
-                value={statusFilter}
-                onChange={setStatusFilter}
-              />
-              <Button icon={<ReloadOutlined />} onClick={() => loadEntries(page)} loading={loading}>刷新</Button>
-              <Button onClick={loadAllFilteredIds}>全选当前筛选结果</Button>
-              <Text type="secondary">{`共 ${total} 条`}</Text>
-            </Space>
+            <div style={{ marginBottom: 12 }}>
+              <DataToolbar>
+                <Input.Search
+                  allowClear
+                  style={{ width: 240 }}
+                  placeholder="搜索标准名或别名"
+                  value={queryDraft}
+                  onChange={(event) => {
+                    setQueryDraft(event.target.value)
+                    if (!event.target.value) {
+                      setQuery('')
+                    }
+                  }}
+                  onSearch={(value) => setQuery(value.trim())}
+                />
+                <Select
+                  allowClear
+                  style={{ width: 140 }}
+                  placeholder="类型"
+                  options={TYPE_OPTIONS}
+                  value={typeFilter}
+                  onChange={setTypeFilter}
+                />
+                <Select
+                  allowClear
+                  style={{ width: 140 }}
+                  placeholder="状态"
+                  options={[
+                    { label: 'active', value: 'active' },
+                    { label: 'disabled', value: 'disabled' },
+                  ]}
+                  value={statusFilter}
+                  onChange={setStatusFilter}
+                />
+                <Button icon={<ReloadOutlined />} onClick={() => loadEntries(page)} loading={loading}>刷新</Button>
+                <Button onClick={loadAllFilteredIds}>全选当前筛选结果</Button>
+                <Text type="secondary">{`共 ${total} 条`}</Text>
+              </DataToolbar>
+            </div>
             <Table
               rowKey="id"
               dataSource={entries}

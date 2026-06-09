@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { Table, Tag, Button, Space, Typography, Card, message } from 'antd'
+import { Table, Tag, Button, Space, Typography, Card, Input, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { api } from '@/api/client'
 import type { PlanDetail, PlanItem } from '@/api/types'
@@ -74,11 +74,11 @@ export default function PlanDetailPage() {
         </Card>
       )}
       <Card>
-        <input
+        <Input
           placeholder="搜索路径"
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          style={{ marginBottom: 12, padding: '6px 10px', border: '1px solid #d9d9d9', borderRadius: 6, width: 300 }}
+          style={{ marginBottom: 12, width: 300 }}
         />
         <Table
           rowKey="id"

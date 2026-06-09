@@ -3,9 +3,10 @@ import { Alert, Button, Card, Col, Row, Space, Tag, Typography, message } from '
 import { QrcodeOutlined, ReloadOutlined } from '@ant-design/icons'
 import { api } from '@/api/client'
 import type { OpenAuthRecord, OpenAuthRecordsResponse, OpenAuthSession } from '@/api/types'
+import PageScaffold from '@/layout/PageScaffold'
 import { formatDateTime } from '@/utils/format'
 
-const { Paragraph, Text, Title } = Typography
+const { Text } = Typography
 
 const STATUS_LABEL: Record<number, string> = {
   0: '等待扫码',
@@ -98,16 +99,11 @@ export default function OpenAuthPage() {
   }
 
   return (
-    <div className="page-shell">
-      <div className="page-header">
-        <div>
-          <Title level={4} style={{ margin: 0 }}>Open API 扫码授权</Title>
-          <Paragraph type="secondary" style={{ margin: '6px 0 0' }}>
-            这条链路会直接获取并持久化 115 Open API token，适合作为新环境初始化和失效后重新授权的主入口。
-          </Paragraph>
-        </div>
-      </div>
-
+    <PageScaffold
+      title="Open API 扫码授权"
+      titleLevel={4}
+      description="这条链路会直接获取并持久化 115 Open API token，适合作为新环境初始化和失效后重新授权的主入口。"
+    >
       <Row gutter={[16, 16]}>
         <Col xs={24} lg={9}>
           <Card className="soft-card" title="创建授权会话">
@@ -176,6 +172,6 @@ export default function OpenAuthPage() {
           ))}
         </div>
       </Card>
-    </div>
+    </PageScaffold>
   )
 }

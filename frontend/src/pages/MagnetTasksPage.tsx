@@ -19,6 +19,7 @@ import type { ColumnsType } from 'antd/es/table'
 import { CloudDownloadOutlined, DeleteOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons'
 import { Link } from 'react-router-dom'
 import { api } from '@/api/client'
+import PageScaffold from '@/layout/PageScaffold'
 import type {
   ImportListResponse,
   MagnetArticleCandidate,
@@ -34,7 +35,7 @@ import type {
 } from '@/api/types'
 import { formatDateTime } from '@/utils/format'
 
-const { Paragraph, Text, Title } = Typography
+const { Text } = Typography
 
 const DUPLICATE_COLOR: Record<string, string> = {
   clear: 'green',
@@ -320,16 +321,11 @@ export default function MagnetTasksPage() {
   ]
 
   return (
-    <div className="page-shell">
-      <div className="page-header">
-        <div>
-          <Title level={4} style={{ margin: 0 }}>磁力下载台</Title>
-          <Paragraph type="secondary" style={{ margin: '6px 0 0' }}>
-            支持两种模式：手动搜词精细提交，或按白名单批量检索并自动落到 /已整理/关键词/磁力名称。
-          </Paragraph>
-        </div>
-      </div>
-
+    <PageScaffold
+      title="磁力下载台"
+      titleLevel={4}
+      description="支持两种模式：手动搜词精细提交，或按白名单批量检索并自动落到 /已整理/关键词/磁力名称。"
+    >
       <Card className="soft-card" style={{ marginBottom: 16 }}>
         <Space wrap>
           <Input
@@ -504,6 +500,6 @@ export default function MagnetTasksPage() {
           <Alert type="info" showIcon message="还没有最近磁力任务记录。" />
         )}
       </Card>
-    </div>
+    </PageScaffold>
   )
 }

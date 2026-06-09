@@ -15,7 +15,7 @@ import type {
   DuplicateResolveResponse,
 } from '@/api/types'
 
-const { Title } = Typography
+const { Title, Text } = Typography
 
 const STATUS_COLOR: Record<string, string> = {
   pending: 'blue', completed: 'green', failed: 'red', skipped: 'default',
@@ -334,16 +334,16 @@ export default function OrganizeTasksPage() {
             style={{ marginBottom: 12 }}
             extra={<Button size="small" onClick={loadAmbigConflicts} loading={ambigLoading}>加载歧义冲突</Button>}
           >
-            {!ambigConflicts && <span style={{ color: '#888', fontSize: 13 }}>点击右上角「加载歧义冲突」查看。</span>}
+            {!ambigConflicts && <Text type="secondary" style={{ fontSize: 13 }}>点击右上角「加载歧义冲突」查看。</Text>}
             {ambigConflicts && ambigConflicts.conflict_count === 0 && <span style={{ color: '#52c41a' }}>✓ 当前批次无歧义冲突。</span>}
             {ambigConflicts && ambigConflicts.conflict_count > 0 && (
               <>
-                <div style={{ marginBottom: 8, color: '#888', fontSize: 13 }}>
+                <Text type="secondary" style={{ display: 'block', marginBottom: 8, fontSize: 13 }}>
                   共 {ambigConflicts.conflict_count} 条歧义路径，请为每条选择归属关键词：
-                </div>
+                </Text>
                 <Space direction="vertical" style={{ width: '100%' }} size={8}>
                   {ambigConflicts.items.map(item => (
-                    <Card key={item.source_path} size="small" style={{ background: '#fafafa' }}>
+                    <Card key={item.source_path} size="small">
                       <div style={{ fontFamily: 'monospace', fontSize: 12, marginBottom: 6 }}>{item.source_path}</div>
                       <Radio.Group
                         value={ambigSelections[item.source_path]}
@@ -377,7 +377,7 @@ export default function OrganizeTasksPage() {
             title="重复目标冲突（同一目标路径被多个任务占用）"
             extra={<Button size="small" onClick={loadDupConflicts} loading={dupLoading}>检查冲突</Button>}
           >
-            {!dupConflicts && <span style={{ color: '#888', fontSize: 13 }}>点击右上角「检查冲突」查看。</span>}
+            {!dupConflicts && <Text type="secondary" style={{ fontSize: 13 }}>点击右上角「检查冲突」查看。</Text>}
             {dupConflicts && dupConflicts.conflict_count === 0 && <span style={{ color: '#52c41a' }}>✓ 当前批次无重复目标冲突。</span>}
             {dupConflicts && dupConflicts.conflict_count > 0 && (
               <>
@@ -412,17 +412,17 @@ export default function OrganizeTasksPage() {
                                   <Space direction="vertical" size={2}>
                                     <span>任务 #{t.id} · {t.source_path}</span>
                                     {detail && (
-                                      <span style={{ fontSize: 12, color: '#888' }}>
+                                      <Text type="secondary" style={{ fontSize: 12 }}>
                                         节点: {detail.raw_name} · {detail.raw_path}
                                         {detail.cid && <> · cid: {detail.cid}</>}
-                                      </span>
+                                      </Text>
                                     )}
                                     {detail?.cid && fi && !fi.error && (
-                                      <span style={{ fontSize: 12, color: '#888' }}>
+                                      <Text type="secondary" style={{ fontSize: 12 }}>
                                         大小: {fi.size != null ? `${(fi.size / 1024 / 1024).toFixed(1)} MB` : '未知'} · 修改时间: {fi.modified_at ?? '未知'}
-                                      </span>
+                                      </Text>
                                     )}
-                                    {fi?.error && <span style={{ fontSize: 12, color: 'red' }}>{fi.error}</span>}
+                                    {fi?.error && <Text type="danger" style={{ fontSize: 12 }}>{fi.error}</Text>}
                                   </Space>
                                 </Radio>
                               )
@@ -497,8 +497,10 @@ export default function OrganizeTasksPage() {
       {/* 任务列表 */}
       <Card title={`任务列表（按关键词分组，共 ${tasks.length} 条）`}>
         {!tasks.length && !loading && (
-          <div style={{ color: '#888', padding: 8 }}>
-            {importId ? '当前批次暂无整理任务，请点击「重建任务」。' : '请先选择导入批次。'}
+          <div style={{ padding: 8 }}>
+            <Text type="secondary">
+              {importId ? '当前批次暂无整理任务，请点击「重建任务」。' : '请先选择导入批次。'}
+            </Text>
           </div>
         )}
         {Object.entries(grouped)

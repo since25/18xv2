@@ -3,8 +3,9 @@ import { Alert, Button, Card, Col, InputNumber, Row, Select, Space, Tag, Typogra
 import { LinkOutlined, MergeOutlined, SearchOutlined } from '@ant-design/icons'
 import { api } from '@/api/client'
 import type { KeywordDuplicatePair, KeywordDuplicateScanResponse } from '@/api/types'
+import PageScaffold from '@/layout/PageScaffold'
 
-const { Paragraph, Text, Title } = Typography
+const { Text } = Typography
 
 const TYPE_OPTIONS = [
   { label: '全部类型', value: '' },
@@ -62,18 +63,16 @@ export default function KeywordDuplicatesPage() {
   }
 
   return (
-    <div className="page-shell">
-      <div className="page-header">
-        <div>
-          <Title level={4} style={{ margin: 0 }}>重复词扫描</Title>
-          <Paragraph type="secondary" style={{ margin: '6px 0 0' }}>
-            对现有关键词库做高相似度摸底，快速发现应该合并的标准词。
-          </Paragraph>
-        </div>
+    <PageScaffold
+      title="重复词扫描"
+      titleLevel={4}
+      description="对现有关键词库做高相似度摸底，快速发现应该合并的标准词。"
+      actions={
         <a href="/api/keywords/duplicates/workbench" target="_blank" rel="noreferrer">
           <Button icon={<LinkOutlined />}>旧版扫描台</Button>
         </a>
-      </div>
+      }
+    >
 
       <Card className="soft-card" style={{ marginBottom: 16 }}>
         <Space wrap size={12}>
@@ -163,6 +162,6 @@ export default function KeywordDuplicatesPage() {
           )
         })}
       </div>
-    </div>
+    </PageScaffold>
   )
 }

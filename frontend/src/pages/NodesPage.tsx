@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Button, Card, Input, InputNumber, Select, Space, Table, Tag, Typography, message } from 'antd'
+import { Button, Card, Input, InputNumber, Select, Table, Tag, Typography, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { useSearchParams } from 'react-router-dom'
 import { api } from '@/api/client'
 import type { ImportListResponse, TreeImport, TreeImportEntry, TreeImportEntryListResponse } from '@/api/types'
+import DataToolbar from '@/layout/DataToolbar'
+import PageScaffold from '@/layout/PageScaffold'
 
-const { Paragraph, Title, Text } = Typography
+const { Text } = Typography
 
 export default function NodesPage() {
   const [searchParams] = useSearchParams()
@@ -84,7 +86,9 @@ export default function NodesPage() {
             <Tag>{`depth ${record.depth}`}</Tag>
             {record.remote_id && <Tag>{record.remote_id}</Tag>}
           </div>
-          <div style={{ marginTop: 6, color: '#6b7280', wordBreak: 'break-all' }}>{record.raw_path}</div>
+          <Text type="secondary" style={{ display: 'block', marginTop: 6, wordBreak: 'break-all' }}>
+            {record.raw_path}
+          </Text>
         </div>
       ),
     },
@@ -97,18 +101,14 @@ export default function NodesPage() {
   ]
 
   return (
-    <div>
-      <div className="page-header">
-        <div>
-          <Title level={4} style={{ margin: 0 }}>目录树内容</Title>
-          <Paragraph type="secondary" style={{ margin: '6px 0 0' }}>
-            这里可以查看每个导入批次里实际有哪些目录和文件，便于排查根目录拉取结果和本地去重命中项。
-          </Paragraph>
-        </div>
-      </div>
+    <PageScaffold
+      title="目录树内容"
+      titleLevel={4}
+      description="这里可以查看每个导入批次里实际有哪些目录和文件，便于排查根目录拉取结果和本地去重命中项。"
+    >
 
       <Card className="soft-card" style={{ marginBottom: 16 }}>
-        <Space wrap>
+        <DataToolbar>
           <Select
             showSearch
             allowClear
@@ -140,7 +140,7 @@ export default function NodesPage() {
           <Button onClick={() => void loadEntries()} loading={loadingEntries}>
             刷新内容
           </Button>
-        </Space>
+        </DataToolbar>
       </Card>
 
       <Card
@@ -157,6 +157,6 @@ export default function NodesPage() {
           pagination={{ pageSize: 50, showSizeChanger: false, showTotal: (count) => `共 ${count} 条` }}
         />
       </Card>
-    </div>
+    </PageScaffold>
   )
 }

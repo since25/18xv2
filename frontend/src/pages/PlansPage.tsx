@@ -15,7 +15,7 @@ import type {
 } from '@/api/types'
 import { formatDateTime } from '@/utils/format'
 
-const { Title } = Typography
+const { Title, Text } = Typography
 
 const JOB_COLOR: Record<string, string> = {
   completed: 'green',
@@ -229,9 +229,8 @@ export default function PlansPage() {
           <Checkbox
             checked={confirmReal}
             onChange={(e) => setConfirmReal(e.target.checked)}
-            style={{ color: confirmReal ? '#ff4d4f' : undefined }}
           >
-            确认真实执行（危险操作）
+            <Text type={confirmReal ? 'danger' : undefined}>确认真实执行（危险操作）</Text>
           </Checkbox>
           <Button onClick={() => batchExecute(true)} disabled={!selectedIds.length}>
             批量 Dry-run ({selectedIds.length})
@@ -290,7 +289,7 @@ export default function PlansPage() {
                 <Space>
                   <Tag>{log.action}</Tag>
                   <span>#{log.id}</span>
-                  <span style={{ color: '#888', fontSize: 12 }}>{formatDateTime(log.created_at)}</span>
+                  <Text type="secondary" style={{ fontSize: 12 }}>{formatDateTime(log.created_at)}</Text>
                   <span>请求 {log.requested_count} / 完成 {log.processed_count}</span>
                   {log.errors?.length > 0 && <Tag color="red">失败 {log.errors.length}</Tag>}
                 </Space>
@@ -307,7 +306,9 @@ export default function PlansPage() {
                   </Descriptions.Item>
                   {log.errors?.length > 0 && (
                     <Descriptions.Item label="错误" span={2}>
-                      {log.errors.slice(0, 5).map((e, i) => <div key={i} style={{ color: '#ff4d4f', fontSize: 12 }}>{e}</div>)}
+                      {log.errors.slice(0, 5).map((e, i) => (
+                        <Text key={i} type="danger" style={{ display: 'block', fontSize: 12 }}>{e}</Text>
+                      ))}
                     </Descriptions.Item>
                   )}
                 </Descriptions>

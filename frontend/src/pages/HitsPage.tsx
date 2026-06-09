@@ -125,8 +125,16 @@ export default function HitsPage() {
     {
       title: '示例路径', dataIndex: 'sample_paths',
       render: (paths: string[]) => (
-        <div style={{ fontSize: 12, color: '#666' }}>
-          {paths.slice(0, 3).map((p, i) => <div key={i} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 300 }}>{p}</div>)}
+        <div style={{ fontSize: 12 }}>
+          {paths.slice(0, 3).map((p, i) => (
+            <Text
+              key={i}
+              type="secondary"
+              style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 300 }}
+            >
+              {p}
+            </Text>
+          ))}
         </div>
       ),
     },
@@ -219,7 +227,7 @@ export default function HitsPage() {
                 onChange={(e) => { if (!e.target.value) setSummaryQ('') }}
               />
               <Button onClick={loadSummary} loading={summaryLoading}>刷新</Button>
-              <span style={{ color: '#888', fontSize: 13 }}>共 {summaryTotal} 个关键词命中</span>
+              <Text type="secondary" style={{ fontSize: 13 }}>共 {summaryTotal} 个关键词命中</Text>
             </Space>
             <Divider style={{ margin: '0 0 12px' }} />
             <Table
