@@ -2,6 +2,7 @@ import { Statistic } from 'antd'
 import type { ReactNode } from 'react'
 
 export type MetricItem = {
+  key: string
   label: ReactNode
   value: string | number
 }
@@ -13,8 +14,8 @@ export default function MetricStrip({ items }: { items: MetricItem[] }) {
 
   return (
     <div className="metric-strip">
-      {items.map((item, index) => (
-        <Statistic key={index} title={item.label} value={item.value} />
+      {items.map((item) => (
+        <Statistic key={item.key} title={item.label} value={item.value} />
       ))}
     </div>
   )
