@@ -16,7 +16,7 @@
 - 主应用：FastAPI + React/Vite + Ant Design。
 - 默认生产数据库：PostgreSQL。
 - 历史 SQLite：保留在 `data/storage_organizer.db`，仅作为备份或迁移来源。
-- 生产 Docker 路径：`/mnt/user/docker1/18x_v2`。
+- 生产 Docker 路径：`root@tank61213:/mnt/user/docker1/18xv2`（SSH：`root@192.168.70.138`）。
 - 反向代理：Lucky。
 - 登录模型：单管理员账号，用户名来自 `.env`，首次启动自动生成密码并只在容器日志打印一次。
 - 115 授权：
@@ -33,7 +33,7 @@
 3. Docker 相关配置统一放在 `docker/` 目录维护。
 4. 后端涉及 115 真实操作的服务必须注入 `Real115Client`，不能偷偷回退到 `Fake115Client`。
 5. 命中重建当前只按节点名匹配，不允许重新引入整条路径扩散命中的旧逻辑。
-6. 服务器同步前，默认先确认是否需要把本地改动推到 `192.168.70.138`。
+6. 服务器同步通过 Git 完成；部署前默认先确认本地改动是否已推送到远端仓库，再由服务器拉取。
 
 ---
 
@@ -132,26 +132,28 @@ docker compose -f docker/docker-compose.dev.yml up --build
 服务器信息：
 
 - 主机：`root@192.168.70.138`
-- 项目目录：`/mnt/user/docker1/18x_v2`
+- 主机名：`tank61213`
+- 项目目录：`/mnt/user/docker1/18xv2`
+- 同步方式：Git（远端仓库由服务器目录中的 `.git/config` 决定）
 
 ### 6.3 推荐部署流程
 
 1. 本地确认改动可用。
-2. 同步代码到服务器，但不覆盖 `data/`。
-3. 在服务器目录执行 Docker 重建。
-4. 查看 `docker-app-1` 和 `docker-postgres-1` 状态。
-5. 用 `curl http://127.0.0.1:8010/api/healthz` 验证服务。
+2. 将本地改动推送到 Git 远端。
+3. 在服务器目录执行 `git pull --ff-only`。
+4. 在服务器目录执行 Docker 重建。
+5. 查看 `docker-app-1` 和 `docker-postgres-1` 状态。
+6. 用 `curl http://127.0.0.1:8010/api/healthz` 验证服务。
 
 参考命令：
 
 ```bash
-rsync -avz --exclude .git --exclude .venv --exclude data \
-  /Users/wangyichuan/Desktop/wangcodemac/18x_v2/ \
-  root@192.168.70.138:/mnt/user/docker1/18x_v2/
+git push
 
 ssh root@192.168.70.138
-cd /mnt/user/docker1/18x_v2/docker
-docker compose up -d --build
+cd /mnt/user/docker1/18xv2
+git pull --ff-only
+docker compose -f docker/docker-compose.yml up -d --build
 docker compose ps
 docker logs --tail 200 docker-app-1
 ```

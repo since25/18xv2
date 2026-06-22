@@ -301,26 +301,27 @@ open http://127.0.0.1
 ## Unraid 部署
 
 ```bash
-# 1. 推送代码（rsync 或 git pull）
-rsync -avz --exclude .venv --exclude data --exclude .git \
-  /path/to/18x_v2/ \
-  root@<unraid-ip>:/mnt/user/appdata/18x_v2/
+# 1. 本地推送代码
+git push
 
 # 2. SSH 到 Unraid
-ssh root@<unraid-ip>
-cd /mnt/user/appdata/18x_v2
+ssh root@192.168.70.138
+cd /mnt/user/docker1/18xv2
 
-# 3. 复制并填写 .env
+# 3. 服务器通过 Git 同步
+git pull --ff-only
+
+# 4. 复制并填写 .env
 cp .env.example .env
 # 编辑 .env，填入 APP_ID / APP_SECRET 等
 
-# 4. 构建并启动
+# 5. 构建并启动
 docker compose -f docker/docker-compose.yml up -d --build
 
-# 5. 查看日志
+# 6. 查看日志
 docker compose -f docker/docker-compose.yml logs -f
 
-# 6. 访问
+# 7. 访问
 # 前端：http://<unraid-ip>/
 # API：http://<unraid-ip>/api/healthz
 ```

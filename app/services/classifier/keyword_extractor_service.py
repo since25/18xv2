@@ -132,42 +132,45 @@ class KeywordExtractorService:
         group_index: int = 1,
         limit: int = 100,
     ) -> tuple[list[ExtractedKeywordStat], list[RegexPreviewItem], int]:
-        cleaned_path = raw_path.strip()
-        if not cleaned_path:
+        cleaned_paths = [line.strip() for line in raw_path.splitlines() if line.strip()]
+        if not cleaned_paths and raw_path.strip():
+            cleaned_paths = [raw_path.strip()]
+        if not cleaned_paths:
             raise ValueError("raw_path is required")
 
         compiled = re.compile(pattern, self._parse_flags(flags))
-        target_name = PurePosixPath(cleaned_path).name or cleaned_path
         grouped: OrderedDict[str, ExtractedKeywordStat] = OrderedDict()
         preview: list[RegexPreviewItem] = []
-        seen_keywords: set[str] = set()
 
-        for match in compiled.finditer(target_name):
-            extracted = self._extract_group_value(match, group_index)
-            keyword = self._clean_keyword(extracted)
-            if not keyword or keyword in seen_keywords:
-                continue
-            seen_keywords.add(keyword)
+        for index, cleaned_path in enumerate(cleaned_paths, start=1):
+            target_name = PurePosixPath(cleaned_path).name or cleaned_path
+            seen_keywords: set[str] = set()
+            for match in compiled.finditer(target_name):
+                extracted = self._extract_group_value(match, group_index)
+                keyword = self._clean_keyword(extracted)
+                if not keyword or keyword in seen_keywords:
+                    continue
+                seen_keywords.add(keyword)
 
-            stat = grouped.get(keyword)
-            if stat is None:
-                stat = ExtractedKeywordStat(keyword=keyword, count=0, source="manual_path_regex", examples=[])
-                grouped[keyword] = stat
-            stat.count += 1
-            if len(stat.examples) < 5:
-                stat.examples.append(cleaned_path)
-            preview.append(
-                RegexPreviewItem(
-                    node_id=0,
-                    folder_name=target_name,
-                    raw_path=cleaned_path,
-                    extracted_keyword=keyword,
+                stat = grouped.get(keyword)
+                if stat is None:
+                    stat = ExtractedKeywordStat(keyword=keyword, count=0, source="manual_path_regex", examples=[])
+                    grouped[keyword] = stat
+                stat.count += 1
+                if len(stat.examples) < 5:
+                    stat.examples.append(cleaned_path)
+                preview.append(
+                    RegexPreviewItem(
+                        node_id=index,
+                        folder_name=target_name,
+                        raw_path=cleaned_path,
+                        extracted_keyword=keyword,
+                    )
                 )
-            )
 
         stats = list(grouped.values())
         stats.sort(key=lambda item: (-item.count, item.keyword))
-        return stats[:limit], preview[:limit], 1
+        return stats[:limit], preview[:limit], len(cleaned_paths)
 
     def _parse_flags(self, flags: str) -> int:
         resolved = 0

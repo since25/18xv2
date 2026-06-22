@@ -23,7 +23,7 @@ class RegexKeywordExtractRequest(BaseModel):
 
 class ManualPathRegexExtractRequest(BaseModel):
     import_id: int | None = None
-    raw_path: str = Field(min_length=1, max_length=4000)
+    raw_path: str = Field(min_length=1, max_length=20000)
     pattern: str = Field(min_length=1, max_length=500)
     flags: str = Field(default="", max_length=20)
     group_index: int = Field(default=1, ge=0, le=20)

@@ -78,23 +78,23 @@ python scripts/migrate_sqlite_to_postgres.py \
 ## Unraid 生产部署
 
 ```bash
-# 1. 推送代码（rsync 或 git pull）
-rsync -avz --exclude .venv --exclude data --exclude .git \
-  /Users/wangyichuan/Desktop/wangcodemac/18x_v2/ \
-  root@192.168.70.138:/mnt/user/appdata/18x_v2/
+# 1. 本地推送代码
+git push
 
 # 2. SSH 到 Unraid
 ssh root@192.168.70.138
-cd /mnt/user/appdata/18x_v2
+cd /mnt/user/docker1/18xv2
 
-# 3. 构建并启动（首次会同时启动 PostgreSQL）
+# 3. 服务器通过 Git 同步
+git pull --ff-only
+
+# 4. 构建并启动（首次会同时启动 PostgreSQL）
 docker compose -f docker/docker-compose.yml up -d --build
 
-# 4. 查看容器日志
-docker logs -f 18x_v2
+# 5. 查看容器日志
+docker logs -f docker-app-1
 
-# 5. 验证服务
-curl http://127.0.0.1/ | head -n 5
+# 6. 验证服务
 curl http://127.0.0.1:8010/api/healthz
 curl -i http://127.0.0.1:8010/api/auth/me
 ```

@@ -235,6 +235,39 @@ export default function KeywordExtractorPage() {
     }
   }
 
+  const generateManualKeywordCandidates = () => {
+    const keywords = Array.from(new Set(splitTextareaLines(manualKeywords))).slice(0, manualLimit)
+    if (!keywords.length) {
+      message.warning('请先输入手动关键词')
+      return
+    }
+
+    setPreview(null)
+    setSummary({
+      import_id: importId,
+      total_nodes: keywords.length,
+      total_keywords: keywords.length,
+      total_actionable_keywords: keywords.length,
+      total_existing_keywords: 0,
+      total_ignored_keywords: 0,
+      total_blacklisted_keywords: 0,
+      total_similar_keywords: 0,
+      keywords: keywords.map((keyword) => ({
+        keyword,
+        count: 1,
+        source: 'manual_direct',
+        examples: [keyword],
+        match_status: 'new',
+        matched_entry_id: null,
+        matched_canonical_name: null,
+        similar_score: null,
+      })),
+    })
+    setActiveSource('manual')
+    setSelectedKeywords([])
+    message.success(`已生成 ${keywords.length} 个手动候选`)
+  }
+
   const buildRegexPayload = () => ({
     import_id: importId,
     pattern: regexPattern,
@@ -534,10 +567,10 @@ export default function KeywordExtractorPage() {
                 rows={5}
                 value={manualPath}
                 onChange={(event) => setManualPath(event.target.value)}
-                placeholder="粘贴完整路径，例如 /Volumes/.../xxx.mp4"
+                placeholder={'支持粘贴多行完整路径或日志，例如：\n[DELETED] 已删除目录：/mnt/cache/docker1/SSD_cache/finish/目录名\n/mnt/cache/docker1/SSD_cache/finish/另一个目录名'}
               />
               <Text type="secondary">
-                会直接对路径最后一段文件名应用右侧默认正则，并将结果送到右侧提取结果区做白名单/黑名单入库。
+                每一行都会单独取最后一段文件名，再应用右侧默认正则，并将结果送到右侧提取结果区做白名单/黑名单入库。
               </Text>
               <Button type="primary" onClick={runManualPathExtraction} loading={previewLoading || keywordsLoading}>
                 提取
@@ -554,16 +587,24 @@ export default function KeywordExtractorPage() {
                 rows={8}
                 value={manualKeywords}
                 onChange={(event) => setManualKeywords(event.target.value)}
-                placeholder="每行一个关键词"
+                placeholder={'每行一个关键词，例如：\n狮子座\n天蝎座\n布丁'}
               />
               <InputNumber
                 min={1}
                 value={manualLimit}
                 onChange={(value) => setManualLimit(Number(value ?? 100))}
               />
-              <Button type="primary" onClick={runManualKeywords} loading={keywordsLoading}>
-                运行手动匹配
-              </Button>
+              <Space wrap>
+                <Button type="primary" onClick={generateManualKeywordCandidates}>
+                  生成候选
+                </Button>
+                <Button onClick={runManualKeywords} loading={keywordsLoading}>
+                  在目录树中运行匹配
+                </Button>
+              </Space>
+              <Text type="secondary">
+                生成候选会把输入内容直接送到右侧用于批量入库；目录树匹配会检查这些词在当前导入批次的目录名中是否出现。
+              </Text>
             </Space>
           </Card>
 
