@@ -28,6 +28,7 @@ env/
 *.swp
 .claude/
 .DS_Store
+._*
 115-cookies-*.txt
 
 # pytest
