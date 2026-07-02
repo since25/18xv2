@@ -6,6 +6,7 @@ import json
 from sqlalchemy.orm import Session
 
 from app.models.emby_media_actions import EmbyMetadataCandidate, EmbyMetadataSnapshot
+from app.models.keywords import KeywordAlias, KeywordEntry, KeywordOperationLog
 from app.services.keywords.registry_service import KeywordRegistryService, normalize_keyword_text
 
 VALID_TARGET_LISTS = {"emby_blacklist", "emby_whitelist"}
@@ -61,29 +62,67 @@ class EmbyMetadataCandidateService:
         cleaned = [actor.strip() for actor in actors if actor.strip()]
         if not cleaned:
             raise ValueError("at least one actor is required")
-        registry = KeywordRegistryService(self.db)
-        entry_ids: list[int] = []
-        for actor in dict.fromkeys(cleaned):
+        unique_actor_pairs: list[tuple[str, str]] = []
+        seen_normalized_actors: set[str] = set()
+        for actor in cleaned:
             normalized_actor = normalize_keyword_text(actor)
+            if normalized_actor in seen_normalized_actors:
+                continue
+            seen_normalized_actors.add(normalized_actor)
+            unique_actor_pairs.append((actor, normalized_actor))
+        registry = KeywordRegistryService(self.db)
+        entries_by_actor: list[tuple[str, str, KeywordEntry | None]] = []
+        for actor, normalized_actor in unique_actor_pairs:
             existing = registry.find_entry_by_keyword(normalized_actor)
+            if existing is not None and existing.keyword_type != candidate.target_list:
+                raise ValueError(f"actor {actor} already exists in {existing.keyword_type}")
+            entries_by_actor.append((actor, normalized_actor, existing))
+
+        entry_ids: list[int] = []
+        selected_actors: list[str] = []
+        for actor, normalized_actor, existing in entries_by_actor:
             if existing is None:
-                entry = registry.create_entry(
+                entry = KeywordEntry(
                     canonical_name=actor,
+                    canonical_name_normalized=normalized_actor,
                     keyword_type=candidate.target_list,
                     note=note,
-                    source="emby_media_actions",
                 )
-            elif existing.keyword_type != candidate.target_list:
-                raise ValueError(f"actor {actor} already exists in {existing.keyword_type}")
+                self.db.add(entry)
+                self.db.flush()
+                self.db.add(
+                    KeywordAlias(
+                        keyword_entry_id=entry.id,
+                        alias=entry.canonical_name,
+                        alias_normalized=normalized_actor,
+                        source="canonical",
+                        note="Auto-created from canonical name.",
+                    )
+                )
+                self.db.add(
+                    KeywordOperationLog(
+                        action="create_entry",
+                        keyword_entry_id=entry.id,
+                        detail=json.dumps(
+                            {
+                                "canonical_name": entry.canonical_name,
+                                "keyword_type": entry.keyword_type,
+                                "aliases": [],
+                                "source": "emby_media_actions",
+                            },
+                            ensure_ascii=False,
+                        ),
+                    )
+                )
             else:
                 entry = existing
             entry_ids.append(entry.id)
-        candidate.selected_actors_json = json.dumps(cleaned, ensure_ascii=False)
+            selected_actors.append(actor)
+        candidate.selected_actors_json = json.dumps(selected_actors, ensure_ascii=False)
         candidate.applied_keyword_entry_ids_json = json.dumps(entry_ids)
         candidate.note = note
         candidate.status = "applied"
         candidate.applied_at = datetime.now(UTC)
         self.db.commit()
-        registry.sync_legacy_library()
         self.db.refresh(candidate)
         return candidate
