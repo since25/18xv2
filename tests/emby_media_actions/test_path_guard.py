@@ -42,3 +42,39 @@ def test_path_guard_real_delete_removes_file(tmp_path: Path) -> None:
 
     assert result.status == "deleted"
     assert not target.exists()
+
+
+def test_path_guard_blocks_directory_delete_by_default(tmp_path: Path) -> None:
+    allowed = tmp_path / "allowed"
+    allowed.mkdir()
+    target = allowed / "nested"
+    target.mkdir()
+    child = target / "a.strm"
+    child.write_text("url", encoding="utf-8")
+
+    guard = PathGuard(allowed_roots=[str(allowed)])
+    result = guard.delete_path(str(target), dry_run=False)
+
+    assert result.status == "blocked"
+    assert result.error_message == "directory_delete_not_allowed"
+    assert result.entry_type == "dir"
+    assert child.exists()
+
+
+def test_path_guard_blocks_symlink_escape_without_deleting_target(tmp_path: Path) -> None:
+    allowed = tmp_path / "allowed"
+    outside = tmp_path / "outside"
+    allowed.mkdir()
+    outside.mkdir()
+    outside_target = outside / "a.strm"
+    outside_target.write_text("url", encoding="utf-8")
+    symlink_path = allowed / "linked.strm"
+    symlink_path.symlink_to(outside_target)
+
+    guard = PathGuard(allowed_roots=[str(allowed)])
+    result = guard.delete_path(str(symlink_path), dry_run=False)
+
+    assert result.status == "blocked"
+    assert result.error_message == "path_outside_allowed_roots"
+    assert outside_target.exists()
+    assert symlink_path.exists()

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -34,15 +33,15 @@ class PathGuard:
 
     def delete_path(self, path: str, *, dry_run: bool) -> GuardDeleteResult:
         decision = self.classify(path)
+        entry_type = self._entry_type(decision.path)
         if not decision.allowed:
-            return GuardDeleteResult(decision.path, self._entry_type(decision.path), "blocked", decision.reason)
+            return GuardDeleteResult(decision.path, entry_type, "blocked", decision.reason)
+        if entry_type == "dir":
+            return GuardDeleteResult(decision.path, entry_type, "blocked", "directory_delete_not_allowed")
         if dry_run:
-            return GuardDeleteResult(decision.path, self._entry_type(decision.path), "dry_run")
-        if not os.path.exists(decision.path):
+            return GuardDeleteResult(decision.path, entry_type, "dry_run")
+        if entry_type == "missing":
             return GuardDeleteResult(decision.path, "missing", "not_found", "path_not_found")
-        if os.path.isdir(decision.path):
-            shutil.rmtree(decision.path)
-            return GuardDeleteResult(decision.path, "dir", "deleted")
         os.remove(decision.path)
         return GuardDeleteResult(decision.path, "file", "deleted")
 
