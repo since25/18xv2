@@ -27,6 +27,20 @@ def _delete_plan_response(plan: EmbyDeletePlan) -> EmbyDeletePlanResponse:
     return EmbyDeletePlanResponse.model_validate(plan)
 
 
+def _emby_item_type(payload: EmbyMediaIntakeRequest) -> str:
+    if payload.emby_payload:
+        item_type = payload.emby_payload.get("Type")
+        if item_type:
+            return str(item_type)
+    return "Unknown"
+
+
+def _delete_scope_for_item_type(emby_item_type: str) -> str:
+    if emby_item_type.strip().lower() == "episode":
+        return "episode"
+    return "movie"
+
+
 @router.post("/intake", response_model=EmbyMediaIntakeResponse)
 def intake(payload: EmbyMediaIntakeRequest, request: Request, db: Session = Depends(get_db)) -> EmbyMediaIntakeResponse:
     if payload.action in {"metadata_blacklist", "metadata_whitelist"}:
@@ -61,7 +75,10 @@ def intake(payload: EmbyMediaIntakeRequest, request: Request, db: Session = Depe
             raise HTTPException(status_code=400, detail="url or readable strm path is required")
 
         settings = get_settings()
-        decoded = decode_115_open_path(stream_url)
+        try:
+            decoded = decode_115_open_path(stream_url)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         matches = StrmMappingService(
             strm_roots=settings.emby_media_actions_strm_roots,
             source_roots=settings.emby_media_actions_source_roots,
@@ -80,9 +97,10 @@ def intake(payload: EmbyMediaIntakeRequest, request: Request, db: Session = Depe
             client_115=client_115,
             allowed_roots=settings.emby_media_actions_source_roots + settings.emby_media_actions_organized_roots,
         )
+        emby_item_type = _emby_item_type(payload)
         mapping = service.create_mapping_from_matches(
             emby_item_id=payload.emby_item_id,
-            emby_item_type="Unknown",
+            emby_item_type=emby_item_type,
             emby_title=payload.title or payload.emby_item_id,
             alist_url=stream_url,
             mount_name=decoded.mount_name,
@@ -90,7 +108,7 @@ def intake(payload: EmbyMediaIntakeRequest, request: Request, db: Session = Depe
             remote_file_id=remote_file_id or None,
             matches=matches,
         )
-        plan = service.create_plan_from_mapping(mapping_id=mapping.id, scope="movie", source=payload.source)
+        plan = service.create_plan_from_mapping(mapping_id=mapping.id, scope=_delete_scope_for_item_type(emby_item_type), source=payload.source)
         return EmbyMediaIntakeResponse(ok=True, delete_plan=_delete_plan_response(plan))
     raise HTTPException(status_code=400, detail="delete_plan intake requires a resolved mapping")
 

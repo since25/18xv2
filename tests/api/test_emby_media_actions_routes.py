@@ -233,6 +233,113 @@ def test_delete_plan_intake_requires_emby_item_id(client: TestClient) -> None:
     assert response.json()["detail"] == "emby_item_id is required"
 
 
+def test_delete_plan_intake_rejects_malformed_stream_url(client: TestClient) -> None:
+    response = client.post(
+        "/emby-media-actions/intake",
+        json={
+            "action": "delete_plan",
+            "url": "http://example.test/not-alist/a.mkv",
+            "title": "测试电影",
+            "emby_item_id": "item-1",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "stream URL" in response.json()["detail"]
+
+
+def test_delete_plan_intake_resolves_url_and_persists_remote_file_id(api_context) -> None:
+    source = api_context.tmp_path / "source"
+    organized = api_context.tmp_path / "organized"
+    source.mkdir(exist_ok=True)
+    organized.mkdir(exist_ok=True)
+    url = "http://192.168.70.138:5244/d/115_OPEN/%E7%94%B5%E5%BD%B1/a.mkv"
+    (source / "a.strm").write_text(url, encoding="utf-8")
+    (organized / "a.strm").write_text(url, encoding="utf-8")
+    api_context.fake_115.add_node(NodePayload(id="remote-1", name="a.mkv", path="/电影/a.mkv", parent_id="0", is_file=True))
+
+    response = api_context.client.post(
+        "/emby-media-actions/intake",
+        json={
+            "action": "delete_plan",
+            "url": url,
+            "title": "测试电影",
+            "emby_item_id": "item-1",
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["delete_plan"]["status"] == "draft"
+    assert data["delete_plan"]["total_items"] == 3
+    assert data["delete_plan"]["scope"] == "movie"
+    with api_context.session_factory() as db:
+        mapping = db.query(_emby_media_actions.EmbyMediaMapping).filter_by(emby_item_id="item-1").one()
+        assert mapping.remote_file_id == "remote-1"
+        assert mapping.emby_item_type == "Unknown"
+
+
+def test_delete_plan_intake_reads_url_from_strm_path(api_context) -> None:
+    source = api_context.tmp_path / "source"
+    organized = api_context.tmp_path / "organized"
+    source.mkdir(exist_ok=True)
+    organized.mkdir(exist_ok=True)
+    url = "http://192.168.70.138:5244/d/115_OPEN/%E7%94%B5%E5%BD%B1/path-only.mkv"
+    strm_path = source / "path-only.strm"
+    strm_path.write_text(url, encoding="utf-8")
+    (organized / "path-only.strm").write_text(url, encoding="utf-8")
+    api_context.fake_115.add_node(NodePayload(id="remote-2", name="path-only.mkv", path="/电影/path-only.mkv", parent_id="0", is_file=True))
+
+    response = api_context.client.post(
+        "/emby-media-actions/intake",
+        json={
+            "action": "delete_plan",
+            "path": str(strm_path),
+            "title": "测试电影",
+            "emby_item_id": "item-path",
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["delete_plan"]["status"] == "draft"
+    assert data["delete_plan"]["total_items"] == 3
+    with api_context.session_factory() as db:
+        mapping = db.query(_emby_media_actions.EmbyMediaMapping).filter_by(emby_item_id="item-path").one()
+        assert mapping.remote_file_id == "remote-2"
+        assert mapping.alist_url == url
+
+
+def test_delete_plan_intake_uses_episode_scope_and_type_from_emby_payload(api_context) -> None:
+    source = api_context.tmp_path / "source"
+    organized = api_context.tmp_path / "organized"
+    source.mkdir(exist_ok=True)
+    organized.mkdir(exist_ok=True)
+    url = "http://192.168.70.138:5244/d/115_OPEN/%E5%89%A7%E9%9B%86/s01e01.mkv"
+    (source / "s01e01.strm").write_text(url, encoding="utf-8")
+    (organized / "s01e01.strm").write_text(url, encoding="utf-8")
+    api_context.fake_115.add_node(NodePayload(id="remote-episode-1", name="s01e01.mkv", path="/剧集/s01e01.mkv", parent_id="0", is_file=True))
+
+    response = api_context.client.post(
+        "/emby-media-actions/intake",
+        json={
+            "action": "delete_plan",
+            "url": url,
+            "title": "第一集",
+            "emby_item_id": "episode-1",
+            "emby_payload": {"Id": "episode-1", "Name": "第一集", "Type": "Episode"},
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["delete_plan"]["scope"] == "episode"
+    with api_context.session_factory() as db:
+        mapping = db.query(_emby_media_actions.EmbyMediaMapping).filter_by(emby_item_id="episode-1").one()
+        assert mapping.emby_item_type == "Episode"
+        assert mapping.remote_file_id == "remote-episode-1"
+
+
 def test_delete_plan_intake_resolves_strm_and_creates_plan(client: TestClient, tmp_path, monkeypatch) -> None:
     source = tmp_path / "source"
     organized = tmp_path / "organized"
