@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import xml.etree.ElementTree as ET
+
+import pytest
+
 from app.services.emby_media_actions.nfo_parser import parse_nfo_actors
 
 
@@ -18,3 +22,22 @@ def test_parse_nfo_actors_extracts_names_and_roles() -> None:
     assert actors[0].role == "角色A"
     assert actors[0].provider_ids["tmdb"] == "101"
     assert actors[1].name == "演员B"
+
+
+def test_parse_nfo_actors_raises_parse_error_for_malformed_xml() -> None:
+    with pytest.raises(ET.ParseError):
+        parse_nfo_actors("<movie><actor><name>演员A</name></actor>")
+
+
+def test_parse_nfo_actors_skips_empty_actor_names() -> None:
+    xml = """
+    <movie>
+      <actor><name>   </name><role>空角色</role></actor>
+      <actor><role>无名角色</role></actor>
+      <actor><name>演员A</name></actor>
+    </movie>
+    """
+
+    actors = parse_nfo_actors(xml)
+
+    assert [actor.name for actor in actors] == ["演员A"]

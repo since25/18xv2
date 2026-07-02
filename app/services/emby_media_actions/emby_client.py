@@ -28,7 +28,9 @@ def build_item_context(payload: dict) -> EmbyItemContext:
     media_sources = list(payload.get("MediaSources") or [])
     primary_path = None
     if media_sources:
-        primary_path = media_sources[0].get("Path")
+        primary_path = media_sources[0].get("Path") or None
+    if not primary_path:
+        primary_path = payload.get("Path")
     actors = []
     for person in payload.get("People") or []:
         if person.get("Type") != "Actor":
@@ -54,14 +56,22 @@ def build_item_context(payload: dict) -> EmbyItemContext:
 
 
 class EmbyClient:
-    def __init__(self, *, base_url: str, api_key: str, http_getter: HttpGetter | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        api_key: str,
+        user_id: str,
+        http_getter: HttpGetter | None = None,
+    ) -> None:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
+        self.user_id = user_id
         self.http_getter = http_getter or httpx
 
     def get_item(self, item_id: str) -> dict:
         response = self.http_getter.get(
-            f"{self.base_url}/emby/Items/{item_id}",
+            f"{self.base_url}/emby/Users/{self.user_id}/Items/{item_id}",
             params={"api_key": self.api_key, "Fields": "Path,MediaSources,People,ProviderIds"},
             timeout=10.0,
         )
@@ -70,7 +80,7 @@ class EmbyClient:
 
     def find_items_by_title(self, title: str) -> list[dict]:
         response = self.http_getter.get(
-            f"{self.base_url}/emby/Items",
+            f"{self.base_url}/emby/Users/{self.user_id}/Items",
             params={
                 "api_key": self.api_key,
                 "SearchTerm": title,
