@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.emby_media_actions import EmbyDeletePlan, EmbyDeletePlanItem, EmbyMediaMapping
@@ -28,6 +29,7 @@ class EmbyDeletePlanService:
         mapping = self.db.get(EmbyMediaMapping, mapping_id)
         if mapping is None:
             raise LookupError("mapping not found")
+        target_mappings = self._target_mappings(mapping, scope)
         plan = EmbyDeletePlan(
             source=source,
             emby_item_id=mapping.emby_item_id,
@@ -37,6 +39,44 @@ class EmbyDeletePlanService:
         )
         self.db.add(plan)
         self.db.flush()
+        seen_local_paths: set[str] = set()
+        seen_remote_file_ids: set[str] = set()
+        for target_mapping in target_mappings:
+            self._add_mapping_paths(plan.id, target_mapping, seen_local_paths)
+            self._add_remote_file(plan.id, target_mapping, seen_remote_file_ids)
+        self.db.flush()
+        plan.total_items = len(plan.items)
+        plan.blocked_count = sum(1 for item in plan.items if item.status == "blocked")
+        self.db.commit()
+        self.db.refresh(plan)
+        return plan
+
+    def _target_mappings(self, mapping: EmbyMediaMapping, scope: str) -> list[EmbyMediaMapping]:
+        if scope in {"movie", "episode"}:
+            return [mapping]
+        if scope == "season":
+            if not mapping.emby_season_id:
+                raise ValueError("season scope requires emby_season_id")
+            return list(
+                self.db.scalars(
+                    select(EmbyMediaMapping)
+                    .where(EmbyMediaMapping.emby_season_id == mapping.emby_season_id)
+                    .order_by(EmbyMediaMapping.id)
+                )
+            )
+        if scope == "series":
+            if not mapping.emby_series_id:
+                raise ValueError("series scope requires emby_series_id")
+            return list(
+                self.db.scalars(
+                    select(EmbyMediaMapping)
+                    .where(EmbyMediaMapping.emby_series_id == mapping.emby_series_id)
+                    .order_by(EmbyMediaMapping.id)
+                )
+            )
+        return [mapping]
+
+    def _add_mapping_paths(self, plan_id: int, mapping: EmbyMediaMapping, seen_local_paths: set[str]) -> None:
         for path in mapping.paths:
             if path.path_role == "source_strm":
                 group = "source_strm"
@@ -44,40 +84,71 @@ class EmbyDeletePlanService:
                 group = "emby_library"
             else:
                 continue
-            decision = self.path_guard.classify(path.path)
+            if path.path in seen_local_paths:
+                continue
+            seen_local_paths.add(path.path)
+            dry_run = self.path_guard.delete_path(path.path, dry_run=True)
+            blocked_reason = dry_run.error_message if dry_run.status != "dry_run" else None
             self.db.add(
                 EmbyDeletePlanItem(
-                    plan_id=plan.id,
+                    plan_id=plan_id,
                     group=group,
                     target_type="file",
                     target_path=path.path,
                     display_name=path.path.rsplit("/", 1)[-1],
-                    status="blocked" if not decision.allowed else "pending",
-                    blocked_reason=decision.reason,
-                    dry_run_result="blocked" if not decision.allowed else "dry_run",
+                    status="pending" if dry_run.status == "dry_run" else "blocked",
+                    blocked_reason=blocked_reason,
+                    dry_run_result=dry_run.status,
                 )
             )
-        if mapping.remote_file_id:
-            remote_supported = mapping.remote_provider == "115"
-            self.db.add(
-                EmbyDeletePlanItem(
-                    plan_id=plan.id,
-                    group="remote_115",
-                    target_type="remote_file",
-                    remote_file_id=mapping.remote_file_id,
-                    target_path=mapping.remote_path,
-                    display_name=mapping.remote_path.rsplit("/", 1)[-1] if mapping.remote_path else mapping.remote_file_id,
-                    status="pending" if remote_supported else "blocked",
-                    blocked_reason=None if remote_supported else "unsupported_remote_provider",
-                    dry_run_result="dry_run" if remote_supported else "blocked",
-                )
+
+    def _add_remote_file(self, plan_id: int, mapping: EmbyMediaMapping, seen_remote_file_ids: set[str]) -> None:
+        if not mapping.remote_file_id or mapping.remote_file_id in seen_remote_file_ids:
+            return
+        seen_remote_file_ids.add(mapping.remote_file_id)
+        status = "pending"
+        blocked_reason = None
+        error_message = None
+        dry_run_result = "dry_run"
+        if mapping.remote_provider != "115":
+            status = "blocked"
+            blocked_reason = "unsupported_remote_provider"
+            dry_run_result = "blocked"
+        elif self.client_115 is None:
+            status = "blocked"
+            blocked_reason = "client_115_required"
+            dry_run_result = "blocked"
+        else:
+            try:
+                dry_run = self.client_115.delete_node(mapping.remote_file_id, dry_run=True)
+                dry_run_result = self._remote_dry_run_result(dry_run)
+            except Exception as exc:  # noqa: BLE001
+                status = "blocked"
+                blocked_reason = "remote_dry_run_failed"
+                error_message = str(exc)
+                dry_run_result = "blocked"
+        self.db.add(
+            EmbyDeletePlanItem(
+                plan_id=plan_id,
+                group="remote_115",
+                target_type="remote_file",
+                remote_file_id=mapping.remote_file_id,
+                target_path=mapping.remote_path,
+                display_name=mapping.remote_path.rsplit("/", 1)[-1] if mapping.remote_path else mapping.remote_file_id,
+                status=status,
+                blocked_reason=blocked_reason,
+                error_message=error_message,
+                dry_run_result=dry_run_result,
             )
-        self.db.flush()
-        plan.total_items = len(plan.items)
-        plan.blocked_count = sum(1 for item in plan.items if item.status == "blocked")
-        self.db.commit()
-        self.db.refresh(plan)
-        return plan
+        )
+
+    @staticmethod
+    def _remote_dry_run_result(result) -> str:
+        for field in ("message", "action", "payload"):
+            value = getattr(result, field, None)
+            if value:
+                return str(value)
+        return str(result)
 
     def execute_plan(self, plan_id: int, *, confirm: bool) -> EmbyDeleteSummary:
         if not confirm:
