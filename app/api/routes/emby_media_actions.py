@@ -18,6 +18,7 @@ from app.schemas.emby_media_actions import (
 )
 from app.services.emby_media_actions.delete_plan_service import EmbyDeletePlanService
 from app.services.emby_media_actions.metadata_candidate_service import EmbyMetadataCandidateService
+from app.services.emby_media_actions.strm_mapping_service import StrmMappingService, decode_115_open_path
 
 router = APIRouter(prefix="/emby-media-actions", tags=["emby-media-actions"])
 
@@ -27,7 +28,7 @@ def _delete_plan_response(plan: EmbyDeletePlan) -> EmbyDeletePlanResponse:
 
 
 @router.post("/intake", response_model=EmbyMediaIntakeResponse)
-def intake(payload: EmbyMediaIntakeRequest, db: Session = Depends(get_db)) -> EmbyMediaIntakeResponse:
+def intake(payload: EmbyMediaIntakeRequest, request: Request, db: Session = Depends(get_db)) -> EmbyMediaIntakeResponse:
     if payload.action in {"metadata_blacklist", "metadata_whitelist"}:
         if not payload.emby_item_id:
             raise HTTPException(status_code=400, detail="emby_item_id is required")
@@ -46,6 +47,51 @@ def intake(payload: EmbyMediaIntakeRequest, db: Session = Depends(get_db)) -> Em
         except ET.ParseError as exc:
             raise HTTPException(status_code=400, detail=f"invalid nfo_xml: {exc}") from exc
         return EmbyMediaIntakeResponse(ok=True, metadata_candidate=EmbyMetadataCandidateResponse.model_validate(candidate))
+    if payload.action == "delete_plan":
+        if not payload.emby_item_id:
+            raise HTTPException(status_code=400, detail="emby_item_id is required")
+        stream_url = payload.url
+        if not stream_url and payload.path and payload.path.endswith(".strm"):
+            try:
+                with open(payload.path, "r", encoding="utf-8", errors="ignore") as file:
+                    stream_url = file.readline().strip()
+            except OSError as exc:
+                raise HTTPException(status_code=400, detail=f"cannot read strm path: {exc}") from exc
+        if not stream_url:
+            raise HTTPException(status_code=400, detail="url or readable strm path is required")
+
+        settings = get_settings()
+        decoded = decode_115_open_path(stream_url)
+        matches = StrmMappingService(
+            strm_roots=settings.emby_media_actions_strm_roots,
+            source_roots=settings.emby_media_actions_source_roots,
+            organized_roots=settings.emby_media_actions_organized_roots,
+        ).scan_for_url(stream_url)
+        remote_file_id = None
+        client_115 = getattr(request.app.state, "client_115", None)
+        if client_115 is not None:
+            try:
+                remote_payload = client_115.get_file(path=decoded.remote_path)
+                remote_file_id = str((remote_payload.get("data") or {}).get("file_id") or "")
+            except Exception:
+                remote_file_id = None
+        service = EmbyDeletePlanService(
+            db,
+            client_115=client_115,
+            allowed_roots=settings.emby_media_actions_source_roots + settings.emby_media_actions_organized_roots,
+        )
+        mapping = service.create_mapping_from_matches(
+            emby_item_id=payload.emby_item_id,
+            emby_item_type="Unknown",
+            emby_title=payload.title or payload.emby_item_id,
+            alist_url=stream_url,
+            mount_name=decoded.mount_name,
+            remote_path=decoded.remote_path,
+            remote_file_id=remote_file_id or None,
+            matches=matches,
+        )
+        plan = service.create_plan_from_mapping(mapping_id=mapping.id, scope="movie", source=payload.source)
+        return EmbyMediaIntakeResponse(ok=True, delete_plan=_delete_plan_response(plan))
     raise HTTPException(status_code=400, detail="delete_plan intake requires a resolved mapping")
 
 

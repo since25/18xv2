@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.emby_media_actions import EmbyDeletePlan, EmbyDeletePlanItem, EmbyMediaMapping
+from app.models.emby_media_actions import EmbyDeletePlan, EmbyDeletePlanItem, EmbyMediaMapping, EmbyMediaMappingPath
 from app.services.emby_media_actions.path_guard import PathGuard
 
 
@@ -24,6 +24,46 @@ class EmbyDeletePlanService:
         self.db = db
         self.client_115 = client_115
         self.path_guard = PathGuard(allowed_roots)
+
+    def create_mapping_from_matches(
+        self,
+        *,
+        emby_item_id: str,
+        emby_item_type: str,
+        emby_title: str,
+        alist_url: str,
+        mount_name: str,
+        remote_path: str,
+        remote_file_id: str | None,
+        matches,
+    ) -> EmbyMediaMapping:
+        mapping = EmbyMediaMapping(
+            emby_item_id=emby_item_id,
+            emby_item_type=emby_item_type,
+            emby_title=emby_title,
+            alist_url=alist_url,
+            alist_mount_name=mount_name,
+            remote_provider="115",
+            remote_path=remote_path,
+            remote_file_id=remote_file_id,
+        )
+        self.db.add(mapping)
+        self.db.flush()
+        for match in matches:
+            mapping.paths.append(
+                EmbyMediaMappingPath(
+                    path_role=match.path_role,
+                    path=match.path,
+                    root_name=match.root_name,
+                    root_path=match.root_path,
+                    file_size=match.file_size,
+                    inode=match.inode,
+                    link_count=match.link_count,
+                )
+            )
+        self.db.commit()
+        self.db.refresh(mapping)
+        return mapping
 
     def create_plan_from_mapping(self, *, mapping_id: int, scope: str, source: str) -> EmbyDeletePlan:
         mapping = self.db.get(EmbyMediaMapping, mapping_id)

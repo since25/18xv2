@@ -226,11 +226,40 @@ def test_metadata_candidate_intake_rejects_malformed_nfo_xml(client: TestClient)
     assert "nfo_xml" in response.json()["detail"]
 
 
-def test_delete_plan_intake_returns_placeholder_400(client: TestClient) -> None:
+def test_delete_plan_intake_requires_emby_item_id(client: TestClient) -> None:
     response = client.post("/emby-media-actions/intake", json={"action": "delete_plan"})
 
     assert response.status_code == 400
-    assert response.json()["detail"] == "delete_plan intake requires a resolved mapping"
+    assert response.json()["detail"] == "emby_item_id is required"
+
+
+def test_delete_plan_intake_resolves_strm_and_creates_plan(client: TestClient, tmp_path, monkeypatch) -> None:
+    source = tmp_path / "source"
+    organized = tmp_path / "organized"
+    source.mkdir(exist_ok=True)
+    organized.mkdir(exist_ok=True)
+    url = "http://192.168.70.138:5244/d/115_OPEN/%E7%94%B5%E5%BD%B1/a.mkv"
+    (source / "a.strm").write_text(url, encoding="utf-8")
+    (organized / "a.strm").write_text(url, encoding="utf-8")
+
+    from app.services.client_115.schemas import NodePayload
+    fake = client.app.state.client_115
+    fake.add_node(NodePayload(id="remote-1", name="a.mkv", path="/电影/a.mkv", parent_id="0", is_file=True))
+
+    response = client.post(
+        "/emby-media-actions/intake",
+        json={
+            "action": "delete_plan",
+            "url": url,
+            "title": "测试电影",
+            "emby_item_id": "item-1",
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["delete_plan"]["status"] == "draft"
+    assert data["delete_plan"]["total_items"] == 3
 
 
 def test_confirm_delete_plan_requires_true(api_context) -> None:
