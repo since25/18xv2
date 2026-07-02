@@ -82,6 +82,7 @@ from app.api.routes import (  # noqa: E402 — import after app creation
     auth_code,
     cleanup,
     dedupe,
+    emby_media_actions,
     extractor,
     files_115,
     home,
@@ -143,6 +144,7 @@ app.include_router(open_auth.router)
 app.include_router(files_115.router)
 app.include_router(whitelist_batch.router)
 app.include_router(review_intake.router)
+app.include_router(emby_media_actions.router)
 
 
 @app.get("/healthz")
