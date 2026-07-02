@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+from types import SimpleNamespace
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -9,11 +13,14 @@ from app.db.base import Base
 from app.models import emby_media_actions as _emby_media_actions  # noqa: F401
 from app.models import keywords as _keywords  # noqa: F401
 from app.models import tree as _tree  # noqa: F401
+from app.models.emby_media_actions import EmbyDeletePlan, EmbyMetadataSnapshot
 from app.services.client_115.client import Fake115Client
+from app.services.client_115.schemas import NodePayload
+from app.services.emby_media_actions.delete_plan_service import EmbyDeletePlanService
 
 
 @pytest.fixture
-def client(tmp_path, monkeypatch):
+def api_context(tmp_path, monkeypatch):
     monkeypatch.setenv("AUTH_ENABLED", "false")
     monkeypatch.setenv("AUTH_STORE_PATH", str(tmp_path / "auth.json"))
     monkeypatch.setenv("AUTH_SESSION_SECRET", "test-secret")
@@ -39,11 +46,91 @@ def client(tmp_path, monkeypatch):
         finally:
             db.close()
 
+    fake_115 = Fake115Client()
     _main.app.dependency_overrides[deps.get_db] = override_get_db
-    _main.app.state.client_115 = Fake115Client()
-    yield TestClient(_main.app, raise_server_exceptions=False)
-    _main.app.dependency_overrides.clear()
-    get_settings.cache_clear()
+    _main.app.state.client_115 = fake_115
+    try:
+        yield SimpleNamespace(
+            client=TestClient(_main.app, raise_server_exceptions=False),
+            session_factory=Factory,
+            fake_115=fake_115,
+            tmp_path=tmp_path,
+        )
+    finally:
+        _main.app.dependency_overrides.clear()
+        get_settings.cache_clear()
+        engine.dispose()
+
+
+@pytest.fixture
+def client(api_context):
+    return api_context.client
+
+
+def _snapshot(api_context, snapshot_id: int) -> EmbyMetadataSnapshot:
+    with api_context.session_factory() as db:
+        snapshot = db.get(EmbyMetadataSnapshot, snapshot_id)
+        assert snapshot is not None
+        return snapshot
+
+
+def _add_remote_node(fake_115: Fake115Client, file_id: str) -> None:
+    fake_115.add_node(
+        NodePayload(
+            id=file_id,
+            name=f"{file_id}.mkv",
+            path=f"/{file_id}.mkv",
+            parent_id="0",
+            is_file=True,
+        )
+    )
+
+
+def _draft_delete_plan(api_context) -> tuple[int, Path, Path]:
+    source_root = api_context.tmp_path / "source"
+    organized_root = api_context.tmp_path / "organized"
+    source_root.mkdir()
+    organized_root.mkdir()
+    source_file = source_root / "item-1.source.strm"
+    organized_file = organized_root / "item-1.organized.strm"
+    source_file.write_text("url", encoding="utf-8")
+    organized_file.write_text("url", encoding="utf-8")
+    _add_remote_node(api_context.fake_115, "remote-1")
+    with api_context.session_factory() as db:
+        mapping = _emby_media_actions.EmbyMediaMapping(
+            emby_item_id="item-1",
+            emby_item_type="Movie",
+            emby_title="测试电影",
+            alist_url="http://example.test/d/115_OPEN/remote-1.mkv",
+            alist_mount_name="115_OPEN",
+            remote_provider="115",
+            remote_path="/remote-1.mkv",
+            remote_file_id="remote-1",
+        )
+        mapping.paths.extend(
+            [
+                _emby_media_actions.EmbyMediaMappingPath(
+                    path_role="source_strm",
+                    path=str(source_file),
+                    root_name="source",
+                    root_path=str(source_root),
+                ),
+                _emby_media_actions.EmbyMediaMappingPath(
+                    path_role="organized_strm",
+                    path=str(organized_file),
+                    root_name="organized",
+                    root_path=str(organized_root),
+                ),
+            ]
+        )
+        db.add(mapping)
+        db.commit()
+        plan = EmbyDeletePlanService(
+            db,
+            client_115=api_context.fake_115,
+            allowed_roots=[str(source_root), str(organized_root)],
+        ).create_plan_from_mapping(mapping_id=mapping.id, scope="movie", source="route_test")
+        return plan.id, source_file, organized_file
 
 
 def test_metadata_candidate_apply_route(client: TestClient) -> None:
@@ -69,3 +156,118 @@ def test_metadata_candidate_apply_route(client: TestClient) -> None:
 
     assert applied.status_code == 200
     assert applied.json()["status"] == "applied"
+
+
+def test_metadata_candidate_intake_preserves_full_emby_snapshot(api_context) -> None:
+    playback_path = "/media/playback/movie.strm"
+    nfo_path = str(api_context.tmp_path / "source" / "movie.nfo")
+
+    created = api_context.client.post(
+        "/emby-media-actions/intake",
+        json={
+            "action": "metadata_blacklist",
+            "path": playback_path,
+            "nfo_path": nfo_path,
+            "title": "测试剧集",
+            "emby_item_id": "episode-1",
+            "emby_payload": {
+                "Id": "episode-1",
+                "Name": "测试剧集",
+                "ProviderIds": {"Tmdb": "123", "Imdb": "tt123"},
+                "SeriesId": "series-1",
+                "SeasonId": "season-1",
+                "ParentIndexNumber": 1,
+                "IndexNumber": 2,
+            },
+            "actors": [{"name": "演员A", "role": None, "provider_ids": {}}],
+        },
+    )
+
+    assert created.status_code == 200
+    snapshot = _snapshot(api_context, created.json()["metadata_candidate"]["snapshot_id"])
+    emby_json = json.loads(snapshot.emby_json)
+    assert emby_json["ProviderIds"] == {"Tmdb": "123", "Imdb": "tt123"}
+    assert emby_json["SeriesId"] == "series-1"
+    assert emby_json["SeasonId"] == "season-1"
+    assert snapshot.nfo_path == nfo_path
+    assert snapshot.nfo_path != playback_path
+
+
+def test_metadata_candidate_intake_uses_minimal_snapshot_and_null_nfo_path_when_absent(api_context) -> None:
+    created = api_context.client.post(
+        "/emby-media-actions/intake",
+        json={
+            "action": "metadata_whitelist",
+            "path": "/media/playback/movie.strm",
+            "title": "测试电影",
+            "emby_item_id": "item-1",
+            "actors": [{"name": "演员A", "role": None, "provider_ids": {}}],
+        },
+    )
+
+    assert created.status_code == 200
+    snapshot = _snapshot(api_context, created.json()["metadata_candidate"]["snapshot_id"])
+    assert json.loads(snapshot.emby_json) == {"Id": "item-1", "Name": "测试电影"}
+    assert snapshot.nfo_path is None
+
+
+def test_metadata_candidate_intake_rejects_malformed_nfo_xml(client: TestClient) -> None:
+    response = client.post(
+        "/emby-media-actions/intake",
+        json={
+            "action": "metadata_blacklist",
+            "title": "测试电影",
+            "emby_item_id": "item-1",
+            "nfo_xml": "<movie><actor><name>演员A</name></actor>",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "nfo_xml" in response.json()["detail"]
+
+
+def test_delete_plan_intake_returns_placeholder_400(client: TestClient) -> None:
+    response = client.post("/emby-media-actions/intake", json={"action": "delete_plan"})
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "delete_plan intake requires a resolved mapping"
+
+
+def test_confirm_delete_plan_requires_true(api_context) -> None:
+    plan_id, source_file, organized_file = _draft_delete_plan(api_context)
+
+    response = api_context.client.post(f"/emby-media-actions/delete-plans/{plan_id}/confirm", json={"confirm": False})
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "confirm must be true"
+    assert source_file.exists()
+    assert organized_file.exists()
+    assert "remote-1" in api_context.fake_115.nodes
+
+
+def test_unknown_delete_plan_and_metadata_candidate_ids_return_404(client: TestClient) -> None:
+    delete_plan = client.get("/emby-media-actions/delete-plans/999")
+    confirm_plan = client.post("/emby-media-actions/delete-plans/999/confirm", json={"confirm": True})
+    metadata_candidate = client.get("/emby-media-actions/metadata-candidates/999")
+    apply_candidate = client.post("/emby-media-actions/metadata-candidates/999/apply", json={"actors": ["演员A"]})
+
+    assert delete_plan.status_code == 404
+    assert confirm_plan.status_code == 404
+    assert metadata_candidate.status_code == 404
+    assert apply_candidate.status_code == 404
+
+
+def test_confirm_delete_plan_route_executes_draft_plan_with_configured_safety_roots(api_context) -> None:
+    plan_id, source_file, organized_file = _draft_delete_plan(api_context)
+
+    response = api_context.client.post(f"/emby-media-actions/delete-plans/{plan_id}/confirm", json={"confirm": True})
+
+    assert response.status_code == 200
+    assert response.json() == {"plan_id": plan_id, "total": 3, "deleted": 3, "failed": 0, "blocked": 0}
+    assert not source_file.exists()
+    assert not organized_file.exists()
+    assert "remote-1" not in api_context.fake_115.nodes
+    with api_context.session_factory() as db:
+        plan = db.get(EmbyDeletePlan, plan_id)
+        assert plan is not None
+        assert plan.status == "completed"

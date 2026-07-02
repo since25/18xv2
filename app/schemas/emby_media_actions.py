@@ -21,6 +21,8 @@ class EmbyMediaIntakeRequest(BaseModel):
     url: str | None = None
     title: str | None = None
     emby_item_id: str | None = None
+    emby_payload: dict | None = None
+    nfo_path: str | None = None
     source: str = "iina_lua"
     nfo_xml: str | None = None
     actors: list[EmbyActorPayload] = Field(default_factory=list)

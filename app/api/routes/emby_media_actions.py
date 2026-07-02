@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import xml.etree.ElementTree as ET
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
@@ -30,15 +32,19 @@ def intake(payload: EmbyMediaIntakeRequest, db: Session = Depends(get_db)) -> Em
         if not payload.emby_item_id:
             raise HTTPException(status_code=400, detail="emby_item_id is required")
         target_list = "emby_blacklist" if payload.action == "metadata_blacklist" else "emby_whitelist"
-        candidate = EmbyMetadataCandidateService(db).create_candidate(
-            target_list=target_list,
-            emby_item_id=payload.emby_item_id,
-            title=payload.title or payload.emby_item_id,
-            nfo_xml=payload.nfo_xml,
-            emby_payload={"Id": payload.emby_item_id, "Name": payload.title},
-            actors=[actor.model_dump() for actor in payload.actors],
-            source_path=payload.path,
-        )
+        emby_payload = payload.emby_payload or {"Id": payload.emby_item_id, "Name": payload.title}
+        try:
+            candidate = EmbyMetadataCandidateService(db).create_candidate(
+                target_list=target_list,
+                emby_item_id=payload.emby_item_id,
+                title=payload.title or payload.emby_item_id,
+                nfo_xml=payload.nfo_xml,
+                emby_payload=emby_payload,
+                actors=[actor.model_dump() for actor in payload.actors],
+                source_path=payload.nfo_path,
+            )
+        except ET.ParseError as exc:
+            raise HTTPException(status_code=400, detail=f"invalid nfo_xml: {exc}") from exc
         return EmbyMediaIntakeResponse(ok=True, metadata_candidate=EmbyMetadataCandidateResponse.model_validate(candidate))
     raise HTTPException(status_code=400, detail="delete_plan intake requires a resolved mapping")
 
