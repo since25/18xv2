@@ -48,6 +48,15 @@ class Settings(BaseSettings):
     # Local UI
     local_path_presets: Annotated[list[str], NoDecode] = Field(default_factory=list, alias="LOCAL_PATH_PRESETS")
 
+    # Emby 媒体操作
+    emby_base_url: str | None = Field(default=None, alias="EMBY_BASE_URL")
+    emby_api_key: str | None = Field(default=None, alias="EMBY_API_KEY")
+    emby_media_actions_enabled: bool = Field(default=False, alias="EMBY_MEDIA_ACTIONS_ENABLED")
+    emby_media_actions_strm_roots: Annotated[list[str], NoDecode] = Field(default_factory=list, alias="EMBY_MEDIA_ACTIONS_STRM_ROOTS")
+    emby_media_actions_organized_roots: Annotated[list[str], NoDecode] = Field(default_factory=list, alias="EMBY_MEDIA_ACTIONS_ORGANIZED_ROOTS")
+    emby_media_actions_source_roots: Annotated[list[str], NoDecode] = Field(default_factory=list, alias="EMBY_MEDIA_ACTIONS_SOURCE_ROOTS")
+    emby_media_actions_delete_dry_run_default: bool = Field(default=True, alias="EMBY_MEDIA_ACTIONS_DELETE_DRY_RUN_DEFAULT")
+
     # External article source DB (optional)
     source_article_db_host: str | None = Field(default=None, alias="SOURCE_ARTICLE_DB_HOST")
     source_article_db_port: int = Field(default=5432, alias="SOURCE_ARTICLE_DB_PORT")
@@ -84,7 +93,15 @@ class Settings(BaseSettings):
         populate_by_name=True,
     )
 
-    @field_validator("test_allowed_root_ids", "test_allowed_path_prefixes", "local_path_presets", mode="before")
+    @field_validator(
+        "test_allowed_root_ids",
+        "test_allowed_path_prefixes",
+        "local_path_presets",
+        "emby_media_actions_strm_roots",
+        "emby_media_actions_organized_roots",
+        "emby_media_actions_source_roots",
+        mode="before",
+    )
     @classmethod
     def split_csv(cls, value: object) -> list[str]:
         if value is None or value == "":

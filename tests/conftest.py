@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.base import Base
 from app.models import dedupe as _dedupe_models  # noqa: F401
+from app.models import emby_media_actions as _emby_media_actions_models  # noqa: F401
 from app.models import keywords as _keywords_models  # noqa: F401
 from app.models import organization as _organization_models  # noqa: F401
 from app.models import review_intake as _review_intake_models  # noqa: F401
