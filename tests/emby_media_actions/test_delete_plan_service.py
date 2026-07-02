@@ -91,7 +91,7 @@ def test_execute_plan_deletes_local_and_remote(db_session, tmp_path: Path) -> No
     assert "remote-1" not in fake.nodes
 
 
-def test_retry_failed_plan_processes_only_pending_items(db_session, tmp_path: Path) -> None:
+def test_execute_failed_plan_raises_without_changing_item_statuses(db_session, tmp_path: Path) -> None:
     mapping = _mapping(db_session, tmp_path)
     fake = Tracking115Client()
     service = EmbyDeletePlanService(db_session, client_115=fake, allowed_roots=[str(tmp_path)])
@@ -102,24 +102,16 @@ def test_retry_failed_plan_processes_only_pending_items(db_session, tmp_path: Pa
     assert first_summary.deleted == 2
     assert first_summary.failed == 1
     assert fake.deleted_file_ids == ["remote-1"]
+    assert plan.status == "failed"
+    statuses_before = {item.group: item.status for item in plan.items}
 
-    fake.add_node(NodePayload(id="remote-1", name="a.mkv", path="/a.mkv", parent_id="0", is_file=True))
-    for item in plan.items:
-        if item.group == "remote_115":
-            item.status = "pending"
-            item.error_message = None
-    db_session.commit()
+    with pytest.raises(ValueError, match="delete plan is not executable"):
+        service.execute_plan(plan.id, confirm=True)
 
-    retry_summary = service.execute_plan(plan.id, confirm=True)
-
-    assert retry_summary.deleted == 1
-    assert retry_summary.failed == 0
-    assert fake.deleted_file_ids == ["remote-1", "remote-1"]
-    assert {item.group: item.status for item in plan.items} == {
-        "source_strm": "deleted",
-        "emby_library": "deleted",
-        "remote_115": "deleted",
-    }
+    db_session.refresh(plan)
+    assert plan.status == "failed"
+    assert {item.group: item.status for item in plan.items} == statuses_before
+    assert fake.deleted_file_ids == ["remote-1"]
 
 
 def test_create_plan_blocks_unsupported_remote_provider(db_session, tmp_path: Path) -> None:

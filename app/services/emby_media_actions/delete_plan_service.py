@@ -85,7 +85,7 @@ class EmbyDeletePlanService:
         plan = self.db.get(EmbyDeletePlan, plan_id)
         if plan is None:
             raise LookupError("delete plan not found")
-        if plan.status not in {"draft", "confirmed", "failed"}:
+        if plan.status not in {"draft", "confirmed"}:
             raise ValueError("delete plan is not executable")
         plan.status = "running"
         plan.confirmed_at = plan.confirmed_at or datetime.now(UTC)
