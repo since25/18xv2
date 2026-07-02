@@ -9,7 +9,7 @@ import {
   Space,
   Table,
   Tag,
-  Typography,
+  Tooltip,
   message,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
@@ -37,8 +37,6 @@ import {
   type ReviewIntakeSummary,
   type ReviewStatus,
 } from '@/api/reviewIntake'
-
-const { Text } = Typography
 
 const BUCKET_OPTIONS: Array<{ label: string; value: ReviewBucket }> = [
   { label: '白名单', value: 'whitelist' },
@@ -73,6 +71,15 @@ function itemLabel(item: ReviewIntakeItem) {
 
 function errorMessage(error: unknown, fallback: string) {
   return error instanceof Error ? error.message : fallback
+}
+
+function pathTooltip(rawPath: string) {
+  return (
+    <div className="review-path-tooltip">
+      <div className="review-path-tooltip-label">完整路径</div>
+      <div>{rawPath}</div>
+    </div>
+  )
 }
 
 export default function ReviewIntakePage() {
@@ -200,29 +207,25 @@ export default function ReviewIntakePage() {
   function columnsFor(bucketType: ReviewBucket): ColumnsType<ReviewIntakeItem> {
     return [
       {
-        title: '路径',
-        dataIndex: 'raw_path',
-        ellipsis: true,
-        render: (value: string) => (
-          <Text copyable ellipsis={{ tooltip: value }} style={{ maxWidth: 360 }}>
-            {value}
-          </Text>
-        ),
-      },
-      {
         title: '候选',
         dataIndex: 'keyword_candidates',
-        width: 240,
+        width: 190,
         render: (_: unknown, item) => (
-          <Space size={[4, 4]} wrap>
-            {item.keyword_candidates.length ? item.keyword_candidates.map((candidate) => (
-              <Tag
-                key={`${candidate.keyword}-${candidate.match_status}`}
-                color={MATCH_COLORS[candidate.match_status] ?? 'default'}
-                title={candidate.matched_canonical_name ?? undefined}
+          <Space className="review-candidate-tags" size={[4, 4]} wrap>
+            {item.keyword_candidates.length ? item.keyword_candidates.map((candidate, index) => (
+              <Tooltip
+                key={`${candidate.keyword}-${candidate.match_status}-${index}`}
+                title={pathTooltip(item.raw_path)}
+                mouseEnterDelay={1}
+                placement="topLeft"
               >
-                {candidate.keyword}
-              </Tag>
+                <Tag
+                  className="review-candidate-tag"
+                  color={MATCH_COLORS[candidate.match_status] ?? 'default'}
+                >
+                  {candidate.keyword}
+                </Tag>
+              </Tooltip>
             )) : <Tag color="default">未提取</Tag>}
           </Space>
         ),
@@ -255,31 +258,41 @@ export default function ReviewIntakePage() {
       {
         title: '操作',
         key: 'actions',
-        width: 220,
+        width: 116,
         render: (_: unknown, item) => (
-          <Space size="small" wrap>
+          <Space className="review-action-buttons" size={4} wrap>
             {item.status !== 'approved' ? (
-              <Button
-                size="small"
-                type="primary"
-                icon={<CheckOutlined />}
-                onClick={() => void handleApprove(item)}
-              >
-                批准
-              </Button>
+              <Tooltip title="批准">
+                <Button
+                  aria-label="批准"
+                  size="small"
+                  type="primary"
+                  icon={<CheckOutlined />}
+                  onClick={() => void handleApprove(item)}
+                />
+              </Tooltip>
             ) : null}
             {item.status === 'pending' ? (
               <Popconfirm title="忽略这条待审核项？" onConfirm={() => void handleDismiss(item)}>
-                <Button size="small" icon={<StopOutlined />}>忽略</Button>
+                <Tooltip title="忽略">
+                  <Button aria-label="忽略" size="small" icon={<StopOutlined />} />
+                </Tooltip>
               </Popconfirm>
             ) : null}
             {item.status === 'dismissed' ? (
-              <Button size="small" icon={<UndoOutlined />} onClick={() => void handleRestore(item)}>
-                恢复
-              </Button>
+              <Tooltip title="恢复">
+                <Button
+                  aria-label="恢复"
+                  size="small"
+                  icon={<UndoOutlined />}
+                  onClick={() => void handleRestore(item)}
+                />
+              </Tooltip>
             ) : null}
             <Popconfirm title="删除这条记录？" onConfirm={() => void handleDelete(item)}>
-              <Button size="small" danger icon={<DeleteOutlined />} />
+              <Tooltip title="删除">
+                <Button aria-label="删除" size="small" danger icon={<DeleteOutlined />} />
+              </Tooltip>
             </Popconfirm>
           </Space>
         ),
@@ -290,7 +303,7 @@ export default function ReviewIntakePage() {
   function renderPanel(title: string, bucketType: ReviewBucket, items: ReviewIntakeItem[]) {
     return (
       <Card
-        className="soft-card"
+        className="soft-card review-intake-card"
         title={title}
         extra={<Tag color={bucketType === 'whitelist' ? 'green' : 'red'}>{items.length}</Tag>}
       >
@@ -302,6 +315,8 @@ export default function ReviewIntakePage() {
             pagination={false}
             columns={columnsFor(bucketType)}
             dataSource={items}
+            tableLayout="fixed"
+            scroll={{ x: 556 }}
           />
         ) : (
           <Empty description="没有待处理记录" />
@@ -361,7 +376,7 @@ export default function ReviewIntakePage() {
           </Space>
         </Card>
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 520px), 1fr))', gap: 16 }}>
+        <div className="review-intake-panels">
           {renderPanel('白名单待审核', 'whitelist', whitelistItems)}
           {renderPanel('黑名单待审核', 'blacklist', blacklistItems)}
         </div>

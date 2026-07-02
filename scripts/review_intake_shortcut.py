@@ -5,8 +5,10 @@ import argparse
 import getpass
 import json
 import os
+import re
 import subprocess
 import sys
+from datetime import datetime
 from http.cookiejar import MozillaCookieJar
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -14,6 +16,7 @@ from urllib.request import HTTPCookieProcessor, Request, build_opener
 
 DEFAULT_BASE_URL = "http://127.0.0.1:8000"
 DEFAULT_COOKIE_PATH = Path.home() / ".18x_review_intake_cookies.txt"
+DEFAULT_LOG_PATH = Path.home() / ".18x_review_intake.log"
 
 
 class RequestFailed(RuntimeError):
@@ -86,18 +89,43 @@ def _clipboard_path() -> str:
     return result.stdout.strip()
 
 
+def _is_url(value: str) -> bool:
+    return bool(re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://", value))
+
+
 def _resolve_path(args) -> str:
     if args.path:
-        return args.path.strip()
-    if args.stdin:
-        return sys.stdin.read().strip()
-    return _clipboard_path()
+        raw_path = args.path.strip()
+    elif args.stdin:
+        raw_path = sys.stdin.read().strip()
+    else:
+        raw_path = _clipboard_path()
+    working_directory = (args.working_directory or "").strip()
+    if (
+        raw_path
+        and working_directory
+        and not raw_path.startswith("/")
+        and not _is_url(raw_path)
+    ):
+        return str(Path(working_directory) / raw_path)
+    return raw_path
+
+
+def _log(path: Path, message: str) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as file:
+            timestamp = datetime.now().isoformat(timespec="seconds")
+            file.write(f"{timestamp} {message.rstrip()}\n")
+    except Exception:
+        pass
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="提交本地路径到 18x 待审核池。")
     parser.add_argument("bucket", choices=["whitelist", "blacklist"], help="目标待审区域")
     parser.add_argument("--path", help="直接传入视频路径；不传则读取剪贴板")
+    parser.add_argument("--working-directory", help="当 --path 是相对路径时，用这个目录拼成绝对路径")
     parser.add_argument("--stdin", action="store_true", help="从标准输入读取路径")
     parser.add_argument(
         "--base-url",
@@ -112,11 +140,19 @@ def main() -> int:
         default=str(DEFAULT_COOKIE_PATH),
         help="会话 cookie 保存位置",
     )
+    parser.add_argument(
+        "--log-path",
+        default=os.getenv("REVIEW_INTAKE_CLI_LOG", str(DEFAULT_LOG_PATH)),
+        help="调试日志路径",
+    )
     parser.add_argument("--print-response", action="store_true", help="打印接口完整响应")
     args = parser.parse_args()
 
+    log_path = Path(args.log_path).expanduser()
     raw_path = _resolve_path(args)
+    _log(log_path, f"bucket={args.bucket} raw_path={raw_path!r} working_directory={args.working_directory!r}")
     if not raw_path:
+        _log(log_path, "failed: empty path")
         print("未获取到路径：请传 --path，或先把路径放入剪贴板。", file=sys.stderr)
         return 2
 
@@ -131,16 +167,20 @@ def main() -> int:
         response = _json_request(opener, url, payload)
     except RequestFailed as exc:
         if exc.status != 401:
+            _log(log_path, f"failed: {exc.status} {exc.detail}")
             print(exc.detail, file=sys.stderr)
             return 1
+        _log(log_path, "login required")
         _login(opener, cookie_jar, cookie_path, base_url, args)
         try:
             response = _json_request(opener, url, payload)
         except RequestFailed as retry_exc:
+            _log(log_path, f"failed after login: {retry_exc.status} {retry_exc.detail}")
             print(retry_exc.detail, file=sys.stderr)
             return 1
 
     _save_cookie_jar(cookie_jar, cookie_path)
+    _log(log_path, f"ok: id={response.get('id')} status={response.get('status')}")
     if args.print_response:
         print(json.dumps(response, ensure_ascii=False, indent=2))
     else:

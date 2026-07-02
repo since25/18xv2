@@ -289,6 +289,50 @@ body {
   margin: 6px 0;
 }
 
+.review-intake-panels {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 620px), 1fr));
+  gap: 16px;
+  align-items: start;
+}
+
+.review-intake-card {
+  min-width: 0;
+}
+
+.review-intake-card .ant-card-body {
+  overflow: hidden;
+}
+
+.review-candidate-tags {
+  max-width: 100%;
+}
+
+.review-candidate-tag {
+  max-width: 172px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+  cursor: help;
+}
+
+.review-action-buttons .ant-btn {
+  width: 28px;
+  padding-inline: 0;
+}
+
+.review-path-tooltip {
+  max-width: min(560px, calc(100vw - 48px));
+  line-height: 1.5;
+  word-break: break-all;
+}
+
+.review-path-tooltip-label {
+  margin-bottom: 4px;
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 12px;
+}
+
 .ellipsis-stack {
   color: var(--app-text-muted);
   font-size: 12px;
