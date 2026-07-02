@@ -9,6 +9,7 @@ from pathlib import Path
 class GuardDecision:
     allowed: bool
     path: str
+    resolved_path: str
     reason: str | None
 
 
@@ -25,11 +26,12 @@ class PathGuard:
         self.allowed_roots = [Path(item).expanduser().resolve() for item in allowed_roots]
 
     def classify(self, path: str) -> GuardDecision:
-        resolved = Path(path).expanduser().resolve()
+        requested = self._requested_path(path)
+        resolved = requested.resolve()
         for root in self.allowed_roots:
             if self._is_relative_to(resolved, root):
-                return GuardDecision(True, str(resolved), None)
-        return GuardDecision(False, str(resolved), "path_outside_allowed_roots")
+                return GuardDecision(True, str(requested), str(resolved), None)
+        return GuardDecision(False, str(requested), str(resolved), "path_outside_allowed_roots")
 
     def delete_path(self, path: str, *, dry_run: bool) -> GuardDeleteResult:
         decision = self.classify(path)
@@ -42,11 +44,23 @@ class PathGuard:
             return GuardDeleteResult(decision.path, entry_type, "dry_run")
         if entry_type == "missing":
             return GuardDeleteResult(decision.path, "missing", "not_found", "path_not_found")
+        if entry_type == "symlink":
+            os.unlink(decision.path)
+            return GuardDeleteResult(decision.path, "symlink", "deleted")
         os.remove(decision.path)
-        return GuardDeleteResult(decision.path, "file", "deleted")
+        return GuardDeleteResult(decision.path, entry_type, "deleted")
+
+    @staticmethod
+    def _requested_path(path: str) -> Path:
+        requested = Path(path).expanduser()
+        if requested.is_absolute():
+            return requested
+        return Path.cwd() / requested
 
     @staticmethod
     def _entry_type(path: str) -> str:
+        if os.path.islink(path):
+            return "symlink"
         if os.path.isdir(path):
             return "dir"
         if os.path.isfile(path):

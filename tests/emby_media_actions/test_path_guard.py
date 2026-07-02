@@ -78,3 +78,19 @@ def test_path_guard_blocks_symlink_escape_without_deleting_target(tmp_path: Path
     assert result.error_message == "path_outside_allowed_roots"
     assert outside_target.exists()
     assert symlink_path.exists()
+
+
+def test_path_guard_delete_allowed_symlink_unlinks_symlink_and_keeps_target(tmp_path: Path) -> None:
+    allowed = tmp_path / "allowed"
+    allowed.mkdir()
+    target = allowed / "target.strm"
+    target.write_text("url", encoding="utf-8")
+    symlink_path = allowed / "linked.strm"
+    symlink_path.symlink_to(target)
+
+    guard = PathGuard(allowed_roots=[str(allowed)])
+    result = guard.delete_path(str(symlink_path), dry_run=False)
+
+    assert result.status == "deleted"
+    assert not symlink_path.exists()
+    assert target.exists()
