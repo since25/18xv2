@@ -16,6 +16,7 @@ import KeywordExtractorPage from './pages/KeywordExtractorPage'
 import KeywordDuplicatesPage from './pages/KeywordDuplicatesPage'
 import MagnetTasksPage from './pages/MagnetTasksPage'
 import WhitelistBatchPage from './pages/WhitelistBatchPage'
+import ReviewIntakePage from './pages/ReviewIntakePage'
 import FileDedupePage from './pages/FileDedupePage'
 import AuthCenterPage from './pages/AuthCenterPage'
 import OpenAuthPage from './pages/OpenAuthPage'
@@ -150,6 +151,7 @@ function AppRoutes() {
           <Route path="/plans/:id" element={<PlanDetailPage />} />
           <Route path="/executor" element={<ExecutorPage />} />
           <Route path="/whitelist-batch" element={<WhitelistBatchPage />} />
+          <Route path="/review-intake" element={<ReviewIntakePage />} />
           <Route path="/dedupe" element={<FileDedupePage />} />
           <Route path="/magnet-tasks" element={<MagnetTasksPage />} />
           <Route path="/auth-center" element={<AuthCenterPage />} />

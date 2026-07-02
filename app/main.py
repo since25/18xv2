@@ -97,6 +97,7 @@ from app.api.routes import (  # noqa: E402 — import after app creation
     path_picker,
     plans,
     qr_login,
+    review_intake,
     strategy,
     tasks,
     whitelist_batch,
@@ -141,6 +142,7 @@ app.include_router(qr_login.router)
 app.include_router(open_auth.router)
 app.include_router(files_115.router)
 app.include_router(whitelist_batch.router)
+app.include_router(review_intake.router)
 
 
 @app.get("/healthz")

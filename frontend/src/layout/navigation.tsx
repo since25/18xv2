@@ -43,6 +43,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { key: '/plans', label: '整理计划', icon: <OrderedListOutlined /> },
       { key: '/executor', label: '执行日志', icon: <HistoryOutlined /> },
       { key: '/whitelist-batch', label: '白名单批处理', icon: <TagsOutlined /> },
+      { key: '/review-intake', label: '待审核', icon: <InboxOutlined /> },
       { key: '/dedupe', label: '文件去重', icon: <SafetyCertificateOutlined /> },
       { key: '/magnet-tasks', label: '磁力下载', icon: <CloudDownloadOutlined /> },
     ],

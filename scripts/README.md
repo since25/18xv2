@@ -54,3 +54,28 @@ python scripts/keyword_extractor.py --import-id 1 --top 30
 python scripts/keyword_extractor.py --import-id 1 --keywords "词A" "词B"
 ```
 从已导入的目录树批次中提取关键词候选，输出命中统计。
+
+### review_intake_shortcut.py — 本机快捷键投递待审核
+```bash
+scripts/review_intake_shortcut.py whitelist --path "/Volumes/finish/作品【示例】.mp4"
+scripts/review_intake_shortcut.py blacklist --path "/Volumes/finish/作品【示例】.mp4"
+```
+
+默认连接本机后端 `http://127.0.0.1:8000`。如果要投递到 Unraid 上的生产服务：
+```bash
+export REVIEW_INTAKE_BASE_URL="http://192.168.70.138:8010/api"
+```
+
+项目开启登录时，脚本第一次遇到 401 会提示输入密码并把会话保存到
+`~/.18x_review_intake_cookies.txt`。也可以提前设置：
+```bash
+export REVIEW_INTAKE_USERNAME="wang"
+export REVIEW_INTAKE_PASSWORD="你的登录密码"
+```
+
+`iina_review_intake.lua` 是 IINA/mpv 桥接脚本：把它复制到 IINA scripts 目录后，
+在 IINA key binding 中绑定：
+```text
+script-binding iina_review_intake/review-intake-whitelist
+script-binding iina_review_intake/review-intake-blacklist
+```
