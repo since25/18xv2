@@ -40,6 +40,16 @@ def _mapping(db_session, tmp_path: Path) -> EmbyMediaMapping:
     return mapping
 
 
+class Tracking115Client(Fake115Client):
+    def __init__(self) -> None:
+        super().__init__()
+        self.deleted_file_ids: list[str] = []
+
+    def delete_node(self, file_id: str, dry_run: bool = True):
+        self.deleted_file_ids.append(file_id)
+        return super().delete_node(file_id, dry_run=dry_run)
+
+
 def test_create_plan_from_mapping_groups_items(db_session, tmp_path: Path) -> None:
     mapping = _mapping(db_session, tmp_path)
     service = EmbyDeletePlanService(db_session, client_115=None, allowed_roots=[str(tmp_path)])
@@ -79,3 +89,77 @@ def test_execute_plan_deletes_local_and_remote(db_session, tmp_path: Path) -> No
     assert summary.deleted == 3
     assert summary.failed == 0
     assert "remote-1" not in fake.nodes
+
+
+def test_retry_failed_plan_processes_only_pending_items(db_session, tmp_path: Path) -> None:
+    mapping = _mapping(db_session, tmp_path)
+    fake = Tracking115Client()
+    service = EmbyDeletePlanService(db_session, client_115=fake, allowed_roots=[str(tmp_path)])
+    plan = service.create_plan_from_mapping(mapping_id=mapping.id, scope="movie", source="test")
+
+    first_summary = service.execute_plan(plan.id, confirm=True)
+
+    assert first_summary.deleted == 2
+    assert first_summary.failed == 1
+    assert fake.deleted_file_ids == ["remote-1"]
+
+    fake.add_node(NodePayload(id="remote-1", name="a.mkv", path="/a.mkv", parent_id="0", is_file=True))
+    for item in plan.items:
+        if item.group == "remote_115":
+            item.status = "pending"
+            item.error_message = None
+    db_session.commit()
+
+    retry_summary = service.execute_plan(plan.id, confirm=True)
+
+    assert retry_summary.deleted == 1
+    assert retry_summary.failed == 0
+    assert fake.deleted_file_ids == ["remote-1", "remote-1"]
+    assert {item.group: item.status for item in plan.items} == {
+        "source_strm": "deleted",
+        "emby_library": "deleted",
+        "remote_115": "deleted",
+    }
+
+
+def test_create_plan_blocks_unsupported_remote_provider(db_session, tmp_path: Path) -> None:
+    mapping = _mapping(db_session, tmp_path)
+    mapping.remote_provider = "webdav"
+    db_session.commit()
+    fake = Tracking115Client()
+    fake.add_node(NodePayload(id="remote-1", name="a.mkv", path="/a.mkv", parent_id="0", is_file=True))
+    service = EmbyDeletePlanService(db_session, client_115=fake, allowed_roots=[str(tmp_path)])
+
+    plan = service.create_plan_from_mapping(mapping_id=mapping.id, scope="movie", source="test")
+    remote_item = next(item for item in plan.items if item.group == "remote_115")
+    summary = service.execute_plan(plan.id, confirm=True)
+
+    assert remote_item.status == "blocked"
+    assert remote_item.blocked_reason == "unsupported_remote_provider"
+    assert summary.deleted == 2
+    assert summary.blocked == 1
+    assert fake.deleted_file_ids == []
+    assert "remote-1" in fake.nodes
+
+
+def test_create_plan_blocks_local_paths_outside_allowed_roots(db_session, tmp_path: Path) -> None:
+    mapping = _mapping(db_session, tmp_path)
+    blocked_root = tmp_path / "blocked"
+    blocked_root.mkdir()
+    blocked_file = blocked_root / "outside.strm"
+    blocked_file.write_text("url", encoding="utf-8")
+    mapping.paths[0].path = str(blocked_file)
+    mapping.paths[0].root_path = str(blocked_root)
+    db_session.commit()
+    fake = Fake115Client()
+    fake.add_node(NodePayload(id="remote-1", name="a.mkv", path="/a.mkv", parent_id="0", is_file=True))
+    service = EmbyDeletePlanService(db_session, client_115=fake, allowed_roots=[str(tmp_path / "organized")])
+
+    plan = service.create_plan_from_mapping(mapping_id=mapping.id, scope="movie", source="test")
+    blocked_item = next(item for item in plan.items if item.group == "source_strm")
+    summary = service.execute_plan(plan.id, confirm=True)
+
+    assert blocked_item.status == "blocked"
+    assert blocked_item.blocked_reason == "path_outside_allowed_roots"
+    assert blocked_file.exists()
+    assert summary.blocked == 1

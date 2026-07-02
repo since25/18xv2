@@ -58,6 +58,7 @@ class EmbyDeletePlanService:
                 )
             )
         if mapping.remote_file_id:
+            remote_supported = mapping.remote_provider == "115"
             self.db.add(
                 EmbyDeletePlanItem(
                     plan_id=plan.id,
@@ -66,8 +67,9 @@ class EmbyDeletePlanService:
                     remote_file_id=mapping.remote_file_id,
                     target_path=mapping.remote_path,
                     display_name=mapping.remote_path.rsplit("/", 1)[-1] if mapping.remote_path else mapping.remote_file_id,
-                    status="pending",
-                    dry_run_result="dry_run",
+                    status="pending" if remote_supported else "blocked",
+                    blocked_reason=None if remote_supported else "unsupported_remote_provider",
+                    dry_run_result="dry_run" if remote_supported else "blocked",
                 )
             )
         self.db.flush()
@@ -91,8 +93,9 @@ class EmbyDeletePlanService:
         self.db.commit()
         deleted = failed = blocked = 0
         for item in sorted(plan.items, key=lambda row: row.id):
-            if item.status == "blocked":
-                blocked += 1
+            if item.status != "pending":
+                if item.status == "blocked":
+                    blocked += 1
                 continue
             try:
                 if item.group == "remote_115":
