@@ -41,6 +41,20 @@ def _delete_scope_for_item_type(emby_item_type: str) -> str:
     return "movie"
 
 
+def _emby_hierarchy_ids(payload: EmbyMediaIntakeRequest, emby_item_type: str) -> tuple[str | None, str | None, str | None]:
+    if emby_item_type.strip().lower() != "episode":
+        return None, None, None
+    emby_payload = payload.emby_payload or {}
+    emby_series_id = emby_payload.get("SeriesId")
+    emby_season_id = emby_payload.get("SeasonId")
+    emby_episode_id = emby_payload.get("Id") or payload.emby_item_id
+    return (
+        str(emby_series_id) if emby_series_id else None,
+        str(emby_season_id) if emby_season_id else None,
+        str(emby_episode_id) if emby_episode_id else None,
+    )
+
+
 @router.post("/intake", response_model=EmbyMediaIntakeResponse)
 def intake(payload: EmbyMediaIntakeRequest, request: Request, db: Session = Depends(get_db)) -> EmbyMediaIntakeResponse:
     if payload.action in {"metadata_blacklist", "metadata_whitelist"}:
@@ -98,6 +112,7 @@ def intake(payload: EmbyMediaIntakeRequest, request: Request, db: Session = Depe
             allowed_roots=settings.emby_media_actions_source_roots + settings.emby_media_actions_organized_roots,
         )
         emby_item_type = _emby_item_type(payload)
+        emby_series_id, emby_season_id, emby_episode_id = _emby_hierarchy_ids(payload, emby_item_type)
         mapping = service.create_mapping_from_matches(
             emby_item_id=payload.emby_item_id,
             emby_item_type=emby_item_type,
@@ -107,6 +122,9 @@ def intake(payload: EmbyMediaIntakeRequest, request: Request, db: Session = Depe
             remote_path=decoded.remote_path,
             remote_file_id=remote_file_id or None,
             matches=matches,
+            emby_series_id=emby_series_id,
+            emby_season_id=emby_season_id,
+            emby_episode_id=emby_episode_id,
         )
         plan = service.create_plan_from_mapping(mapping_id=mapping.id, scope=_delete_scope_for_item_type(emby_item_type), source=payload.source)
         return EmbyMediaIntakeResponse(ok=True, delete_plan=_delete_plan_response(plan))

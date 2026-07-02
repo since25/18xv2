@@ -36,18 +36,31 @@ class EmbyDeletePlanService:
         remote_path: str,
         remote_file_id: str | None,
         matches,
+        emby_series_id: str | None = None,
+        emby_season_id: str | None = None,
+        emby_episode_id: str | None = None,
     ) -> EmbyMediaMapping:
-        mapping = EmbyMediaMapping(
-            emby_item_id=emby_item_id,
-            emby_item_type=emby_item_type,
-            emby_title=emby_title,
-            alist_url=alist_url,
-            alist_mount_name=mount_name,
-            remote_provider="115",
-            remote_path=remote_path,
-            remote_file_id=remote_file_id,
+        mapping = self.db.scalar(
+            select(EmbyMediaMapping).where(
+                EmbyMediaMapping.emby_item_id == emby_item_id,
+                EmbyMediaMapping.alist_url == alist_url,
+            )
         )
-        self.db.add(mapping)
+        if mapping is None:
+            mapping = EmbyMediaMapping(emby_item_id=emby_item_id, alist_url=alist_url)
+            self.db.add(mapping)
+        else:
+            mapping.paths.clear()
+            self.db.flush()
+        mapping.emby_item_type = emby_item_type
+        mapping.emby_title = emby_title
+        mapping.emby_series_id = emby_series_id
+        mapping.emby_season_id = emby_season_id
+        mapping.emby_episode_id = emby_episode_id
+        mapping.alist_mount_name = mount_name
+        mapping.remote_provider = "115"
+        mapping.remote_path = remote_path
+        mapping.remote_file_id = remote_file_id
         self.db.flush()
         for match in matches:
             mapping.paths.append(
