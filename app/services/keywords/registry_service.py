@@ -115,11 +115,32 @@ class KeywordRegistryService:
         aliases: list[str] | None = None,
         source: str = "manual",
     ) -> KeywordEntry:
+        entry = self.create_entry_no_commit(
+            canonical_name=canonical_name,
+            keyword_type=keyword_type,
+            note=note,
+            aliases=aliases,
+            source=source,
+        )
+        self.db.commit()
+        self.db.refresh(entry)
+        return entry
+
+    def create_entry_no_commit(
+        self,
+        *,
+        canonical_name: str,
+        keyword_type: str,
+        note: str | None = None,
+        aliases: list[str] | None = None,
+        source: str = "manual",
+    ) -> KeywordEntry:
         normalized = normalize_keyword_text(canonical_name)
         existing = self.find_entry_by_keyword(normalized)
         if existing is not None:
             if aliases:
-                self.add_aliases(existing.id, aliases, source=source)
+                self._add_aliases_no_commit(existing.id, aliases, source=source)
+                self.db.flush()
             return existing
         entry = KeywordEntry(
             canonical_name=canonical_name.strip(),
@@ -138,8 +159,9 @@ class KeywordRegistryService:
                 note="Auto-created from canonical name.",
             )
         )
+        self.db.flush()
         if aliases:
-            self.add_aliases(entry.id, aliases, source=source)
+            self._add_aliases_no_commit(entry.id, aliases, source=source)
         self._log_operation(
             action="create_entry",
             keyword_entry_id=entry.id,
@@ -150,9 +172,37 @@ class KeywordRegistryService:
                 "source": source,
             },
         )
-        self.db.commit()
-        self.db.refresh(entry)
+        self.db.flush()
         return entry
+
+    def _add_aliases_no_commit(self, entry_id: int, aliases: list[str], *, source: str = "manual") -> list[KeywordAlias]:
+        entry = self.db.get(KeywordEntry, entry_id)
+        if entry is None:
+            raise ValueError(f"KeywordEntry {entry_id} not found")
+        created: list[KeywordAlias] = []
+        for raw_alias in aliases:
+            normalized = normalize_keyword_text(raw_alias)
+            if len(normalized) < 2:
+                continue
+            existing = self.db.scalar(select(KeywordAlias).where(KeywordAlias.alias_normalized == normalized))
+            if existing is not None:
+                continue
+            alias = KeywordAlias(
+                keyword_entry_id=entry.id,
+                alias=raw_alias.strip(),
+                alias_normalized=normalized,
+                source=source,
+            )
+            self.db.add(alias)
+            created.append(alias)
+        if created:
+            self._log_operation(
+                action="add_aliases",
+                keyword_entry_id=entry.id,
+                detail={"aliases": [alias.alias for alias in created], "source": source},
+            )
+            self.db.flush()
+        return created
 
     def update_entry(
         self,
@@ -213,31 +263,7 @@ class KeywordRegistryService:
         return entry
 
     def add_aliases(self, entry_id: int, aliases: list[str], *, source: str = "manual") -> list[KeywordAlias]:
-        entry = self.db.get(KeywordEntry, entry_id)
-        if entry is None:
-            raise ValueError(f"KeywordEntry {entry_id} not found")
-        created: list[KeywordAlias] = []
-        for raw_alias in aliases:
-            normalized = normalize_keyword_text(raw_alias)
-            if len(normalized) < 2:
-                continue
-            existing = self.db.scalar(select(KeywordAlias).where(KeywordAlias.alias_normalized == normalized))
-            if existing is not None:
-                continue
-            alias = KeywordAlias(
-                keyword_entry_id=entry.id,
-                alias=raw_alias.strip(),
-                alias_normalized=normalized,
-                source=source,
-            )
-            self.db.add(alias)
-            created.append(alias)
-        if created:
-            self._log_operation(
-                action="add_aliases",
-                keyword_entry_id=entry.id,
-                detail={"aliases": [alias.alias for alias in created], "source": source},
-            )
+        created = self._add_aliases_no_commit(entry_id, aliases, source=source)
         self.db.commit()
         return created
 

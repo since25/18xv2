@@ -3,10 +3,13 @@ KeywordRegistryService 单元测试。覆盖 create/duplicate/alias/merge 关键
 """
 from __future__ import annotations
 
+import json
+
 import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.models.keywords import KeywordAlias, KeywordOperationLog
 from app.models.whitelist import WhitelistCandidate
 from app.services.keywords.registry_service import KeywordRegistryService, normalize_keyword_text
 
@@ -46,6 +49,30 @@ class TestCreateEntry:
     def test_find_nonexistent_returns_none(self, db_session: Session):
         svc = KeywordRegistryService(db_session)
         assert svc.find_entry_by_keyword("不存在的词") is None
+
+    def test_create_entry_no_commit_flushes_without_committing(self, db_session: Session, monkeypatch):
+        def fail_commit():
+            raise AssertionError("create_entry_no_commit must not commit")
+
+        monkeypatch.setattr(db_session, "commit", fail_commit)
+        svc = KeywordRegistryService(db_session)
+
+        entry = svc.create_entry_no_commit(
+            canonical_name="事务演员",
+            keyword_type="emby_whitelist",
+            note="测试备注",
+            source="emby_media_actions",
+        )
+
+        assert entry.id is not None
+        assert entry.canonical_name == "事务演员"
+        alias = db_session.scalar(select(KeywordAlias).where(KeywordAlias.keyword_entry_id == entry.id))
+        assert alias is not None
+        assert alias.alias == "事务演员"
+        log = db_session.scalar(select(KeywordOperationLog).where(KeywordOperationLog.keyword_entry_id == entry.id))
+        assert log is not None
+        assert log.action == "create_entry"
+        assert json.loads(log.detail or "{}")["source"] == "emby_media_actions"
 
 
 class TestMergeEntries:

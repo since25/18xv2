@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+from dataclasses import asdict
 from datetime import UTC, datetime
 import json
 
 from sqlalchemy.orm import Session
 
 from app.models.emby_media_actions import EmbyMetadataCandidate, EmbyMetadataSnapshot
-from app.models.keywords import KeywordAlias, KeywordEntry, KeywordOperationLog
+from app.models.keywords import KeywordEntry
+from app.services.emby_media_actions.nfo_parser import parse_nfo_actors
 from app.services.keywords.registry_service import KeywordRegistryService, normalize_keyword_text
 
 VALID_TARGET_LISTS = {"emby_blacklist", "emby_whitelist"}
@@ -30,6 +32,7 @@ class EmbyMetadataCandidateService:
     ) -> EmbyMetadataCandidate:
         if target_list not in VALID_TARGET_LISTS:
             raise ValueError("target_list must be emby_blacklist or emby_whitelist")
+        actors_snapshot = [asdict(actor) for actor in parse_nfo_actors(nfo_xml)] if nfo_xml is not None else actors
         snapshot = EmbyMetadataSnapshot(
             emby_item_id=emby_item_id,
             mapping_id=mapping_id,
@@ -38,7 +41,7 @@ class EmbyMetadataCandidateService:
             nfo_path=source_path,
             nfo_xml=nfo_xml,
             emby_json=json.dumps(emby_payload, ensure_ascii=False),
-            actors_json=json.dumps(actors, ensure_ascii=False),
+            actors_json=json.dumps(actors_snapshot, ensure_ascii=False),
         )
         self.db.add(snapshot)
         self.db.flush()
@@ -80,39 +83,13 @@ class EmbyMetadataCandidateService:
 
         entry_ids: list[int] = []
         selected_actors: list[str] = []
-        for actor, normalized_actor, existing in entries_by_actor:
+        for actor, _normalized_actor, existing in entries_by_actor:
             if existing is None:
-                entry = KeywordEntry(
+                entry = registry.create_entry_no_commit(
                     canonical_name=actor,
-                    canonical_name_normalized=normalized_actor,
                     keyword_type=candidate.target_list,
                     note=note,
-                )
-                self.db.add(entry)
-                self.db.flush()
-                self.db.add(
-                    KeywordAlias(
-                        keyword_entry_id=entry.id,
-                        alias=entry.canonical_name,
-                        alias_normalized=normalized_actor,
-                        source="canonical",
-                        note="Auto-created from canonical name.",
-                    )
-                )
-                self.db.add(
-                    KeywordOperationLog(
-                        action="create_entry",
-                        keyword_entry_id=entry.id,
-                        detail=json.dumps(
-                            {
-                                "canonical_name": entry.canonical_name,
-                                "keyword_type": entry.keyword_type,
-                                "aliases": [],
-                                "source": "emby_media_actions",
-                            },
-                            ensure_ascii=False,
-                        ),
-                    )
+                    source="emby_media_actions",
                 )
             else:
                 entry = existing
