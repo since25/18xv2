@@ -32,4 +32,6 @@ services:
     volumes:
       # 持久化数据：token 刷新状态、QR cookies、登录态等
       - ../data:/app/data
+      # Emby 媒体动作需要在容器内按服务器原始路径扫描和删除 STRM。
+      - /mnt/cache/docker1/alist-strm/video:/mnt/cache/docker1/alist-strm/video
     restart: unless-stopped
