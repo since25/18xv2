@@ -192,6 +192,82 @@ def test_recent_delete_plans_route_returns_newest_first(api_context) -> None:
     assert data[0]["status"] == "draft"
 
 
+def test_delete_plan_route_deletes_draft_plan_record(api_context) -> None:
+    plan_id, source_file, organized_file = _draft_delete_plan(api_context)
+
+    response = api_context.client.delete(f"/emby-media-actions/delete-plans/{plan_id}")
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True, "plan_id": plan_id}
+    assert source_file.exists()
+    assert organized_file.exists()
+    assert "remote-1" in api_context.fake_115.nodes
+    with api_context.session_factory() as db:
+        assert db.get(EmbyDeletePlan, plan_id) is None
+        assert db.query(_emby_media_actions.EmbyDeletePlanItem).filter_by(plan_id=plan_id).count() == 0
+
+
+def test_delete_plan_route_rejects_running_plan(api_context) -> None:
+    plan_id, source_file, organized_file = _draft_delete_plan(api_context)
+    with api_context.session_factory() as db:
+        plan = db.get(EmbyDeletePlan, plan_id)
+        assert plan is not None
+        plan.status = "running"
+        db.commit()
+
+    response = api_context.client.delete(f"/emby-media-actions/delete-plans/{plan_id}")
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "running delete plan cannot be removed"
+    assert source_file.exists()
+    assert organized_file.exists()
+    with api_context.session_factory() as db:
+        assert db.get(EmbyDeletePlan, plan_id) is not None
+
+
+def test_metadata_candidates_route_lists_recent_candidates_by_target_list(client: TestClient) -> None:
+    first = client.post(
+        "/emby-media-actions/intake",
+        json={
+            "action": "metadata_blacklist",
+            "title": "黑名单电影",
+            "emby_item_id": "black-1",
+            "source": "api",
+            "actors": [{"name": "演员A", "role": None, "provider_ids": {}}],
+        },
+    )
+    second = client.post(
+        "/emby-media-actions/intake",
+        json={
+            "action": "metadata_whitelist",
+            "title": "白名单电影",
+            "emby_item_id": "white-1",
+            "source": "api",
+            "actors": [{"name": "演员B", "role": None, "provider_ids": {}}],
+        },
+    )
+    third = client.post(
+        "/emby-media-actions/intake",
+        json={
+            "action": "metadata_blacklist",
+            "title": "新的黑名单电影",
+            "emby_item_id": "black-2",
+            "source": "api",
+            "actors": [{"name": "演员C", "role": None, "provider_ids": {}}],
+        },
+    )
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert third.status_code == 200
+
+    response = client.get("/emby-media-actions/metadata-candidates?target_list=emby_blacklist&limit=10")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert [item["snapshot_title"] for item in data] == ["新的黑名单电影", "黑名单电影"]
+    assert {item["target_list"] for item in data} == {"emby_blacklist"}
+
+
 def test_metadata_candidate_apply_route(client: TestClient) -> None:
     created = client.post(
         "/emby-media-actions/intake",

@@ -171,7 +171,22 @@ class EmbyDeletePlanService:
             )
 
     def _add_remote_file(self, plan_id: int, mapping: EmbyMediaMapping, seen_remote_file_ids: set[str]) -> None:
-        if not mapping.remote_file_id or mapping.remote_file_id in seen_remote_file_ids:
+        if not mapping.remote_file_id:
+            self.db.add(
+                EmbyDeletePlanItem(
+                    plan_id=plan_id,
+                    group="remote_115",
+                    target_type="remote_file",
+                    remote_file_id=None,
+                    target_path=mapping.remote_path,
+                    display_name=mapping.remote_path.rsplit("/", 1)[-1] if mapping.remote_path else "115 原文件",
+                    status="blocked",
+                    blocked_reason="remote_file_id_required",
+                    dry_run_result="blocked",
+                )
+            )
+            return
+        if mapping.remote_file_id in seen_remote_file_ids:
             return
         seen_remote_file_ids.add(mapping.remote_file_id)
         status = "pending"

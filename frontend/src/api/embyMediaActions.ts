@@ -27,6 +27,7 @@ export interface EmbyDeletePlan {
 }
 
 export type EmbyDeleteScope = 'movie' | 'episode' | 'season' | 'series'
+export type EmbyMetadataTargetList = 'emby_blacklist' | 'emby_whitelist'
 
 export interface EmbySnapshotActor {
   name: string
@@ -55,6 +56,10 @@ export function listEmbyDeletePlans(limit = 20) {
   return api.get<EmbyDeletePlan[]>(`/emby-media-actions/delete-plans?limit=${limit}`)
 }
 
+export function deleteEmbyDeletePlan(id: number) {
+  return api.delete<{ ok: boolean; plan_id: number }>(`/emby-media-actions/delete-plans/${id}`)
+}
+
 export function confirmEmbyDeletePlan(id: number) {
   return api.post<{ plan_id: number; total: number; deleted: number; failed: number; blocked: number }>(
     `/emby-media-actions/delete-plans/${id}/confirm`,
@@ -68,6 +73,12 @@ export function createEmbyDeletePlanForScope(id: number, scope: EmbyDeleteScope)
 
 export function getEmbyMetadataCandidate(id: number) {
   return api.get<EmbyMetadataCandidate>(`/emby-media-actions/metadata-candidates/${id}`)
+}
+
+export function listEmbyMetadataCandidates(targetList: EmbyMetadataTargetList, limit = 20) {
+  return api.get<EmbyMetadataCandidate[]>(
+    `/emby-media-actions/metadata-candidates?target_list=${targetList}&limit=${limit}`,
+  )
 }
 
 export function applyEmbyMetadataCandidate(id: number, actors: string[], note: string | null) {

@@ -23,7 +23,7 @@ from app.schemas.emby_media_actions import (
 )
 from app.services.emby_media_actions.delete_plan_service import EmbyDeletePlanService
 from app.services.emby_media_actions.emby_client import EmbyClient, EmbyItemContext, build_item_context
-from app.services.emby_media_actions.metadata_candidate_service import EmbyMetadataCandidateService
+from app.services.emby_media_actions.metadata_candidate_service import VALID_TARGET_LISTS, EmbyMetadataCandidateService
 from app.services.emby_media_actions.strm_mapping_service import StrmMappingService, decode_115_open_path
 
 router = APIRouter(prefix="/emby-media-actions", tags=["emby-media-actions"])
@@ -329,6 +329,19 @@ def get_delete_plan(plan_id: int, db: Session = Depends(get_db)) -> EmbyDeletePl
     return _delete_plan_response(plan)
 
 
+@router.delete("/delete-plans/{plan_id}")
+def delete_delete_plan(plan_id: int, db: Session = Depends(get_db)):
+    _ensure_emby_media_actions_enabled()
+    plan = db.get(EmbyDeletePlan, plan_id)
+    if plan is None:
+        raise HTTPException(status_code=404, detail="delete plan not found")
+    if plan.status == "running":
+        raise HTTPException(status_code=400, detail="running delete plan cannot be removed")
+    db.delete(plan)
+    db.commit()
+    return {"ok": True, "plan_id": plan_id}
+
+
 @router.post("/delete-plans/{plan_id}/scope", response_model=EmbyDeletePlanResponse)
 def create_delete_plan_for_scope(
     plan_id: int,
@@ -380,6 +393,23 @@ def confirm_delete_plan(plan_id: int, payload: EmbyDeleteConfirmRequest, request
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"plan_id": summary.plan_id, "total": summary.total, "deleted": summary.deleted, "failed": summary.failed, "blocked": summary.blocked}
+
+
+@router.get("/metadata-candidates", response_model=list[EmbyMetadataCandidateResponse])
+def list_metadata_candidates(
+    target_list: str | None = None,
+    limit: int = 20,
+    db: Session = Depends(get_db),
+) -> list[EmbyMetadataCandidateResponse]:
+    _ensure_emby_media_actions_enabled()
+    if target_list is not None and target_list not in VALID_TARGET_LISTS:
+        raise HTTPException(status_code=400, detail="target_list must be emby_blacklist or emby_whitelist")
+    safe_limit = max(1, min(limit, 100))
+    statement = select(EmbyMetadataCandidate)
+    if target_list is not None:
+        statement = statement.where(EmbyMetadataCandidate.target_list == target_list)
+    candidates = db.scalars(statement.order_by(EmbyMetadataCandidate.id.desc()).limit(safe_limit)).all()
+    return [_metadata_candidate_response(candidate) for candidate in candidates]
 
 
 @router.get("/metadata-candidates/{candidate_id}", response_model=EmbyMetadataCandidateResponse)

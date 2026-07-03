@@ -20,7 +20,7 @@ def _mapping(
     item_type: str = "Movie",
     series_id: str | None = None,
     season_id: str | None = None,
-    remote_file_id: str = "remote-1",
+    remote_file_id: str | None = "remote-1",
     source_path: Path | None = None,
     organized_path: Path | None = None,
 ) -> EmbyMediaMapping:
@@ -41,10 +41,10 @@ def _mapping(
         emby_series_id=series_id,
         emby_season_id=season_id,
         emby_episode_id=item_id if item_type == "Episode" else None,
-        alist_url=f"http://example.test/d/115_OPEN/{remote_file_id}.mkv",
+        alist_url=f"http://example.test/d/115_OPEN/{remote_file_id or 'missing-remote-id'}.mkv",
         alist_mount_name="115_OPEN",
         remote_provider="115",
-        remote_path=f"/{remote_file_id}.mkv",
+        remote_path=f"/{remote_file_id or 'missing-remote-id'}.mkv",
         remote_file_id=remote_file_id,
     )
     mapping.paths.extend(
@@ -340,6 +340,24 @@ def test_create_plan_blocks_remote_115_when_client_missing(db_session, tmp_path:
 
     assert remote_item.status == "blocked"
     assert remote_item.blocked_reason == "client_115_required"
+
+
+def test_create_plan_keeps_blocked_remote_115_item_when_file_id_missing(db_session, tmp_path: Path) -> None:
+    mapping = _mapping(db_session, tmp_path, remote_file_id=None)
+
+    plan = EmbyDeletePlanService(db_session, client_115=Fake115Client(), allowed_roots=[str(tmp_path)]).create_plan_from_mapping(
+        mapping_id=mapping.id,
+        scope="movie",
+        source="test",
+    )
+    remote_item = next(item for item in plan.items if item.group == "remote_115")
+
+    assert plan.total_items == 3
+    assert plan.blocked_count == 1
+    assert remote_item.status == "blocked"
+    assert remote_item.blocked_reason == "remote_file_id_required"
+    assert remote_item.target_path == "/missing-remote-id.mkv"
+    assert remote_item.remote_file_id is None
 
 
 def test_create_plan_blocks_remote_115_when_dry_run_fails(db_session, tmp_path: Path) -> None:
