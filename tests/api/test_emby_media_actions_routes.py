@@ -19,6 +19,24 @@ from app.services.client_115.schemas import NodePayload
 from app.services.emby_media_actions.delete_plan_service import EmbyDeletePlanService
 
 
+class FakeEmbyClient:
+    def __init__(self, items: list[dict]) -> None:
+        self.items = items
+        self.get_item_calls: list[str] = []
+        self.find_items_by_title_calls: list[str] = []
+
+    def get_item(self, item_id: str) -> dict:
+        self.get_item_calls.append(item_id)
+        for item in self.items:
+            if item.get("Id") == item_id:
+                return item
+        raise LookupError(item_id)
+
+    def find_items_by_title(self, title: str) -> list[dict]:
+        self.find_items_by_title_calls.append(title)
+        return self.items
+
+
 @pytest.fixture
 def api_context(tmp_path, monkeypatch):
     monkeypatch.setenv("AUTH_ENABLED", "false")
@@ -49,6 +67,8 @@ def api_context(tmp_path, monkeypatch):
     fake_115 = Fake115Client()
     _main.app.dependency_overrides[deps.get_db] = override_get_db
     _main.app.state.client_115 = fake_115
+    if hasattr(_main.app.state, "emby_client"):
+        delattr(_main.app.state, "emby_client")
     try:
         yield SimpleNamespace(
             client=TestClient(_main.app, raise_server_exceptions=False),
@@ -58,6 +78,8 @@ def api_context(tmp_path, monkeypatch):
         )
     finally:
         _main.app.dependency_overrides.clear()
+        if hasattr(_main.app.state, "emby_client"):
+            delattr(_main.app.state, "emby_client")
         get_settings.cache_clear()
         engine.dispose()
 
@@ -141,6 +163,7 @@ def test_metadata_candidate_apply_route(client: TestClient) -> None:
             "path": "/media/a.strm",
             "title": "测试电影",
             "emby_item_id": "item-1",
+            "source": "api",
             "nfo_xml": "<movie><actor><name>演员A</name></actor></movie>",
             "actors": [{"name": "演员A", "role": None, "provider_ids": {}}],
         },
@@ -201,6 +224,7 @@ def test_metadata_candidate_intake_uses_minimal_snapshot_and_null_nfo_path_when_
             "path": "/media/playback/movie.strm",
             "title": "测试电影",
             "emby_item_id": "item-1",
+            "source": "api",
             "actors": [{"name": "演员A", "role": None, "provider_ids": {}}],
         },
     )
@@ -211,6 +235,55 @@ def test_metadata_candidate_intake_uses_minimal_snapshot_and_null_nfo_path_when_
     assert snapshot.nfo_path is None
 
 
+def test_metadata_candidate_intake_resolves_path_title_context_from_emby_client(api_context) -> None:
+    playback_path = str(api_context.tmp_path / "source" / "s01e03.strm")
+    emby_payload = {
+        "Id": "episode-3",
+        "Name": "第三集",
+        "Type": "Episode",
+        "Path": playback_path,
+        "SeriesId": "series-1",
+        "SeasonId": "season-1",
+        "ProviderIds": {"Tvdb": "333"},
+        "People": [
+            {"Name": "演员A", "Type": "Actor", "Role": "主角", "ProviderIds": {"Tmdb": "101"}},
+            {"Name": "导演A", "Type": "Director"},
+        ],
+    }
+    api_context.client.app.state.emby_client = FakeEmbyClient([emby_payload])
+
+    created = api_context.client.post(
+        "/emby-media-actions/intake",
+        json={
+            "action": "metadata_blacklist",
+            "path": playback_path,
+            "title": "第三集",
+            "source": "iina_lua",
+        },
+    )
+
+    assert created.status_code == 200
+    snapshot = _snapshot(api_context, created.json()["metadata_candidate"]["snapshot_id"])
+    assert snapshot.emby_item_id == "episode-3"
+    assert json.loads(snapshot.emby_json) == emby_payload
+    assert json.loads(snapshot.actors_json) == [{"name": "演员A", "role": "主角", "provider_ids": {"Tmdb": "101"}}]
+
+
+def test_iina_metadata_intake_without_payload_or_resolvable_emby_client_returns_400(api_context) -> None:
+    response = api_context.client.post(
+        "/emby-media-actions/intake",
+        json={
+            "action": "metadata_blacklist",
+            "path": "/media/playback/movie.strm",
+            "title": "测试电影",
+            "source": "iina_lua",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "emby_payload or resolvable Emby item is required"
+
+
 def test_metadata_candidate_intake_rejects_malformed_nfo_xml(client: TestClient) -> None:
     response = client.post(
         "/emby-media-actions/intake",
@@ -218,6 +291,7 @@ def test_metadata_candidate_intake_rejects_malformed_nfo_xml(client: TestClient)
             "action": "metadata_blacklist",
             "title": "测试电影",
             "emby_item_id": "item-1",
+            "source": "api",
             "nfo_xml": "<movie><actor><name>演员A</name></actor>",
         },
     )
@@ -386,6 +460,55 @@ def test_delete_plan_intake_persists_episode_hierarchy_ids_for_broader_scopes(ap
         assert season_plan.scope == "season"
         assert series_plan.status == "draft"
         assert series_plan.scope == "series"
+
+
+def test_delete_plan_path_title_intake_resolves_episode_context_from_emby_client(api_context) -> None:
+    source = api_context.tmp_path / "source"
+    organized = api_context.tmp_path / "organized"
+    source.mkdir(exist_ok=True)
+    organized.mkdir(exist_ok=True)
+    url = "http://192.168.70.138:5244/d/115_OPEN/%E5%89%A7%E9%9B%86/s01e04.mkv"
+    strm_path = source / "s01e04.strm"
+    strm_path.write_text(url, encoding="utf-8")
+    (organized / "s01e04.strm").write_text(url, encoding="utf-8")
+    api_context.fake_115.add_node(NodePayload(id="remote-episode-4", name="s01e04.mkv", path="/剧集/s01e04.mkv", parent_id="0", is_file=True))
+    api_context.client.app.state.emby_client = FakeEmbyClient(
+        [
+            {
+                "Id": "episode-4",
+                "Name": "第四集",
+                "Type": "Episode",
+                "SeriesId": "series-1",
+                "SeasonId": "season-1",
+                "MediaSources": [{"Path": str(strm_path)}],
+            }
+        ]
+    )
+
+    response = api_context.client.post(
+        "/emby-media-actions/intake",
+        json={
+            "action": "delete_plan",
+            "path": str(strm_path),
+            "title": "第四集",
+            "source": "iina_lua",
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["delete_plan"]["emby_item_id"] == "episode-4"
+    assert data["delete_plan"]["scope"] == "episode"
+    assert data["delete_plan"]["total_items"] == 3
+    with api_context.session_factory() as db:
+        mapping = db.query(_emby_media_actions.EmbyMediaMapping).filter_by(emby_item_id="episode-4").one()
+        assert mapping.emby_item_type == "Episode"
+        assert mapping.emby_title == "第四集"
+        assert mapping.emby_series_id == "series-1"
+        assert mapping.emby_season_id == "season-1"
+        assert mapping.emby_episode_id == "episode-4"
+        assert mapping.remote_file_id == "remote-episode-4"
+        assert mapping.alist_url == url
 
 
 def test_delete_plan_intake_is_idempotent_for_same_item_and_url(api_context) -> None:

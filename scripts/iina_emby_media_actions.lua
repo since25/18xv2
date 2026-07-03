@@ -76,6 +76,18 @@ local function current_media_path()
   return nil
 end
 
+local function current_media_title()
+  local title = mp.get_property("media-title")
+  local filename = mp.get_property("filename")
+  if title and title ~= "" then
+    return title
+  end
+  if filename and filename ~= "" then
+    return filename
+  end
+  return nil
+end
+
 local function submit(action)
   local path = current_media_path()
   if not path or path == "" then
@@ -83,6 +95,7 @@ local function submit(action)
     mp.osd_message("未获取到当前视频路径", 2)
     return
   end
+  local title = current_media_title()
   log_line("submit action=" .. action .. " resolved_path=" .. path)
 
   local args = {
@@ -96,6 +109,10 @@ local function submit(action)
     "--base-url",
     base_url,
   }
+  if title and title ~= "" then
+    table.insert(args, "--title")
+    table.insert(args, title)
+  end
 
   mp.osd_message("提交 Emby 媒体动作中...", 1)
   mp.command_native_async({

@@ -21,19 +21,39 @@ class RequestFailed(RuntimeError):
         self.detail = detail
 
 
-def build_payload(action: str, path: str, source: str) -> dict:
+def build_payload(
+    action: str,
+    path: str,
+    source: str,
+    *,
+    title: str | None = None,
+    emby_item_id: str | None = None,
+    emby_payload: dict | None = None,
+    url: str | None = None,
+    nfo_path: str | None = None,
+    nfo_xml: str | None = None,
+) -> dict:
     action_map = {
         "delete-plan": "delete_plan",
         "blacklist": "metadata_blacklist",
         "whitelist": "metadata_whitelist",
     }
-    return {
+    payload = {
         "action": action_map[action],
         "path": path,
         "source": source,
-        "emby_item_id": path,
-        "title": Path(path).name or path,
+        "emby_item_id": emby_item_id or path,
+        "title": title or Path(path).name or path,
     }
+    if emby_payload is not None:
+        payload["emby_payload"] = emby_payload
+    if url is not None:
+        payload["url"] = url
+    if nfo_path is not None:
+        payload["nfo_path"] = nfo_path
+    if nfo_xml is not None:
+        payload["nfo_xml"] = nfo_xml
+    return payload
 
 
 def _json_request(opener, url: str, payload: dict | None = None) -> dict:
@@ -92,6 +112,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="提交 Emby 媒体动作到后端。")
     parser.add_argument("action", choices=["delete-plan", "blacklist", "whitelist"])
     parser.add_argument("--path", required=True)
+    parser.add_argument("--title", help="媒体标题；IINA/mpv 可传 media-title 或 filename")
+    parser.add_argument("--emby-item-id", help="Emby item id；没有时后端会按路径/标题解析")
+    parser.add_argument("--emby-payload-json", help="Emby item JSON 对象字符串")
+    parser.add_argument("--url", help="播放/strm 指向的远端 URL")
+    parser.add_argument("--nfo-path", help="NFO 文件路径")
+    parser.add_argument("--nfo-xml", help="NFO XML 内容")
     parser.add_argument(
         "--base-url",
         default=os.getenv("EMBY_MEDIA_ACTIONS_BASE_URL", "http://127.0.0.1:8000"),
@@ -106,12 +132,30 @@ def main() -> int:
     )
     parser.add_argument("--print-response", action="store_true", help="打印接口完整响应")
     args = parser.parse_args()
+    emby_payload = None
+    if args.emby_payload_json:
+        try:
+            emby_payload = json.loads(args.emby_payload_json)
+        except json.JSONDecodeError as exc:
+            parser.error(f"--emby-payload-json must be valid JSON: {exc}")
+        if not isinstance(emby_payload, dict):
+            parser.error("--emby-payload-json must be a JSON object")
 
     base_url = args.base_url.rstrip("/")
     cookie_path = Path(args.cookie_path).expanduser()
     cookie_jar = _load_cookie_jar(cookie_path)
     opener = build_opener(HTTPCookieProcessor(cookie_jar))
-    payload = build_payload(args.action, args.path, args.source)
+    payload = build_payload(
+        args.action,
+        args.path,
+        args.source,
+        title=args.title,
+        emby_item_id=args.emby_item_id,
+        emby_payload=emby_payload,
+        url=args.url,
+        nfo_path=args.nfo_path,
+        nfo_xml=args.nfo_xml,
+    )
     url = f"{base_url}/emby-media-actions/intake"
 
     try:

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import xml.etree.ElementTree as ET
+from pathlib import Path
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
@@ -17,6 +19,7 @@ from app.schemas.emby_media_actions import (
     EmbyMetadataCandidateResponse,
 )
 from app.services.emby_media_actions.delete_plan_service import EmbyDeletePlanService
+from app.services.emby_media_actions.emby_client import EmbyClient, EmbyItemContext, build_item_context
 from app.services.emby_media_actions.metadata_candidate_service import EmbyMetadataCandidateService
 from app.services.emby_media_actions.strm_mapping_service import StrmMappingService, decode_115_open_path
 
@@ -55,29 +58,137 @@ def _emby_hierarchy_ids(payload: EmbyMediaIntakeRequest, emby_item_type: str) ->
     )
 
 
+def _looks_like_real_emby_id(value: str | None) -> bool:
+    if not value:
+        return False
+    parsed = urlsplit(value)
+    if parsed.scheme and parsed.netloc:
+        return False
+    candidate = Path(value)
+    if candidate.is_absolute():
+        return False
+    return "/" not in value and "\\" not in value
+
+
+def _item_paths(item: dict) -> set[str]:
+    paths = {str(item["Path"])} if item.get("Path") else set()
+    for source in item.get("MediaSources") or []:
+        path = source.get("Path")
+        if path:
+            paths.add(str(path))
+    return paths
+
+
+def _select_item_for_path(items: list[dict], path: str | None) -> dict | None:
+    if not items:
+        return None
+    if path:
+        for item in items:
+            if path in _item_paths(item):
+                return item
+    return items[0]
+
+
+def _emby_client_for_request(request: Request) -> EmbyClient | None:
+    existing = getattr(request.app.state, "emby_client", None)
+    if existing is not None:
+        return existing
+    settings = get_settings()
+    if not (settings.emby_base_url and settings.emby_api_key and settings.emby_user_id):
+        return None
+    return EmbyClient(
+        base_url=settings.emby_base_url,
+        api_key=settings.emby_api_key,
+        user_id=settings.emby_user_id,
+    )
+
+
+def _resolve_item_context(payload: EmbyMediaIntakeRequest, request: Request) -> EmbyItemContext | None:
+    if payload.emby_payload:
+        return build_item_context(payload.emby_payload)
+
+    client = _emby_client_for_request(request)
+    if client is None:
+        return None
+
+    if _looks_like_real_emby_id(payload.emby_item_id):
+        try:
+            return build_item_context(client.get_item(str(payload.emby_item_id)))
+        except Exception:
+            pass
+
+    title = payload.title
+    if not title and payload.path:
+        title = Path(payload.path).stem
+    if not title:
+        return None
+    try:
+        item = _select_item_for_path(client.find_items_by_title(title), payload.path)
+    except Exception:
+        return None
+    if item is None:
+        return None
+    return build_item_context(item)
+
+
+def _payload_context_for_delete(payload: EmbyMediaIntakeRequest, context: EmbyItemContext | None) -> tuple[str, str, str, str | None, str | None, str | None]:
+    if context is not None:
+        return (
+            context.emby_item_id,
+            context.item_type,
+            context.title or payload.title or context.emby_item_id,
+            context.series_id if context.item_type.strip().lower() == "episode" else None,
+            context.season_id if context.item_type.strip().lower() == "episode" else None,
+            context.emby_item_id if context.item_type.strip().lower() == "episode" else None,
+        )
+    if not payload.emby_item_id:
+        raise HTTPException(status_code=400, detail="emby_item_id is required")
+    emby_item_type = _emby_item_type(payload)
+    emby_series_id, emby_season_id, emby_episode_id = _emby_hierarchy_ids(payload, emby_item_type)
+    return (
+        payload.emby_item_id,
+        emby_item_type,
+        payload.title or payload.emby_item_id,
+        emby_series_id,
+        emby_season_id,
+        emby_episode_id,
+    )
+
+
 @router.post("/intake", response_model=EmbyMediaIntakeResponse)
 def intake(payload: EmbyMediaIntakeRequest, request: Request, db: Session = Depends(get_db)) -> EmbyMediaIntakeResponse:
+    item_context = _resolve_item_context(payload, request)
     if payload.action in {"metadata_blacklist", "metadata_whitelist"}:
-        if not payload.emby_item_id:
+        if item_context is None and payload.source in {"iina_lua", "shortcut"} and not payload.emby_payload:
+            raise HTTPException(status_code=400, detail="emby_payload or resolvable Emby item is required")
+        emby_item_id = item_context.emby_item_id if item_context is not None else payload.emby_item_id
+        if not emby_item_id:
             raise HTTPException(status_code=400, detail="emby_item_id is required")
         target_list = "emby_blacklist" if payload.action == "metadata_blacklist" else "emby_whitelist"
-        emby_payload = payload.emby_payload or {"Id": payload.emby_item_id, "Name": payload.title}
+        emby_payload = item_context.raw if item_context is not None else payload.emby_payload or {"Id": emby_item_id, "Name": payload.title}
+        actors = [actor.model_dump() for actor in payload.actors] or (item_context.actors if item_context is not None else [])
         try:
             candidate = EmbyMetadataCandidateService(db).create_candidate(
                 target_list=target_list,
-                emby_item_id=payload.emby_item_id,
-                title=payload.title or payload.emby_item_id,
+                emby_item_id=emby_item_id,
+                title=(item_context.title if item_context is not None else None) or payload.title or emby_item_id,
                 nfo_xml=payload.nfo_xml,
                 emby_payload=emby_payload,
-                actors=[actor.model_dump() for actor in payload.actors],
+                actors=actors,
                 source_path=payload.nfo_path,
             )
         except ET.ParseError as exc:
             raise HTTPException(status_code=400, detail=f"invalid nfo_xml: {exc}") from exc
         return EmbyMediaIntakeResponse(ok=True, metadata_candidate=EmbyMetadataCandidateResponse.model_validate(candidate))
     if payload.action == "delete_plan":
-        if not payload.emby_item_id:
-            raise HTTPException(status_code=400, detail="emby_item_id is required")
+        (
+            emby_item_id,
+            emby_item_type,
+            emby_title,
+            emby_series_id,
+            emby_season_id,
+            emby_episode_id,
+        ) = _payload_context_for_delete(payload, item_context)
         stream_url = payload.url
         if not stream_url and payload.path and payload.path.endswith(".strm"):
             try:
@@ -111,12 +222,10 @@ def intake(payload: EmbyMediaIntakeRequest, request: Request, db: Session = Depe
             client_115=client_115,
             allowed_roots=settings.emby_media_actions_source_roots + settings.emby_media_actions_organized_roots,
         )
-        emby_item_type = _emby_item_type(payload)
-        emby_series_id, emby_season_id, emby_episode_id = _emby_hierarchy_ids(payload, emby_item_type)
         mapping = service.create_mapping_from_matches(
-            emby_item_id=payload.emby_item_id,
+            emby_item_id=emby_item_id,
             emby_item_type=emby_item_type,
-            emby_title=payload.title or payload.emby_item_id,
+            emby_title=emby_title,
             alist_url=stream_url,
             mount_name=decoded.mount_name,
             remote_path=decoded.remote_path,

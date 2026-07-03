@@ -51,6 +51,7 @@ class Settings(BaseSettings):
     # Emby 媒体操作
     emby_base_url: str | None = Field(default=None, alias="EMBY_BASE_URL")
     emby_api_key: str | None = Field(default=None, alias="EMBY_API_KEY")
+    emby_user_id: str | None = Field(default=None, alias="EMBY_USER_ID")
     emby_media_actions_enabled: bool = Field(default=False, alias="EMBY_MEDIA_ACTIONS_ENABLED")
     emby_media_actions_strm_roots: Annotated[list[str], NoDecode] = Field(default_factory=list, alias="EMBY_MEDIA_ACTIONS_STRM_ROOTS")
     emby_media_actions_organized_roots: Annotated[list[str], NoDecode] = Field(default_factory=list, alias="EMBY_MEDIA_ACTIONS_ORGANIZED_ROOTS")
