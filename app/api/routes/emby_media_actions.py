@@ -159,7 +159,7 @@ def _payload_context_for_delete(payload: EmbyMediaIntakeRequest, context: EmbyIt
 def intake(payload: EmbyMediaIntakeRequest, request: Request, db: Session = Depends(get_db)) -> EmbyMediaIntakeResponse:
     item_context = _resolve_item_context(payload, request)
     if payload.action in {"metadata_blacklist", "metadata_whitelist"}:
-        if item_context is None and payload.source in {"iina_lua", "shortcut"} and not payload.emby_payload:
+        if item_context is None and payload.source == "iina_lua" and not payload.emby_payload:
             raise HTTPException(status_code=400, detail="emby_payload or resolvable Emby item is required")
         emby_item_id = item_context.emby_item_id if item_context is not None else payload.emby_item_id
         if not emby_item_id:

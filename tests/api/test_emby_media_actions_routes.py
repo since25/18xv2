@@ -235,6 +235,54 @@ def test_metadata_candidate_intake_uses_minimal_snapshot_and_null_nfo_path_when_
     assert snapshot.nfo_path is None
 
 
+@pytest.mark.parametrize(
+    ("action", "target_list"),
+    [
+        ("metadata_blacklist", "emby_blacklist"),
+        ("metadata_whitelist", "emby_whitelist"),
+    ],
+)
+def test_shortcut_metadata_intake_preserves_minimal_snapshot_without_resolved_emby_context(
+    api_context,
+    action: str,
+    target_list: str,
+) -> None:
+    created = api_context.client.post(
+        "/emby-media-actions/intake",
+        json={
+            "action": action,
+            "path": "/media/playback/shortcut.strm",
+            "title": "快捷指令电影",
+            "emby_item_id": "shortcut-item-1",
+            "source": "shortcut",
+        },
+    )
+
+    assert created.status_code == 200
+    candidate = created.json()["metadata_candidate"]
+    assert candidate["target_list"] == target_list
+    snapshot = _snapshot(api_context, candidate["snapshot_id"])
+    assert snapshot.emby_item_id == "shortcut-item-1"
+    assert json.loads(snapshot.emby_json) == {"Id": "shortcut-item-1", "Name": "快捷指令电影"}
+
+
+def test_metadata_whitelist_intake_omitted_source_preserves_minimal_snapshot_without_resolved_emby_context(api_context) -> None:
+    created = api_context.client.post(
+        "/emby-media-actions/intake",
+        json={
+            "action": "metadata_whitelist",
+            "path": "/media/playback/api-default.strm",
+            "title": "接口默认电影",
+            "emby_item_id": "api-default-item-1",
+        },
+    )
+
+    assert created.status_code == 200
+    snapshot = _snapshot(api_context, created.json()["metadata_candidate"]["snapshot_id"])
+    assert snapshot.emby_item_id == "api-default-item-1"
+    assert json.loads(snapshot.emby_json) == {"Id": "api-default-item-1", "Name": "接口默认电影"}
+
+
 def test_metadata_candidate_intake_resolves_path_title_context_from_emby_client(api_context) -> None:
     playback_path = str(api_context.tmp_path / "source" / "s01e03.strm")
     emby_payload = {
