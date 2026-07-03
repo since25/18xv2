@@ -268,8 +268,8 @@ def test_metadata_candidates_route_lists_recent_candidates_by_target_list(client
     assert {item["target_list"] for item in data} == {"emby_blacklist"}
 
 
-def test_metadata_candidate_route_deletes_candidate_record(client: TestClient) -> None:
-    created = client.post(
+def test_metadata_candidate_route_deletes_candidate_record(api_context) -> None:
+    created = api_context.client.post(
         "/emby-media-actions/intake",
         json={
             "action": "metadata_blacklist",
@@ -280,16 +280,20 @@ def test_metadata_candidate_route_deletes_candidate_record(client: TestClient) -
         },
     )
     assert created.status_code == 200
-    candidate_id = created.json()["metadata_candidate"]["id"]
+    metadata_candidate = created.json()["metadata_candidate"]
+    candidate_id = metadata_candidate["id"]
+    snapshot_id = metadata_candidate["snapshot_id"]
 
-    response = client.delete(f"/emby-media-actions/metadata-candidates/{candidate_id}")
+    response = api_context.client.delete(f"/emby-media-actions/metadata-candidates/{candidate_id}")
 
     assert response.status_code == 200
     assert response.json() == {"ok": True, "candidate_id": candidate_id}
-    assert client.get(f"/emby-media-actions/metadata-candidates/{candidate_id}").status_code == 404
-    listed = client.get("/emby-media-actions/metadata-candidates?target_list=emby_blacklist&limit=10")
+    assert api_context.client.get(f"/emby-media-actions/metadata-candidates/{candidate_id}").status_code == 404
+    listed = api_context.client.get("/emby-media-actions/metadata-candidates?target_list=emby_blacklist&limit=10")
     assert listed.status_code == 200
     assert all(item["id"] != candidate_id for item in listed.json())
+    with api_context.session_factory() as db:
+        assert db.get(EmbyMetadataSnapshot, snapshot_id) is None
 
 
 def test_metadata_candidate_apply_route(client: TestClient) -> None:

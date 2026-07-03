@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
 from app.core.config import get_settings
-from app.models.emby_media_actions import EmbyDeletePlan, EmbyMediaMapping, EmbyMetadataCandidate
+from app.models.emby_media_actions import EmbyDeletePlan, EmbyMediaMapping, EmbyMetadataCandidate, EmbyMetadataSnapshot
 from app.schemas.emby_media_actions import (
     EmbyDeleteConfirmRequest,
     EmbyDeletePlanResponse,
@@ -427,7 +427,16 @@ def delete_metadata_candidate(candidate_id: int, db: Session = Depends(get_db)):
     candidate = db.get(EmbyMetadataCandidate, candidate_id)
     if candidate is None:
         raise HTTPException(status_code=404, detail="metadata candidate not found")
+    snapshot_id = candidate.snapshot_id
     db.delete(candidate)
+    db.flush()
+    snapshot_still_used = db.scalar(
+        select(EmbyMetadataCandidate.id).where(EmbyMetadataCandidate.snapshot_id == snapshot_id).limit(1)
+    )
+    if snapshot_still_used is None:
+        snapshot = db.get(EmbyMetadataSnapshot, snapshot_id)
+        if snapshot is not None:
+            db.delete(snapshot)
     db.commit()
     return {"ok": True, "candidate_id": candidate_id}
 
