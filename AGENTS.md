@@ -1,5 +1,10 @@
 ## Imported Claude Cowork project instructions
 
+## Superpowers 注册
+- 本项目已显式启用 Superpowers 工作流；在本仓库内工作时，先调用 `using-superpowers`，再按任务选择相关 Superpowers skill（例如 `brainstorming`、`writing-plans`、`systematic-debugging`、`test-driven-development`、`verification-before-completion`）。
+- 需求设计文档保存到 `docs/superpowers/specs/`，实施计划保存到 `docs/superpowers/plans/`。
+- Superpowers 运行时状态目录使用 `.superpowers/`，保持在 `.gitignore` 中，不提交。
+
 ## 项目背景
 这是对 18x_rawdata 项目的重构版本（18x_v2）。
 原项目路径：/Users/wangyichuan/Desktop/wangcodemac/18x_rawdata

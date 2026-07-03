@@ -185,6 +185,8 @@ class KeywordDuplicatePairResponse(BaseModel):
     keyword_1: KeywordEntryResponse
     keyword_2: KeywordEntryResponse
     score: float
+    keyword_1_reference_count: int = 0
+    keyword_2_reference_count: int = 0
 
 
 class KeywordDuplicateScanResponse(BaseModel):

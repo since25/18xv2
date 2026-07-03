@@ -86,6 +86,78 @@ class TestMergeEntries:
         # 合并后副词条的 canonical name 成为主词条的 alias
         assert "副词条" in alias_values
 
+    def test_merge_moves_whitelist_candidate_references(self, db_session: Session):
+        svc = KeywordRegistryService(db_session)
+        canonical = svc.create_entry(canonical_name="主白名单", keyword_type="whitelist")
+        secondary = svc.create_entry(canonical_name="副白名单", keyword_type="whitelist")
+        db_session.add_all(
+            [
+                WhitelistCandidate(
+                    source_tid=2001,
+                    source_magnet="magnet:?xt=urn:btih:merge-a",
+                    source_title="主候选",
+                    matched_keyword_entry_id=canonical.id,
+                    matched_keyword=canonical.canonical_name,
+                    duplicate_status="clear",
+                    target_path="/target/main",
+                ),
+                WhitelistCandidate(
+                    source_tid=2002,
+                    source_magnet="magnet:?xt=urn:btih:merge-b",
+                    source_title="副候选",
+                    matched_keyword_entry_id=secondary.id,
+                    matched_keyword=secondary.canonical_name,
+                    duplicate_status="clear",
+                    target_path="/target/secondary",
+                ),
+            ]
+        )
+        db_session.commit()
+
+        svc.merge_entries(canonical.id, [secondary.id])
+
+        rows = db_session.scalars(select(WhitelistCandidate).order_by(WhitelistCandidate.id)).all()
+        assert len(rows) == 2
+        assert {row.matched_keyword_entry_id for row in rows} == {canonical.id}
+        assert svc.find_entry_by_keyword("副白名单") is not None
+        assert db_session.get(type(canonical), secondary.id) is None
+
+    def test_merge_deduplicates_conflicting_whitelist_candidate_references(self, db_session: Session):
+        svc = KeywordRegistryService(db_session)
+        canonical = svc.create_entry(canonical_name="主白名单", keyword_type="whitelist")
+        secondary = svc.create_entry(canonical_name="副白名单", keyword_type="whitelist")
+        shared = {
+            "source_tid": 2003,
+            "source_magnet": "magnet:?xt=urn:btih:merge-shared",
+            "source_title": "同一个资源",
+            "duplicate_status": "clear",
+            "target_path": "/target/shared",
+        }
+        db_session.add_all(
+            [
+                WhitelistCandidate(
+                    **shared,
+                    matched_keyword_entry_id=canonical.id,
+                    matched_keyword=canonical.canonical_name,
+                    lifecycle_status="pending",
+                ),
+                WhitelistCandidate(
+                    **shared,
+                    matched_keyword_entry_id=secondary.id,
+                    matched_keyword=secondary.canonical_name,
+                    lifecycle_status="submitted",
+                ),
+            ]
+        )
+        db_session.commit()
+
+        svc.merge_entries(canonical.id, [secondary.id])
+
+        rows = db_session.scalars(select(WhitelistCandidate)).all()
+        assert len(rows) == 1
+        assert rows[0].matched_keyword_entry_id == canonical.id
+        assert rows[0].lifecycle_status == "submitted"
+
 
 class TestDeleteEntry:
     def test_delete_entry_removes_whitelist_candidates(self, db_session: Session):
@@ -131,6 +203,47 @@ class TestScanDuplicateKeywords:
         pairs = svc.scan_duplicate_keywords(keyword_type="whitelist", threshold=0.85)
 
         assert pairs == []
+
+    def test_count_whitelist_candidate_references(self, db_session: Session):
+        svc = KeywordRegistryService(db_session)
+        first = svc.create_entry(canonical_name="Alpha", keyword_type="whitelist")
+        second = svc.create_entry(canonical_name="ABP-31", keyword_type="whitelist")
+        db_session.add_all(
+            [
+                WhitelistCandidate(
+                    source_tid=3001,
+                    source_magnet="magnet:?xt=urn:btih:refs-a",
+                    source_title="引用 A",
+                    matched_keyword_entry_id=first.id,
+                    matched_keyword=first.canonical_name,
+                    duplicate_status="clear",
+                    target_path="/target/a",
+                ),
+                WhitelistCandidate(
+                    source_tid=3002,
+                    source_magnet="magnet:?xt=urn:btih:refs-b",
+                    source_title="引用 B",
+                    matched_keyword_entry_id=first.id,
+                    matched_keyword=first.canonical_name,
+                    duplicate_status="clear",
+                    target_path="/target/b",
+                ),
+                WhitelistCandidate(
+                    source_tid=3003,
+                    source_magnet="magnet:?xt=urn:btih:refs-c",
+                    source_title="引用 C",
+                    matched_keyword_entry_id=second.id,
+                    matched_keyword=second.canonical_name,
+                    duplicate_status="clear",
+                    target_path="/target/c",
+                ),
+            ]
+        )
+        db_session.commit()
+
+        counts = svc.count_whitelist_candidate_references([first.id, second.id, 9999])
+
+        assert counts == {first.id: 2, second.id: 1, 9999: 0}
 
 
 class TestNormalizeKeywordText:

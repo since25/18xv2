@@ -43,6 +43,8 @@ class AmbiguousKeywordConflict:
 
 class OrganizeTaskService:
     DEFAULT_TARGET_ROOT = "/根目录/已整理"
+    PREFER_SPECIFIC_MATCH = True
+    COMBINE_MULTI_MATCH_MAX = 3
 
     def __init__(self, db: Session):
         self.db = db
@@ -161,29 +163,19 @@ class OrganizeTaskService:
             ).all()
         )
 
-        path_to_keywords: dict[str, set[int]] = {}
-        for hit in hits:
-            if hit.keyword_entry_id is None:
-                continue
-            node = self.db.scalar(
-                select(TreeNode)
-                .where(TreeNode.import_id == import_id)
-                .where(TreeNode.raw_path == hit.source_path)
-                .where(TreeNode.node_type == "folder")
-            )
-            if node is None:
-                continue
-            path_to_keywords.setdefault(hit.source_path, set()).add(hit.keyword_entry_id)
+        path_to_hits = self._group_folder_hits_by_source_path(import_id=import_id, hits=hits)
 
         entry_by_id = {entry.id: entry for entry in whitelist_entries}
         created_tasks: list[OrganizeTask] = []
         skipped_ambiguous_count = 0
-        for source_path, keyword_ids in path_to_keywords.items():
-            if len(keyword_ids) != 1:
+        for source_path, source_hits in path_to_hits.items():
+            keyword_ids = self._resolve_specific_keyword_ids(source_hits)
+            if not keyword_ids:
                 skipped_ambiguous_count += 1
                 continue
-            keyword_entry_id = next(iter(keyword_ids))
-            entry = entry_by_id[keyword_entry_id]
+            if len(keyword_ids) > self.COMBINE_MULTI_MATCH_MAX:
+                skipped_ambiguous_count += 1
+                continue
             node = self.db.scalar(
                 select(TreeNode)
                 .where(TreeNode.import_id == import_id)
@@ -192,15 +184,30 @@ class OrganizeTaskService:
             )
             if node is None:
                 continue
+            if len(keyword_ids) == 1:
+                keyword_entry_id = next(iter(keyword_ids))
+                entry = entry_by_id[keyword_entry_id]
+                target_keyword_dir = directory_names[keyword_entry_id]
+                matched_canonical_name = entry.canonical_name
+                operation_log = f"Generated from active whitelist hits for keyword #{keyword_entry_id}."
+            else:
+                keyword_entries = [entry_by_id[keyword_id] for keyword_id in keyword_ids]
+                target_keyword_dir = self._build_combined_keyword_directory_name(keyword_entries)
+                matched_canonical_name = self._build_combined_keyword_label(keyword_entries)
+                keyword_entry_id = None
+                operation_log = (
+                    "Generated from active whitelist hits for combined keywords "
+                    f"{','.join(str(keyword_id) for keyword_id in sorted(keyword_ids))}."
+                )
             task = OrganizeTask(
                 import_id=import_id,
                 node_id=node.id,
                 keyword_entry_id=keyword_entry_id,
                 source_path=node.raw_path,
-                target_path=str(PurePosixPath(self.DEFAULT_TARGET_ROOT) / directory_names[keyword_entry_id] / node.raw_name),
-                matched_canonical_name=entry.canonical_name,
+                target_path=str(PurePosixPath(self.DEFAULT_TARGET_ROOT) / target_keyword_dir / node.raw_name),
+                matched_canonical_name=matched_canonical_name,
                 status="pending",
-                operation_log=f"Generated from active whitelist hits for keyword #{keyword_entry_id}.",
+                operation_log=operation_log,
             )
             self.db.add(task)
             created_tasks.append(task)
@@ -241,23 +248,12 @@ class OrganizeTaskService:
             ).all()
         )
 
-        path_to_keywords: dict[str, set[int]] = {}
-        for hit in hits:
-            if hit.keyword_entry_id is None:
-                continue
-            node = self.db.scalar(
-                select(TreeNode)
-                .where(TreeNode.import_id == import_id)
-                .where(TreeNode.raw_path == hit.source_path)
-                .where(TreeNode.node_type == "folder")
-            )
-            if node is None:
-                continue
-            path_to_keywords.setdefault(hit.source_path, set()).add(hit.keyword_entry_id)
+        path_to_hits = self._group_folder_hits_by_source_path(import_id=import_id, hits=hits)
 
         conflicts: list[AmbiguousKeywordConflict] = []
-        for source_path, keyword_ids in path_to_keywords.items():
-            if len(keyword_ids) <= 1:
+        for source_path, source_hits in path_to_hits.items():
+            keyword_ids = self._resolve_specific_keyword_ids(source_hits)
+            if len(keyword_ids) <= self.COMBINE_MULTI_MATCH_MAX:
                 continue
             sorted_options = sorted(
                 [AmbiguousKeywordOption(id=kid, name=entry_by_id[kid].canonical_name) for kid in keyword_ids],
@@ -451,6 +447,80 @@ class OrganizeTaskService:
             cleaned = f"/{cleaned}"
         return cleaned.rstrip("/")
 
+    def _group_folder_hits_by_source_path(
+        self,
+        *,
+        import_id: int,
+        hits: list[KeywordHit],
+    ) -> dict[str, list[KeywordHit]]:
+        path_to_hits: dict[str, list[KeywordHit]] = {}
+        for hit in hits:
+            if hit.keyword_entry_id is None:
+                continue
+            node = self.db.scalar(
+                select(TreeNode)
+                .where(TreeNode.import_id == import_id)
+                .where(TreeNode.raw_path == hit.source_path)
+                .where(TreeNode.node_type == "folder")
+            )
+            if node is None:
+                continue
+            path_to_hits.setdefault(hit.source_path, []).append(hit)
+        return path_to_hits
+
+    @classmethod
+    def _resolve_specific_keyword_ids(cls, hits: list[KeywordHit]) -> set[int]:
+        keyword_terms: dict[int, set[str]] = {}
+        for hit in hits:
+            if hit.keyword_entry_id is None:
+                continue
+            normalized_term = cls._normalize_match_term(hit.raw_keyword or hit.normalized_keyword)
+            if not normalized_term:
+                continue
+            keyword_terms.setdefault(hit.keyword_entry_id, set()).add(normalized_term)
+
+        keyword_ids = set(keyword_terms)
+        if len(keyword_ids) <= 1 or not cls.PREFER_SPECIFIC_MATCH:
+            return keyword_ids
+
+        filtered_ids: set[int] = set()
+        for keyword_id, terms in keyword_terms.items():
+            # 短别名完全被其它关键词的更长命中覆盖时，不再参与歧义裁决。
+            covered_by_more_specific = True
+            for term in terms:
+                if not cls._is_term_covered_by_other_keyword(
+                    term=term,
+                    keyword_id=keyword_id,
+                    keyword_terms=keyword_terms,
+                ):
+                    covered_by_more_specific = False
+                    break
+            if not covered_by_more_specific:
+                filtered_ids.add(keyword_id)
+
+        return filtered_ids or keyword_ids
+
+    @staticmethod
+    def _is_term_covered_by_other_keyword(
+        *,
+        term: str,
+        keyword_id: int,
+        keyword_terms: dict[int, set[str]],
+    ) -> bool:
+        for other_keyword_id, other_terms in keyword_terms.items():
+            if other_keyword_id == keyword_id:
+                continue
+            for other_term in other_terms:
+                if term != other_term and term in other_term:
+                    return True
+        return False
+
+    @staticmethod
+    def _normalize_match_term(raw: str | None) -> str:
+        normalized = (raw or "").strip().casefold()
+        normalized = re.sub(r"\s+", "", normalized)
+        return normalized
+
     @classmethod
     def _build_keyword_directory_names(cls, entries: list[KeywordEntry]) -> dict[int, str]:
         by_entry: dict[int, str] = {}
@@ -471,3 +541,16 @@ class OrganizeTaskService:
         cleaned = cleaned.strip(" .")
         cleaned = re.sub(r"_+", "_", cleaned)
         return cleaned or f"未命名关键词_{keyword_entry_id}"
+
+    @classmethod
+    def _build_combined_keyword_directory_name(cls, entries: list[KeywordEntry]) -> str:
+        parts = [
+            cls._sanitize_directory_name(entry.canonical_name, entry.id)
+            for entry in sorted(entries, key=lambda item: item.canonical_name)
+        ]
+        return "__".join(part for part in parts if part) or "组合关键词"
+
+    @staticmethod
+    def _build_combined_keyword_label(entries: list[KeywordEntry]) -> str:
+        names = [entry.canonical_name for entry in sorted(entries, key=lambda item: item.canonical_name)]
+        return " + ".join(names)

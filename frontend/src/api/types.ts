@@ -146,6 +146,8 @@ export interface KeywordDuplicatePair {
   keyword_1: KeywordEntry
   keyword_2: KeywordEntry
   score: number
+  keyword_1_reference_count: number
+  keyword_2_reference_count: number
 }
 export interface KeywordDuplicateScanResponse {
   pairs: KeywordDuplicatePair[]

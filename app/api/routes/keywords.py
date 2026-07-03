@@ -870,12 +870,17 @@ def scan_duplicate_keywords(payload: KeywordDuplicateScanRequest, db: Session = 
         status=payload.status,
         threshold=payload.threshold,
     )
+    reference_counts = service.count_whitelist_candidate_references(
+        [entry.id for pair in pairs for entry in pair[:2]]
+    )
     return KeywordDuplicateScanResponse(
         pairs=[
             KeywordDuplicatePairResponse(
                 keyword_1=_to_entry_response(a),
                 keyword_2=_to_entry_response(b),
-                score=score
+                score=score,
+                keyword_1_reference_count=reference_counts.get(a.id, 0),
+                keyword_2_reference_count=reference_counts.get(b.id, 0),
             )
             for a, b, score in pairs
         ]
@@ -1023,6 +1028,7 @@ def keyword_duplicates_workbench() -> str:
               </div>
               <div class="badges">
                 <span class="badge">别名数: ${k1.aliases ? k1.aliases.length : 0}</span>
+                <span class="badge">候选引用: ${pair.keyword_1_reference_count || 0}</span>
                 <span class="badge">${k1.status}</span>
               </div>
             </div>
@@ -1035,6 +1041,7 @@ def keyword_duplicates_workbench() -> str:
               </div>
               <div class="badges">
                 <span class="badge">别名数: ${k2.aliases ? k2.aliases.length : 0}</span>
+                <span class="badge">候选引用: ${pair.keyword_2_reference_count || 0}</span>
                 <span class="badge">${k2.status}</span>
               </div>
             </div>

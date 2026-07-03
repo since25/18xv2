@@ -124,6 +124,9 @@ export default function KeywordDuplicatesPage() {
                       <Tag>{pair.keyword_1.keyword_type}</Tag>
                       <Tag>{pair.keyword_1.status}</Tag>
                       <Tag>{`别名 ${pair.keyword_1.aliases.length}`}</Tag>
+                      <Tag color={pair.keyword_1_reference_count > 0 ? 'blue' : undefined}>
+                        {`候选引用 ${pair.keyword_1_reference_count}`}
+                      </Tag>
                     </div>
                     <Text type="secondary">{pair.keyword_1.note || '无备注'}</Text>
                   </Card>
@@ -138,6 +141,9 @@ export default function KeywordDuplicatesPage() {
                       <Tag>{pair.keyword_2.keyword_type}</Tag>
                       <Tag>{pair.keyword_2.status}</Tag>
                       <Tag>{`别名 ${pair.keyword_2.aliases.length}`}</Tag>
+                      <Tag color={pair.keyword_2_reference_count > 0 ? 'blue' : undefined}>
+                        {`候选引用 ${pair.keyword_2_reference_count}`}
+                      </Tag>
                     </div>
                     <Text type="secondary">{pair.keyword_2.note || '无备注'}</Text>
                   </Card>

@@ -284,6 +284,8 @@ class KeywordRegistryService:
         existing_aliases = {alias.alias_normalized for alias in canonical.aliases}
         for entry in entries:
             moved_aliases: list[str] = []
+            moved_candidate_count = 0
+            deduped_candidate_count = 0
             for alias in list(entry.aliases):
                 if alias.alias_normalized in existing_aliases:
                     self.db.delete(alias)
@@ -298,6 +300,28 @@ class KeywordRegistryService:
                 },
                 synchronize_session=False,
             )
+            candidates = list(
+                self.db.scalars(
+                    select(WhitelistCandidate).where(
+                        WhitelistCandidate.matched_keyword_entry_id == entry.id
+                    )
+                ).all()
+            )
+            for candidate in candidates:
+                conflict = self.db.scalar(
+                    select(WhitelistCandidate).where(
+                        WhitelistCandidate.source_tid == candidate.source_tid,
+                        WhitelistCandidate.source_magnet == candidate.source_magnet,
+                        WhitelistCandidate.matched_keyword_entry_id == canonical.id,
+                    )
+                )
+                if conflict is not None:
+                    self._merge_whitelist_candidate_state(conflict, candidate)
+                    self.db.delete(candidate)
+                    deduped_candidate_count += 1
+                    continue
+                candidate.matched_keyword_entry_id = canonical.id
+                moved_candidate_count += 1
             if entry.note:
                 suffix = f"\nMerged from #{entry.id}: {entry.canonical_name}"
                 canonical.note = (canonical.note or note or "").rstrip() + suffix
@@ -310,6 +334,8 @@ class KeywordRegistryService:
                     "merged_entry_name": entry.canonical_name,
                     "moved_aliases": moved_aliases,
                     "moved_alias_count": len(moved_aliases),
+                    "moved_whitelist_candidate_count": moved_candidate_count,
+                    "deduped_whitelist_candidate_count": deduped_candidate_count,
                 },
             )
             self.db.delete(entry)
@@ -371,6 +397,51 @@ class KeywordRegistryService:
                 )
             )
         return list(self.db.scalars(stmt).all())
+
+    def count_whitelist_candidate_references(self, entry_ids: list[int]) -> dict[int, int]:
+        counts = {entry_id: 0 for entry_id in entry_ids}
+        if not counts:
+            return counts
+        rows = self.db.execute(
+            select(
+                WhitelistCandidate.matched_keyword_entry_id,
+                func.count(WhitelistCandidate.id),
+            )
+            .where(WhitelistCandidate.matched_keyword_entry_id.in_(list(counts)))
+            .group_by(WhitelistCandidate.matched_keyword_entry_id)
+        ).all()
+        for entry_id, count in rows:
+            counts[entry_id] = int(count)
+        return counts
+
+    @staticmethod
+    def _whitelist_candidate_state_rank(status: str | None) -> int:
+        return {
+            "pending": 0,
+            "failed": 1,
+            "dismissed": 2,
+            "submitted": 3,
+        }.get(status or "", 0)
+
+    def _merge_whitelist_candidate_state(self, target: WhitelistCandidate, source: WhitelistCandidate) -> None:
+        """冲突候选合并时保留处理进度更靠后的状态。"""
+        source_rank = self._whitelist_candidate_state_rank(source.lifecycle_status)
+        target_rank = self._whitelist_candidate_state_rank(target.lifecycle_status)
+        if source_rank <= target_rank:
+            return
+        target.lifecycle_status = source.lifecycle_status
+        target.magnet_task_id = source.magnet_task_id
+        target.dismissed_at = source.dismissed_at
+        target.submitted_at = source.submitted_at
+        target.failure_reason = source.failure_reason
+        target.duplicate_status = source.duplicate_status
+        target.duplicate_reason = source.duplicate_reason
+        target.matched_import_label = source.matched_import_label
+        target.last_scanned_tree_import_id = source.last_scanned_tree_import_id
+        target.match_score = source.match_score
+        target.matched_keyword = source.matched_keyword
+        target.matched_alias = source.matched_alias
+        target.target_path = source.target_path
 
     def find_entry_by_keyword(self, keyword: str) -> KeywordEntry | None:
         normalized = normalize_keyword_text(keyword)
