@@ -419,6 +419,67 @@ def test_delete_plan_intake_is_idempotent_for_same_item_and_url(api_context) -> 
         assert len(mappings[0].paths) == 2
 
 
+def test_delete_plan_intake_deduplicates_overlapping_strm_root_matches(api_context, monkeypatch) -> None:
+    source = api_context.tmp_path / "source"
+    organized = api_context.tmp_path / "organized"
+    source.mkdir(exist_ok=True)
+    organized.mkdir(exist_ok=True)
+    monkeypatch.setenv("EMBY_MEDIA_ACTIONS_STRM_ROOTS", f"{api_context.tmp_path},{source}")
+    from app.core.config import get_settings
+    get_settings.cache_clear()
+
+    url = "http://192.168.70.138:5244/d/115_OPEN/%E7%94%B5%E5%BD%B1/overlap.mkv"
+    source_path = source / "overlap.strm"
+    source_path.write_text(url, encoding="utf-8")
+    organized_path = organized / "overlap.strm"
+    organized_path.write_text(url, encoding="utf-8")
+    api_context.fake_115.add_node(NodePayload(id="remote-overlap", name="overlap.mkv", path="/电影/overlap.mkv", parent_id="0", is_file=True))
+
+    response = api_context.client.post(
+        "/emby-media-actions/intake",
+        json={
+            "action": "delete_plan",
+            "url": url,
+            "title": "重叠根目录电影",
+            "emby_item_id": "movie-overlap",
+        },
+    )
+
+    assert response.status_code == 200
+    with api_context.session_factory() as db:
+        mapping = db.query(_emby_media_actions.EmbyMediaMapping).filter_by(emby_item_id="movie-overlap").one()
+        persisted_paths = [path.path for path in mapping.paths]
+        assert sorted(persisted_paths) == sorted({str(source_path), str(organized_path)})
+
+
+def test_delete_plan_intake_preserves_existing_remote_file_id_when_refresh_resolution_fails(api_context) -> None:
+    source = api_context.tmp_path / "source"
+    organized = api_context.tmp_path / "organized"
+    source.mkdir(exist_ok=True)
+    organized.mkdir(exist_ok=True)
+    url = "http://192.168.70.138:5244/d/115_OPEN/%E7%94%B5%E5%BD%B1/preserve.mkv"
+    (source / "preserve.strm").write_text(url, encoding="utf-8")
+    (organized / "preserve.strm").write_text(url, encoding="utf-8")
+    api_context.fake_115.add_node(NodePayload(id="remote-preserve", name="preserve.mkv", path="/电影/preserve.mkv", parent_id="0", is_file=True))
+    payload = {
+        "action": "delete_plan",
+        "url": url,
+        "title": "保留远端 ID",
+        "emby_item_id": "movie-preserve",
+    }
+
+    first = api_context.client.post("/emby-media-actions/intake", json=payload)
+    del api_context.fake_115.nodes["remote-preserve"]
+    second = api_context.client.post("/emby-media-actions/intake", json=payload)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert second.json()["delete_plan"]["total_items"] == 3
+    with api_context.session_factory() as db:
+        mapping = db.query(_emby_media_actions.EmbyMediaMapping).filter_by(emby_item_id="movie-preserve", alist_url=url).one()
+        assert mapping.remote_file_id == "remote-preserve"
+
+
 def test_delete_plan_intake_resolves_strm_and_creates_plan(client: TestClient, tmp_path, monkeypatch) -> None:
     source = tmp_path / "source"
     organized = tmp_path / "organized"

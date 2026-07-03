@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -46,6 +47,7 @@ class EmbyDeletePlanService:
                 EmbyMediaMapping.alist_url == alist_url,
             )
         )
+        is_new_mapping = mapping is None
         if mapping is None:
             mapping = EmbyMediaMapping(emby_item_id=emby_item_id, alist_url=alist_url)
             self.db.add(mapping)
@@ -60,9 +62,10 @@ class EmbyDeletePlanService:
         mapping.alist_mount_name = mount_name
         mapping.remote_provider = "115"
         mapping.remote_path = remote_path
-        mapping.remote_file_id = remote_file_id
+        if is_new_mapping or remote_file_id:
+            mapping.remote_file_id = remote_file_id
         self.db.flush()
-        for match in matches:
+        for match in self._unique_matches_by_resolved_path(matches):
             mapping.paths.append(
                 EmbyMediaMappingPath(
                     path_role=match.path_role,
@@ -77,6 +80,18 @@ class EmbyDeletePlanService:
         self.db.commit()
         self.db.refresh(mapping)
         return mapping
+
+    @staticmethod
+    def _unique_matches_by_resolved_path(matches) -> list:
+        unique_matches = []
+        seen_paths: set[str] = set()
+        for match in matches:
+            resolved_path = str(Path(match.path).expanduser().resolve())
+            if resolved_path in seen_paths:
+                continue
+            seen_paths.add(resolved_path)
+            unique_matches.append(match)
+        return unique_matches
 
     def create_plan_from_mapping(self, *, mapping_id: int, scope: str, source: str) -> EmbyDeletePlan:
         mapping = self.db.get(EmbyMediaMapping, mapping_id)
