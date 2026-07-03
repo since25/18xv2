@@ -58,6 +58,14 @@ EMBY_MEDIA_ACTIONS_DELETE_DRY_RUN_DEFAULT=true
 
 `EMBY_USER_ID` 用于后端配置化 Emby client 的用户级 item 查询。`EMBY_API_KEY` 必须保留在 `.env` / secret 中，不提交到仓库。
 
+`EMBY_MEDIA_ACTIONS_ENABLED=false` 时，`/emby-media-actions/*` 路由会返回 disabled，不再接收 IINA 或 Web UI 请求。
+
+`EMBY_MEDIA_ACTIONS_DELETE_DRY_RUN_DEFAULT=true` 时，删除计划仍可生成和查看，但 `/delete-plans/{id}/confirm` 会拒绝真实删除。完成端到端 dry-run 检查后，如需真实删除，需要在服务器环境中显式设置：
+
+```bash
+EMBY_MEDIA_ACTIONS_DELETE_DRY_RUN_DEFAULT=false
+```
+
 ## STRM 与媒体根目录
 
 扫描总根：
@@ -89,7 +97,8 @@ EMBY_MEDIA_ACTIONS_SOURCE_ROOTS=/mnt/cache/docker1/alist-strm/video/alist_mv1,/m
 3. 对剧集计划，在 Web UI 选择 `单集` / `整季` / `整剧` 后点击生成范围计划，只产生新的 draft plan，不删除任何内容。
 4. draft plan 中本地 STRM / 整理后 STRM 路径均位于 allow-list roots 内；不在 roots 内的路径应显示 blocked。
 5. `remote_115` 项必须有 `remote_file_id`，并且 dry-run 没有 blocked 后，才允许确认执行。
-6. 真实删除前先保持 `EMBY_MEDIA_ACTIONS_DELETE_DRY_RUN_DEFAULT=true` 做一次端到端演练。
+6. 真实删除前先保持 `EMBY_MEDIA_ACTIONS_DELETE_DRY_RUN_DEFAULT=true` 做一次端到端演练，并确认 `/confirm` 被阻止。
+7. 确认测试媒体可删除后，再把服务器环境改为 `EMBY_MEDIA_ACTIONS_DELETE_DRY_RUN_DEFAULT=false`，重启后端，再执行一次真实删除。
 
 ## 演员名单链路检查
 

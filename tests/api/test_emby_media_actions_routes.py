@@ -46,6 +46,8 @@ def api_context(tmp_path, monkeypatch):
     monkeypatch.setenv("AUTH_STORE_PATH", str(tmp_path / "auth.json"))
     monkeypatch.setenv("AUTH_SESSION_SECRET", "test-secret")
     monkeypatch.setenv("AUTH_COOKIE_SECURE", "false")
+    monkeypatch.setenv("EMBY_MEDIA_ACTIONS_ENABLED", "true")
+    monkeypatch.setenv("EMBY_MEDIA_ACTIONS_DELETE_DRY_RUN_DEFAULT", "false")
     monkeypatch.setenv("EMBY_MEDIA_ACTIONS_STRM_ROOTS", str(tmp_path))
     monkeypatch.setenv("EMBY_MEDIA_ACTIONS_SOURCE_ROOTS", str(tmp_path / "source"))
     monkeypatch.setenv("EMBY_MEDIA_ACTIONS_ORGANIZED_ROOTS", str(tmp_path / "organized"))
@@ -182,6 +184,25 @@ def test_metadata_candidate_apply_route(client: TestClient) -> None:
 
     assert applied.status_code == 200
     assert applied.json()["status"] == "applied"
+
+
+def test_emby_media_actions_disabled_rejects_intake(api_context, monkeypatch) -> None:
+    monkeypatch.setenv("EMBY_MEDIA_ACTIONS_ENABLED", "false")
+    from app.core.config import get_settings
+    get_settings.cache_clear()
+
+    response = api_context.client.post(
+        "/emby-media-actions/intake",
+        json={
+            "action": "metadata_blacklist",
+            "title": "测试电影",
+            "emby_item_id": "item-1",
+            "source": "api",
+        },
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "emby media actions disabled"
 
 
 def test_metadata_candidate_detail_includes_snapshot_actor_choices(client: TestClient) -> None:
@@ -866,6 +887,25 @@ def test_confirm_delete_plan_requires_true(api_context) -> None:
     assert source_file.exists()
     assert organized_file.exists()
     assert "remote-1" in api_context.fake_115.nodes
+
+
+def test_confirm_delete_plan_respects_dry_run_default(api_context, monkeypatch) -> None:
+    plan_id, source_file, organized_file = _draft_delete_plan(api_context)
+    monkeypatch.setenv("EMBY_MEDIA_ACTIONS_DELETE_DRY_RUN_DEFAULT", "true")
+    from app.core.config import get_settings
+    get_settings.cache_clear()
+
+    response = api_context.client.post(f"/emby-media-actions/delete-plans/{plan_id}/confirm", json={"confirm": True})
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "real deletion disabled by EMBY_MEDIA_ACTIONS_DELETE_DRY_RUN_DEFAULT"
+    assert source_file.exists()
+    assert organized_file.exists()
+    assert "remote-1" in api_context.fake_115.nodes
+    with api_context.session_factory() as db:
+        plan = db.get(EmbyDeletePlan, plan_id)
+        assert plan is not None
+        assert plan.status == "draft"
 
 
 def test_unknown_delete_plan_and_metadata_candidate_ids_return_404(client: TestClient) -> None:

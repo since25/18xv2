@@ -29,6 +29,11 @@ from app.services.emby_media_actions.strm_mapping_service import StrmMappingServ
 router = APIRouter(prefix="/emby-media-actions", tags=["emby-media-actions"])
 
 
+def _ensure_emby_media_actions_enabled() -> None:
+    if not get_settings().emby_media_actions_enabled:
+        raise HTTPException(status_code=404, detail="emby media actions disabled")
+
+
 def _delete_plan_response(plan: EmbyDeletePlan) -> EmbyDeletePlanResponse:
     return EmbyDeletePlanResponse.model_validate(plan)
 
@@ -223,6 +228,7 @@ def _payload_context_for_delete(payload: EmbyMediaIntakeRequest, context: EmbyIt
 
 @router.post("/intake", response_model=EmbyMediaIntakeResponse)
 def intake(payload: EmbyMediaIntakeRequest, request: Request, db: Session = Depends(get_db)) -> EmbyMediaIntakeResponse:
+    _ensure_emby_media_actions_enabled()
     item_context = _resolve_item_context(payload, request)
     if payload.action in {"metadata_blacklist", "metadata_whitelist"}:
         if item_context is None and payload.source == "iina_lua" and not payload.emby_payload:
@@ -308,6 +314,7 @@ def intake(payload: EmbyMediaIntakeRequest, request: Request, db: Session = Depe
 
 @router.get("/delete-plans/{plan_id}", response_model=EmbyDeletePlanResponse)
 def get_delete_plan(plan_id: int, db: Session = Depends(get_db)) -> EmbyDeletePlanResponse:
+    _ensure_emby_media_actions_enabled()
     plan = db.get(EmbyDeletePlan, plan_id)
     if plan is None:
         raise HTTPException(status_code=404, detail="delete plan not found")
@@ -321,6 +328,7 @@ def create_delete_plan_for_scope(
     request: Request,
     db: Session = Depends(get_db),
 ) -> EmbyDeletePlanResponse:
+    _ensure_emby_media_actions_enabled()
     plan = db.get(EmbyDeletePlan, plan_id)
     if plan is None:
         raise HTTPException(status_code=404, detail="delete plan not found")
@@ -347,7 +355,12 @@ def create_delete_plan_for_scope(
 
 @router.post("/delete-plans/{plan_id}/confirm")
 def confirm_delete_plan(plan_id: int, payload: EmbyDeleteConfirmRequest, request: Request, db: Session = Depends(get_db)):
+    _ensure_emby_media_actions_enabled()
+    if not payload.confirm:
+        raise HTTPException(status_code=400, detail="confirm must be true")
     settings = get_settings()
+    if settings.emby_media_actions_delete_dry_run_default:
+        raise HTTPException(status_code=400, detail="real deletion disabled by EMBY_MEDIA_ACTIONS_DELETE_DRY_RUN_DEFAULT")
     try:
         summary = EmbyDeletePlanService(
             db,
@@ -363,6 +376,7 @@ def confirm_delete_plan(plan_id: int, payload: EmbyDeleteConfirmRequest, request
 
 @router.get("/metadata-candidates/{candidate_id}", response_model=EmbyMetadataCandidateResponse)
 def get_metadata_candidate(candidate_id: int, db: Session = Depends(get_db)) -> EmbyMetadataCandidateResponse:
+    _ensure_emby_media_actions_enabled()
     candidate = db.get(EmbyMetadataCandidate, candidate_id)
     if candidate is None:
         raise HTTPException(status_code=404, detail="metadata candidate not found")
@@ -371,6 +385,7 @@ def get_metadata_candidate(candidate_id: int, db: Session = Depends(get_db)) -> 
 
 @router.post("/metadata-candidates/{candidate_id}/apply", response_model=EmbyMetadataCandidateResponse)
 def apply_metadata_candidate(candidate_id: int, payload: EmbyMetadataApplyRequest, db: Session = Depends(get_db)) -> EmbyMetadataCandidateResponse:
+    _ensure_emby_media_actions_enabled()
     try:
         candidate = EmbyMetadataCandidateService(db).apply_actors(candidate_id=candidate_id, actors=payload.actors, note=payload.note)
     except LookupError as exc:
