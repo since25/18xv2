@@ -1,18 +1,21 @@
 from __future__ import annotations
 
+import json
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
 from app.core.config import get_settings
-from app.models.emby_media_actions import EmbyDeletePlan, EmbyMetadataCandidate
+from app.models.emby_media_actions import EmbyDeletePlan, EmbyMediaMapping, EmbyMetadataCandidate
 from app.schemas.emby_media_actions import (
     EmbyDeleteConfirmRequest,
     EmbyDeletePlanResponse,
+    EmbyDeleteScopeRequest,
     EmbyMediaIntakeRequest,
     EmbyMediaIntakeResponse,
     EmbyMetadataApplyRequest,
@@ -28,6 +31,48 @@ router = APIRouter(prefix="/emby-media-actions", tags=["emby-media-actions"])
 
 def _delete_plan_response(plan: EmbyDeletePlan) -> EmbyDeletePlanResponse:
     return EmbyDeletePlanResponse.model_validate(plan)
+
+
+def _candidate_snapshot_actors(candidate: EmbyMetadataCandidate) -> list[dict]:
+    try:
+        raw_actors = json.loads(candidate.snapshot.actors_json or "[]")
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(raw_actors, list):
+        return []
+    actors: list[dict] = []
+    for raw_actor in raw_actors:
+        if isinstance(raw_actor, str):
+            actor = {"name": raw_actor, "role": None, "provider_ids": {}}
+        elif isinstance(raw_actor, dict):
+            name = raw_actor.get("name") or raw_actor.get("Name")
+            if not name:
+                continue
+            provider_ids = raw_actor.get("provider_ids") or raw_actor.get("ProviderIds") or {}
+            actor = {
+                "name": str(name),
+                "role": raw_actor.get("role") or raw_actor.get("Role"),
+                "provider_ids": provider_ids if isinstance(provider_ids, dict) else {},
+            }
+        else:
+            continue
+        actors.append(actor)
+    return actors
+
+
+def _metadata_candidate_response(candidate: EmbyMetadataCandidate) -> EmbyMetadataCandidateResponse:
+    return EmbyMetadataCandidateResponse(
+        id=candidate.id,
+        target_list=candidate.target_list,
+        status=candidate.status,
+        emby_item_id=candidate.emby_item_id,
+        snapshot_id=candidate.snapshot_id,
+        created_at=candidate.created_at,
+        applied_at=candidate.applied_at,
+        snapshot_title=candidate.snapshot.title,
+        snapshot_nfo_path=candidate.snapshot.nfo_path,
+        snapshot_actors=_candidate_snapshot_actors(candidate),
+    )
 
 
 def _emby_item_type(payload: EmbyMediaIntakeRequest) -> str:
@@ -269,6 +314,37 @@ def get_delete_plan(plan_id: int, db: Session = Depends(get_db)) -> EmbyDeletePl
     return _delete_plan_response(plan)
 
 
+@router.post("/delete-plans/{plan_id}/scope", response_model=EmbyDeletePlanResponse)
+def create_delete_plan_for_scope(
+    plan_id: int,
+    payload: EmbyDeleteScopeRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> EmbyDeletePlanResponse:
+    plan = db.get(EmbyDeletePlan, plan_id)
+    if plan is None:
+        raise HTTPException(status_code=404, detail="delete plan not found")
+    mapping = db.scalar(
+        select(EmbyMediaMapping)
+        .where(EmbyMediaMapping.emby_item_id == plan.emby_item_id)
+        .order_by(EmbyMediaMapping.id.desc())
+    )
+    if mapping is None:
+        raise HTTPException(status_code=404, detail="mapping not found for delete plan")
+    settings = get_settings()
+    try:
+        scoped_plan = EmbyDeletePlanService(
+            db,
+            client_115=getattr(request.app.state, "client_115", None),
+            allowed_roots=settings.emby_media_actions_source_roots + settings.emby_media_actions_organized_roots,
+        ).create_plan_from_mapping(mapping_id=mapping.id, scope=payload.scope, source=plan.source)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _delete_plan_response(scoped_plan)
+
+
 @router.post("/delete-plans/{plan_id}/confirm")
 def confirm_delete_plan(plan_id: int, payload: EmbyDeleteConfirmRequest, request: Request, db: Session = Depends(get_db)):
     settings = get_settings()
@@ -290,7 +366,7 @@ def get_metadata_candidate(candidate_id: int, db: Session = Depends(get_db)) -> 
     candidate = db.get(EmbyMetadataCandidate, candidate_id)
     if candidate is None:
         raise HTTPException(status_code=404, detail="metadata candidate not found")
-    return EmbyMetadataCandidateResponse.model_validate(candidate)
+    return _metadata_candidate_response(candidate)
 
 
 @router.post("/metadata-candidates/{candidate_id}/apply", response_model=EmbyMetadataCandidateResponse)
@@ -301,4 +377,4 @@ def apply_metadata_candidate(candidate_id: int, payload: EmbyMetadataApplyReques
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return EmbyMetadataCandidateResponse.model_validate(candidate)
+    return _metadata_candidate_response(candidate)

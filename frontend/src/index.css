@@ -344,6 +344,27 @@ body {
   margin-top: 16px;
 }
 
+.emby-actor-checkboxes {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 8px;
+  width: 100%;
+}
+
+.emby-actor-checkbox.ant-checkbox-wrapper {
+  min-width: 0;
+  margin-inline-start: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  background: var(--app-surface-elevated);
+}
+
+.emby-actor-checkbox span:last-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .ellipsis-stack {
   color: var(--app-text-muted);
   font-size: 12px;

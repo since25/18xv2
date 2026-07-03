@@ -36,6 +36,9 @@ class EmbyMetadataCandidateResponse(BaseModel):
     snapshot_id: int
     created_at: datetime
     applied_at: datetime | None
+    snapshot_title: str | None = None
+    snapshot_nfo_path: str | None = None
+    snapshot_actors: list[EmbyActorPayload] = Field(default_factory=list)
 
     model_config = {"from_attributes": True}
 
@@ -83,3 +86,7 @@ class EmbyMetadataApplyRequest(BaseModel):
 
 class EmbyDeleteConfirmRequest(BaseModel):
     confirm: bool = False
+
+
+class EmbyDeleteScopeRequest(BaseModel):
+    scope: Literal["movie", "episode", "season", "series"]

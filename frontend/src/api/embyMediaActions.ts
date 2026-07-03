@@ -26,6 +26,14 @@ export interface EmbyDeletePlan {
   items: EmbyDeletePlanItem[]
 }
 
+export type EmbyDeleteScope = 'movie' | 'episode' | 'season' | 'series'
+
+export interface EmbySnapshotActor {
+  name: string
+  role: string | null
+  provider_ids: Record<string, string>
+}
+
 export interface EmbyMetadataCandidate {
   id: number
   target_list: string
@@ -34,6 +42,9 @@ export interface EmbyMetadataCandidate {
   snapshot_id: number
   created_at: string
   applied_at: string | null
+  snapshot_title: string | null
+  snapshot_nfo_path: string | null
+  snapshot_actors: EmbySnapshotActor[]
 }
 
 export function getEmbyDeletePlan(id: number) {
@@ -45,6 +56,10 @@ export function confirmEmbyDeletePlan(id: number) {
     `/emby-media-actions/delete-plans/${id}/confirm`,
     { confirm: true },
   )
+}
+
+export function createEmbyDeletePlanForScope(id: number, scope: EmbyDeleteScope) {
+  return api.post<EmbyDeletePlan>(`/emby-media-actions/delete-plans/${id}/scope`, { scope })
 }
 
 export function getEmbyMetadataCandidate(id: number) {

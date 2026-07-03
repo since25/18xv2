@@ -184,6 +184,36 @@ def test_metadata_candidate_apply_route(client: TestClient) -> None:
     assert applied.json()["status"] == "applied"
 
 
+def test_metadata_candidate_detail_includes_snapshot_actor_choices(client: TestClient) -> None:
+    created = client.post(
+        "/emby-media-actions/intake",
+        json={
+            "action": "metadata_blacklist",
+            "path": "/media/a.strm",
+            "title": "测试电影",
+            "emby_item_id": "item-1",
+            "source": "api",
+            "actors": [
+                {"name": "演员A", "role": "主角", "provider_ids": {"Tmdb": "101"}},
+                {"name": "演员B", "role": None, "provider_ids": {}},
+            ],
+        },
+    )
+    assert created.status_code == 200
+    candidate_id = created.json()["metadata_candidate"]["id"]
+
+    detail = client.get(f"/emby-media-actions/metadata-candidates/{candidate_id}")
+
+    assert detail.status_code == 200
+    data = detail.json()
+    assert data["snapshot_title"] == "测试电影"
+    assert data["snapshot_nfo_path"] is None
+    assert data["snapshot_actors"] == [
+        {"name": "演员A", "role": "主角", "provider_ids": {"Tmdb": "101"}},
+        {"name": "演员B", "role": None, "provider_ids": {}},
+    ]
+
+
 def test_metadata_candidate_intake_preserves_full_emby_snapshot(api_context) -> None:
     playback_path = "/media/playback/movie.strm"
     nfo_path = str(api_context.tmp_path / "source" / "movie.nfo")
@@ -587,6 +617,73 @@ def test_delete_plan_intake_persists_episode_hierarchy_ids_for_broader_scopes(ap
         assert season_plan.scope == "season"
         assert series_plan.status == "draft"
         assert series_plan.scope == "series"
+
+
+def test_delete_plan_scope_route_creates_new_draft_plan_for_season(api_context) -> None:
+    source = api_context.tmp_path / "source"
+    organized = api_context.tmp_path / "organized"
+    source.mkdir(exist_ok=True)
+    organized.mkdir(exist_ok=True)
+    created_mapping_ids: list[int] = []
+    for index in (1, 2):
+        source_file = source / f"s01e{index:02d}.strm"
+        organized_file = organized / f"s01e{index:02d}.strm"
+        source_file.write_text("url", encoding="utf-8")
+        organized_file.write_text("url", encoding="utf-8")
+        _add_remote_node(api_context.fake_115, f"remote-season-{index}")
+        with api_context.session_factory() as db:
+            mapping = _emby_media_actions.EmbyMediaMapping(
+                emby_item_id=f"episode-{index}",
+                emby_item_type="Episode",
+                emby_title=f"第 {index} 集",
+                emby_series_id="series-1",
+                emby_season_id="season-1",
+                emby_episode_id=f"episode-{index}",
+                alist_url=f"http://example.test/d/115_OPEN/s01e{index:02d}.mkv",
+                alist_mount_name="115_OPEN",
+                remote_provider="115",
+                remote_path=f"/剧集/s01e{index:02d}.mkv",
+                remote_file_id=f"remote-season-{index}",
+            )
+            mapping.paths.extend(
+                [
+                    _emby_media_actions.EmbyMediaMappingPath(
+                        path_role="source_strm",
+                        path=str(source_file),
+                        root_name="source",
+                        root_path=str(source),
+                    ),
+                    _emby_media_actions.EmbyMediaMappingPath(
+                        path_role="organized_strm",
+                        path=str(organized_file),
+                        root_name="organized",
+                        root_path=str(organized),
+                    ),
+                ]
+            )
+            db.add(mapping)
+            db.commit()
+            created_mapping_ids.append(mapping.id)
+
+    with api_context.session_factory() as db:
+        first_plan = EmbyDeletePlanService(
+            db,
+            client_115=api_context.fake_115,
+            allowed_roots=[str(source), str(organized)],
+        ).create_plan_from_mapping(mapping_id=created_mapping_ids[0], scope="episode", source="route_test")
+        first_plan_id = first_plan.id
+
+    response = api_context.client.post(f"/emby-media-actions/delete-plans/{first_plan_id}/scope", json={"scope": "season"})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["id"] != first_plan_id
+    assert data["scope"] == "season"
+    assert data["status"] == "draft"
+    assert data["total_items"] == 6
+    with api_context.session_factory() as db:
+        assert db.get(EmbyDeletePlan, first_plan_id).status == "draft"
+        assert all(node_id in api_context.fake_115.nodes for node_id in ("remote-season-1", "remote-season-2"))
 
 
 def test_delete_plan_path_title_intake_resolves_episode_context_from_emby_client(api_context) -> None:
