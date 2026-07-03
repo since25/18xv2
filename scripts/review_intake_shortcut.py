@@ -69,6 +69,11 @@ def _login(opener, cookie_jar: MozillaCookieJar, cookie_path: Path, base_url: st
     username = args.username or os.getenv("REVIEW_INTAKE_USERNAME") or "wang"
     password = args.password or os.getenv("REVIEW_INTAKE_PASSWORD")
     if password is None:
+        if not sys.stdin.isatty():
+            raise RequestFailed(
+                401,
+                "登录已过期：IINA 快捷脚本无法交互输入密码，请先刷新 cookie 或配置 REVIEW_INTAKE_PASSWORD。",
+            )
         password = getpass.getpass(f"Password for {username}: ")
     _json_request(
         opener,
@@ -171,7 +176,12 @@ def main() -> int:
             print(exc.detail, file=sys.stderr)
             return 1
         _log(log_path, "login required")
-        _login(opener, cookie_jar, cookie_path, base_url, args)
+        try:
+            _login(opener, cookie_jar, cookie_path, base_url, args)
+        except RequestFailed as login_exc:
+            _log(log_path, f"login failed: {login_exc.status} {login_exc.detail}")
+            print(login_exc.detail, file=sys.stderr)
+            return 1
         try:
             response = _json_request(opener, url, payload)
         except RequestFailed as retry_exc:

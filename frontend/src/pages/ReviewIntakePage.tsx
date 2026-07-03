@@ -76,7 +76,7 @@ function errorMessage(error: unknown, fallback: string) {
 function pathTooltip(rawPath: string) {
   return (
     <div className="review-path-tooltip">
-      <div className="review-path-tooltip-label">完整路径</div>
+      <div className="review-path-tooltip-label">完整路径/标题</div>
       <div>{rawPath}</div>
     </div>
   )
@@ -226,7 +226,15 @@ export default function ReviewIntakePage() {
                   {candidate.keyword}
                 </Tag>
               </Tooltip>
-            )) : <Tag color="default">未提取</Tag>}
+            )) : (
+              <Tooltip
+                title={pathTooltip(item.raw_path)}
+                mouseEnterDelay={1}
+                placement="topLeft"
+              >
+                <Tag className="review-candidate-tag" color="default">未提取</Tag>
+              </Tooltip>
+            )}
           </Space>
         ),
       },
