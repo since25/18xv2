@@ -333,6 +333,17 @@ body {
   font-size: 12px;
 }
 
+.emby-media-actions-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(360px, 0.7fr);
+  gap: 16px;
+}
+
+.emby-media-actions-section {
+  width: 100%;
+  margin-top: 16px;
+}
+
 .ellipsis-stack {
   color: var(--app-text-muted);
   font-size: 12px;
@@ -433,6 +444,10 @@ body {
 }
 
 @media (max-width: 980px) {
+  .emby-media-actions-grid {
+    grid-template-columns: 1fr;
+  }
+
   .app-sidebar {
     position: static !important;
     width: 100% !important;
