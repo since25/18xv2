@@ -7,6 +7,7 @@ import {
   confirmEmbyDeletePlan,
   createEmbyDeletePlanForScope,
   deleteEmbyDeletePlan,
+  deleteEmbyMetadataCandidate,
   getEmbyDeletePlan,
   getEmbyMetadataCandidate,
   listEmbyDeletePlans,
@@ -72,6 +73,7 @@ export default function EmbyMediaActionsPage() {
   const [scopeLoading, setScopeLoading] = useState(false)
   const [confirmLoading, setConfirmLoading] = useState(false)
   const [candidateLoading, setCandidateLoading] = useState(false)
+  const [deletingCandidateId, setDeletingCandidateId] = useState<number | null>(null)
   const [candidateListLoading, setCandidateListLoading] = useState<Record<EmbyMetadataTargetList, boolean>>({
     emby_blacklist: false,
     emby_whitelist: false,
@@ -152,11 +154,27 @@ export default function EmbyMediaActionsPage() {
     },
     {
       title: '操作',
-      width: 80,
+      width: 130,
       render: (_, item) => (
-        <Button size="small" onClick={() => void loadCandidateById(item.id)}>
-          加载
-        </Button>
+        <Space size={4}>
+          <Button size="small" onClick={() => void loadCandidateById(item.id)}>
+            加载
+          </Button>
+          <Popconfirm
+            title={`清除候选 #${item.id}？`}
+            description="只删除候选记录，不会撤销已写入的名单。"
+            okText="清除"
+            cancelText="取消"
+            onConfirm={() => void removeCandidate(item)}
+          >
+            <Button
+              size="small"
+              danger
+              icon={<DeleteOutlined />}
+              loading={deletingCandidateId === item.id}
+            />
+          </Popconfirm>
+        </Space>
       ),
     },
   ]
@@ -275,6 +293,29 @@ export default function EmbyMediaActionsPage() {
       void messageApi.error(error instanceof Error ? error.message : '加载名单候选失败')
     } finally {
       setCandidateLoading(false)
+    }
+  }
+
+  const removeCandidate = async (item: EmbyMetadataCandidate) => {
+    setDeletingCandidateId(item.id)
+    try {
+      await deleteEmbyMetadataCandidate(item.id)
+      setCandidateLists((previous) => ({
+        emby_blacklist: previous.emby_blacklist.filter((candidateItem) => candidateItem.id !== item.id),
+        emby_whitelist: previous.emby_whitelist.filter((candidateItem) => candidateItem.id !== item.id),
+      }))
+      if (candidate?.id === item.id) {
+        setCandidate(null)
+        setCandidateId('')
+        setSelectedActors([])
+        setManualActors('')
+        setNote('')
+      }
+      void messageApi.success(`已清除候选 #${item.id}`)
+    } catch (error) {
+      void messageApi.error(error instanceof Error ? error.message : '清除名单候选失败')
+    } finally {
+      setDeletingCandidateId(null)
     }
   }
 
@@ -451,6 +492,17 @@ export default function EmbyMediaActionsPage() {
                 <Button type="primary" onClick={applyCandidate} disabled={candidate.status === 'applied'} loading={applyLoading}>
                   写入名单
                 </Button>
+                <Popconfirm
+                  title={`清除候选 #${candidate.id}？`}
+                  description="只删除候选记录，不会撤销已写入的名单。"
+                  okText="清除"
+                  cancelText="取消"
+                  onConfirm={() => void removeCandidate(candidate)}
+                >
+                  <Button danger icon={<DeleteOutlined />} loading={deletingCandidateId === candidate.id}>
+                    清除候选
+                  </Button>
+                </Popconfirm>
                 {candidate.snapshot_actors.length ? (
                   <Button onClick={() => setSelectedActors(candidate.snapshot_actors.map((actor) => actor.name))}>全选</Button>
                 ) : null}

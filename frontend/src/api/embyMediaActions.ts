@@ -81,6 +81,10 @@ export function listEmbyMetadataCandidates(targetList: EmbyMetadataTargetList, l
   )
 }
 
+export function deleteEmbyMetadataCandidate(id: number) {
+  return api.delete<{ ok: boolean; candidate_id: number }>(`/emby-media-actions/metadata-candidates/${id}`)
+}
+
 export function applyEmbyMetadataCandidate(id: number, actors: string[], note: string | null) {
   return api.post<EmbyMetadataCandidate>(`/emby-media-actions/metadata-candidates/${id}/apply`, { actors, note })
 }

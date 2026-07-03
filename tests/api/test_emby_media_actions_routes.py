@@ -268,6 +268,30 @@ def test_metadata_candidates_route_lists_recent_candidates_by_target_list(client
     assert {item["target_list"] for item in data} == {"emby_blacklist"}
 
 
+def test_metadata_candidate_route_deletes_candidate_record(client: TestClient) -> None:
+    created = client.post(
+        "/emby-media-actions/intake",
+        json={
+            "action": "metadata_blacklist",
+            "title": "误提交电影",
+            "emby_item_id": "candidate-delete-1",
+            "source": "api",
+            "actors": [{"name": "演员A", "role": None, "provider_ids": {}}],
+        },
+    )
+    assert created.status_code == 200
+    candidate_id = created.json()["metadata_candidate"]["id"]
+
+    response = client.delete(f"/emby-media-actions/metadata-candidates/{candidate_id}")
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True, "candidate_id": candidate_id}
+    assert client.get(f"/emby-media-actions/metadata-candidates/{candidate_id}").status_code == 404
+    listed = client.get("/emby-media-actions/metadata-candidates?target_list=emby_blacklist&limit=10")
+    assert listed.status_code == 200
+    assert all(item["id"] != candidate_id for item in listed.json())
+
+
 def test_metadata_candidate_apply_route(client: TestClient) -> None:
     created = client.post(
         "/emby-media-actions/intake",

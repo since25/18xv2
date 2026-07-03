@@ -421,6 +421,17 @@ def get_metadata_candidate(candidate_id: int, db: Session = Depends(get_db)) -> 
     return _metadata_candidate_response(candidate)
 
 
+@router.delete("/metadata-candidates/{candidate_id}")
+def delete_metadata_candidate(candidate_id: int, db: Session = Depends(get_db)):
+    _ensure_emby_media_actions_enabled()
+    candidate = db.get(EmbyMetadataCandidate, candidate_id)
+    if candidate is None:
+        raise HTTPException(status_code=404, detail="metadata candidate not found")
+    db.delete(candidate)
+    db.commit()
+    return {"ok": True, "candidate_id": candidate_id}
+
+
 @router.post("/metadata-candidates/{candidate_id}/apply", response_model=EmbyMetadataCandidateResponse)
 def apply_metadata_candidate(candidate_id: int, payload: EmbyMetadataApplyRequest, db: Session = Depends(get_db)) -> EmbyMetadataCandidateResponse:
     _ensure_emby_media_actions_enabled()
