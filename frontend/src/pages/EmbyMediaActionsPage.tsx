@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Button, Card, Checkbox, Descriptions, Input, Popconfirm, Select, Space, Table, Typography, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import {
@@ -7,6 +7,7 @@ import {
   createEmbyDeletePlanForScope,
   getEmbyDeletePlan,
   getEmbyMetadataCandidate,
+  listEmbyDeletePlans,
   type EmbyDeleteScope,
   type EmbyDeletePlan,
   type EmbyDeletePlanItem,
@@ -34,12 +35,14 @@ export default function EmbyMediaActionsPage() {
   const [planId, setPlanId] = useState('')
   const [candidateId, setCandidateId] = useState('')
   const [plan, setPlan] = useState<EmbyDeletePlan | null>(null)
+  const [recentPlans, setRecentPlans] = useState<EmbyDeletePlan[]>([])
   const [candidate, setCandidate] = useState<EmbyMetadataCandidate | null>(null)
   const [selectedScope, setSelectedScope] = useState<EmbyDeleteScope>('episode')
   const [selectedActors, setSelectedActors] = useState<string[]>([])
   const [manualActors, setManualActors] = useState('')
   const [note, setNote] = useState('')
   const [planLoading, setPlanLoading] = useState(false)
+  const [recentLoading, setRecentLoading] = useState(false)
   const [scopeLoading, setScopeLoading] = useState(false)
   const [confirmLoading, setConfirmLoading] = useState(false)
   const [candidateLoading, setCandidateLoading] = useState(false)
@@ -54,22 +57,60 @@ export default function EmbyMediaActionsPage() {
     { title: '阻止原因', dataIndex: 'blocked_reason', width: 180 },
   ]
 
-  const loadPlan = async () => {
-    const id = parseId(planId)
-    if (id == null) {
-      void messageApi.warning('请输入有效的 Plan ID')
-      return
+  const recentColumns: ColumnsType<EmbyDeletePlan> = [
+    { title: 'ID', dataIndex: 'id', width: 72 },
+    { title: '标题', dataIndex: 'summary' },
+    { title: '状态', dataIndex: 'status', width: 96 },
+    { title: '范围', dataIndex: 'scope', width: 88 },
+    { title: '条目', dataIndex: 'total_items', width: 80 },
+    { title: '阻止', dataIndex: 'blocked_count', width: 80 },
+    {
+      title: '操作',
+      width: 92,
+      render: (_, item) => (
+        <Button size="small" onClick={() => void loadPlanById(item.id)}>
+          加载
+        </Button>
+      ),
+    },
+  ]
+
+  const loadRecentPlans = async () => {
+    setRecentLoading(true)
+    try {
+      setRecentPlans(await listEmbyDeletePlans())
+    } catch (error) {
+      void messageApi.error(error instanceof Error ? error.message : '加载最近删除计划失败')
+    } finally {
+      setRecentLoading(false)
     }
+  }
+
+  useEffect(() => {
+    void loadRecentPlans()
+  }, [])
+
+  const loadPlanById = async (id: number) => {
     setPlanLoading(true)
     try {
       const nextPlan = await getEmbyDeletePlan(id)
       setPlan(nextPlan)
+      setPlanId(String(nextPlan.id))
       setSelectedScope(nextPlan.scope as EmbyDeleteScope)
     } catch (error) {
       void messageApi.error(error instanceof Error ? error.message : '加载删除计划失败')
     } finally {
       setPlanLoading(false)
     }
+  }
+
+  const loadPlan = async () => {
+    const id = parseId(planId)
+    if (id == null) {
+      void messageApi.warning('请输入有效的 Plan ID')
+      return
+    }
+    await loadPlanById(id)
   }
 
   const confirmPlan = async () => {
@@ -149,7 +190,17 @@ export default function EmbyMediaActionsPage() {
           <Space.Compact>
             <Input placeholder="Plan ID" value={planId} onChange={(event) => setPlanId(event.target.value)} />
             <Button onClick={loadPlan} loading={planLoading}>加载</Button>
+            <Button onClick={() => void loadRecentPlans()} loading={recentLoading}>刷新最近</Button>
           </Space.Compact>
+          <Table
+            rowKey="id"
+            size="small"
+            columns={recentColumns}
+            dataSource={recentPlans}
+            loading={recentLoading}
+            pagination={false}
+            className="emby-media-actions-section"
+          />
           {plan && (
             <Space direction="vertical" size="middle" className="emby-media-actions-section">
               <Descriptions size="small" column={2}>

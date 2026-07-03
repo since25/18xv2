@@ -312,6 +312,14 @@ def intake(payload: EmbyMediaIntakeRequest, request: Request, db: Session = Depe
     raise HTTPException(status_code=400, detail="delete_plan intake requires a resolved mapping")
 
 
+@router.get("/delete-plans", response_model=list[EmbyDeletePlanResponse])
+def list_delete_plans(limit: int = 20, db: Session = Depends(get_db)) -> list[EmbyDeletePlanResponse]:
+    _ensure_emby_media_actions_enabled()
+    safe_limit = max(1, min(limit, 100))
+    plans = db.scalars(select(EmbyDeletePlan).order_by(EmbyDeletePlan.id.desc()).limit(safe_limit)).all()
+    return [_delete_plan_response(plan) for plan in plans]
+
+
 @router.get("/delete-plans/{plan_id}", response_model=EmbyDeletePlanResponse)
 def get_delete_plan(plan_id: int, db: Session = Depends(get_db)) -> EmbyDeletePlanResponse:
     _ensure_emby_media_actions_enabled()

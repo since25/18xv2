@@ -160,6 +160,38 @@ def _draft_delete_plan(api_context) -> tuple[int, Path, Path]:
         return plan.id, source_file, organized_file
 
 
+def test_recent_delete_plans_route_returns_newest_first(api_context) -> None:
+    with api_context.session_factory() as db:
+        first = EmbyDeletePlan(
+            source="route_test",
+            emby_item_id="item-1",
+            scope="movie",
+            status="draft",
+            summary="第一部",
+            total_items=1,
+        )
+        second = EmbyDeletePlan(
+            source="route_test",
+            emby_item_id="item-2",
+            scope="movie",
+            status="draft",
+            summary="第二部",
+            total_items=1,
+        )
+        db.add_all([first, second])
+        db.commit()
+        first_plan_id = first.id
+        second_plan_id = second.id
+
+    response = api_context.client.get("/emby-media-actions/delete-plans?limit=5")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert [item["id"] for item in data[:2]] == [second_plan_id, first_plan_id]
+    assert data[0]["summary"] == "第二部"
+    assert data[0]["status"] == "draft"
+
+
 def test_metadata_candidate_apply_route(client: TestClient) -> None:
     created = client.post(
         "/emby-media-actions/intake",

@@ -51,6 +51,10 @@ export function getEmbyDeletePlan(id: number) {
   return api.get<EmbyDeletePlan>(`/emby-media-actions/delete-plans/${id}`)
 }
 
+export function listEmbyDeletePlans(limit = 20) {
+  return api.get<EmbyDeletePlan[]>(`/emby-media-actions/delete-plans?limit=${limit}`)
+}
+
 export function confirmEmbyDeletePlan(id: number) {
   return api.post<{ plan_id: number; total: number; deleted: number; failed: number; blocked: number }>(
     `/emby-media-actions/delete-plans/${id}/confirm`,
