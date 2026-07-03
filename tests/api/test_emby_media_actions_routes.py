@@ -20,8 +20,9 @@ from app.services.emby_media_actions.delete_plan_service import EmbyDeletePlanSe
 
 
 class FakeEmbyClient:
-    def __init__(self, items: list[dict]) -> None:
+    def __init__(self, items: list[dict], title_responses: dict[str, list[dict]] | None = None) -> None:
         self.items = items
+        self.title_responses = title_responses
         self.get_item_calls: list[str] = []
         self.find_items_by_title_calls: list[str] = []
 
@@ -34,6 +35,8 @@ class FakeEmbyClient:
 
     def find_items_by_title(self, title: str) -> list[dict]:
         self.find_items_by_title_calls.append(title)
+        if self.title_responses is not None:
+            return self.title_responses.get(title, [])
         return self.items
 
 
@@ -315,6 +318,38 @@ def test_metadata_candidate_intake_resolves_path_title_context_from_emby_client(
     assert snapshot.emby_item_id == "episode-3"
     assert json.loads(snapshot.emby_json) == emby_payload
     assert json.loads(snapshot.actors_json) == [{"name": "演员A", "role": "主角", "provider_ids": {"Tmdb": "101"}}]
+
+
+def test_iina_metadata_intake_resolves_filename_title_with_stem_candidate(api_context) -> None:
+    playback_path = str(api_context.tmp_path / "source" / "s01e03.strm")
+    emby_payload = {
+        "Id": "episode-3",
+        "Name": "第三集",
+        "Type": "Episode",
+        "Path": playback_path,
+        "SeriesId": "series-1",
+        "SeasonId": "season-1",
+        "ProviderIds": {"Tvdb": "333"},
+        "People": [{"Name": "演员A", "Type": "Actor", "Role": "主角", "ProviderIds": {"Tmdb": "101"}}],
+    }
+    emby_client = FakeEmbyClient([], title_responses={"s01e03": [emby_payload]})
+    api_context.client.app.state.emby_client = emby_client
+
+    created = api_context.client.post(
+        "/emby-media-actions/intake",
+        json={
+            "action": "metadata_blacklist",
+            "path": playback_path,
+            "title": "s01e03.strm",
+            "source": "iina_lua",
+        },
+    )
+
+    assert created.status_code == 200
+    assert emby_client.find_items_by_title_calls == ["s01e03.strm", "s01e03"]
+    snapshot = _snapshot(api_context, created.json()["metadata_candidate"]["snapshot_id"])
+    assert snapshot.emby_item_id == "episode-3"
+    assert json.loads(snapshot.emby_json) == emby_payload
 
 
 def test_iina_metadata_intake_without_payload_or_resolvable_emby_client_returns_400(api_context) -> None:

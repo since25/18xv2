@@ -103,6 +103,21 @@ def _emby_client_for_request(request: Request) -> EmbyClient | None:
     )
 
 
+def _title_search_candidates(payload: EmbyMediaIntakeRequest) -> list[str]:
+    candidates: list[str] = []
+
+    def add(value: str | None) -> None:
+        if value and value not in candidates:
+            candidates.append(value)
+
+    add(payload.title)
+    if payload.title and Path(payload.title).suffix:
+        add(Path(payload.title).stem)
+    if payload.path:
+        add(Path(payload.path).stem)
+    return candidates
+
+
 def _resolve_item_context(payload: EmbyMediaIntakeRequest, request: Request) -> EmbyItemContext | None:
     if payload.emby_payload:
         return build_item_context(payload.emby_payload)
@@ -117,18 +132,17 @@ def _resolve_item_context(payload: EmbyMediaIntakeRequest, request: Request) -> 
         except Exception:
             pass
 
-    title = payload.title
-    if not title and payload.path:
-        title = Path(payload.path).stem
-    if not title:
+    titles = _title_search_candidates(payload)
+    if not titles:
         return None
-    try:
-        item = _select_item_for_path(client.find_items_by_title(title), payload.path)
-    except Exception:
-        return None
-    if item is None:
-        return None
-    return build_item_context(item)
+    for title in titles:
+        try:
+            item = _select_item_for_path(client.find_items_by_title(title), payload.path)
+        except Exception:
+            continue
+        if item is not None:
+            return build_item_context(item)
+    return None
 
 
 def _payload_context_for_delete(payload: EmbyMediaIntakeRequest, context: EmbyItemContext | None) -> tuple[str, str, str, str | None, str | None, str | None]:
