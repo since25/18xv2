@@ -383,13 +383,20 @@ def test_metadata_candidate_intake_rejects_malformed_nfo_xml(client: TestClient)
     assert "nfo_xml" in response.json()["detail"]
 
 
-def test_metadata_candidate_intake_rejects_emby_payload_missing_id(client: TestClient) -> None:
+@pytest.mark.parametrize(
+    ("emby_payload", "title"),
+    [
+        pytest.param({"Name": "bad-no-id"}, "bad-no-id", id="missing-id"),
+        pytest.param({}, "empty-payload", id="empty-payload"),
+    ],
+)
+def test_metadata_candidate_intake_rejects_invalid_emby_payload(client: TestClient, emby_payload: dict, title: str) -> None:
     response = client.post(
         "/emby-media-actions/intake",
         json={
             "action": "metadata_blacklist",
-            "title": "bad-no-id",
-            "emby_payload": {"Name": "bad-no-id"},
+            "title": title,
+            "emby_payload": emby_payload,
         },
     )
 
@@ -419,15 +426,22 @@ def test_delete_plan_intake_rejects_malformed_stream_url(client: TestClient) -> 
     assert "stream URL" in response.json()["detail"]
 
 
-def test_delete_plan_intake_rejects_emby_payload_missing_id(client: TestClient) -> None:
+@pytest.mark.parametrize(
+    ("emby_payload", "title"),
+    [
+        pytest.param({"Name": "bad-no-id"}, "bad-no-id", id="missing-id"),
+        pytest.param({}, "empty-payload", id="empty-payload"),
+    ],
+)
+def test_delete_plan_intake_rejects_invalid_emby_payload(client: TestClient, emby_payload: dict, title: str) -> None:
     response = client.post(
         "/emby-media-actions/intake",
         json={
             "action": "delete_plan",
             "url": "http://192.168.70.138:5244/d/115_OPEN/%E7%94%B5%E5%BD%B1/bad-no-id.mkv",
-            "title": "bad-no-id",
+            "title": title,
             "emby_item_id": "bad-no-id",
-            "emby_payload": {"Name": "bad-no-id"},
+            "emby_payload": emby_payload,
         },
     )
 

@@ -119,7 +119,7 @@ def _title_search_candidates(payload: EmbyMediaIntakeRequest) -> list[str]:
 
 
 def _resolve_item_context(payload: EmbyMediaIntakeRequest, request: Request) -> EmbyItemContext | None:
-    if payload.emby_payload:
+    if payload.emby_payload is not None:
         try:
             return build_item_context(payload.emby_payload)
         except KeyError as exc:
