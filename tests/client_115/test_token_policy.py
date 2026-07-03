@@ -60,6 +60,89 @@ def test_persist_tokens_records_access_token_expiry(monkeypatch, tmp_path) -> No
     assert expires_at > datetime.now(timezone.utc) + timedelta(minutes=50)
 
 
+def test_persist_tokens_supports_constructor_only_open_client(monkeypatch, tmp_path) -> None:
+    from app.services.client_115 import client as client_module
+
+    monkeypatch.chdir(tmp_path)
+    constructed: list[dict[str, object]] = []
+
+    class ConstructorOnlyOpenClient:
+        def __init__(
+            self,
+            access_token: str = "",
+            refresh_token: str = "",
+            app_id: int = 0,
+            console_qrcode: bool = True,
+        ) -> None:
+            constructed.append(
+                {
+                    "access_token": access_token,
+                    "refresh_token": refresh_token,
+                    "app_id": app_id,
+                    "console_qrcode": console_qrcode,
+                }
+            )
+
+    monkeypatch.setattr(client_module, "P115OpenClient", ConstructorOnlyOpenClient)
+    client = Real115Client(
+        settings=Settings(ACCESS_TOKEN="old-access", REFRESH_TOKEN="old-refresh", APP_ID="123")
+    )
+
+    client.persist_token_payload(
+        TokenPayload(access_token="new-access", refresh_token="new-refresh", expires_in=3600)
+    )
+
+    assert constructed == [
+        {
+            "access_token": "new-access",
+            "refresh_token": "new-refresh",
+            "app_id": 123,
+            "console_qrcode": False,
+        }
+    ]
+
+
+def test_get_open_client_supports_constructor_only_open_client(monkeypatch, tmp_path) -> None:
+    from app.services.client_115 import client as client_module
+
+    monkeypatch.chdir(tmp_path)
+    constructed: list[dict[str, object]] = []
+
+    class ConstructorOnlyOpenClient:
+        def __init__(
+            self,
+            access_token: str = "",
+            refresh_token: str = "",
+            app_id: int = 0,
+            console_qrcode: bool = True,
+        ) -> None:
+            constructed.append(
+                {
+                    "access_token": access_token,
+                    "refresh_token": refresh_token,
+                    "app_id": app_id,
+                    "console_qrcode": console_qrcode,
+                }
+            )
+
+    monkeypatch.setattr(client_module, "P115OpenClient", ConstructorOnlyOpenClient)
+    client = Real115Client(
+        settings=Settings(ACCESS_TOKEN="stored-access", REFRESH_TOKEN="stored-refresh", APP_ID="123")
+    )
+
+    open_client = client._get_open_client()  # noqa: SLF001
+
+    assert isinstance(open_client, ConstructorOnlyOpenClient)
+    assert constructed == [
+        {
+            "access_token": "stored-access",
+            "refresh_token": "stored-refresh",
+            "app_id": 123,
+            "console_qrcode": False,
+        }
+    ]
+
+
 def test_submit_magnet_download_accepts_dict_data(monkeypatch, tmp_path) -> None:
     client = _build_client(monkeypatch, tmp_path)
     magnet_url = "magnet:?xt=urn:btih:dict-case"
@@ -109,3 +192,41 @@ def test_submit_magnet_download_accepts_list_data(monkeypatch, tmp_path) -> None
     assert result.task_id is None
     assert result.info_hash == "def456"
     assert result.url == magnet_url
+
+
+def test_submit_magnet_download_supports_clouddownload_method(monkeypatch, tmp_path) -> None:
+    from app.services.client_115 import client as client_module
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(client_module, "check_response", lambda response: response)
+    client = Real115Client(
+        settings=Settings(
+            ACCESS_TOKEN="access-token",
+            REFRESH_TOKEN="refresh-token",
+            APP_ID="123",
+            OFFLINE_DEFAULT_TARGET_CID="target-cid",
+            API_MIN_INTERVAL_MS=0,
+        )
+    )
+    calls: list[dict[str, str]] = []
+
+    class NewOpenClient:
+        def clouddownload_task_add_urls_open(self, payload: dict[str, str]) -> dict:
+            calls.append(payload)
+            return {
+                "state": True,
+                "data": {
+                    "task_id": 67890,
+                    "info_hash": "new-name",
+                    "url": payload["urls"],
+                    "status": 1,
+                },
+            }
+
+    client._open_client = NewOpenClient()  # noqa: SLF001
+
+    result = client.submit_magnet_download("magnet:?xt=urn:btih:new-name")
+
+    assert calls == [{"urls": "magnet:?xt=urn:btih:new-name", "wp_path_id": "target-cid"}]
+    assert result.task_id == "67890"
+    assert result.info_hash == "new-name"

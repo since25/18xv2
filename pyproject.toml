@@ -8,7 +8,7 @@ dependencies = [
   "alembic>=1.14.0",
   "fastapi>=0.115.0",
   "httpx>=0.28.0",
-  "p115client>=0.0.8.4.4",
+  "p115client==0.0.9.3.6",
   "pillow>=10.4.0",
   "pydantic-settings>=2.6.0",
   "python-dotenv>=1.0.1",

@@ -94,6 +94,33 @@ class Real115Client:
         if P115OpenClient is None:
             raise Client115Error("p115client is not installed")
 
+    def _create_open_client(self, access_token: str, refresh_token: str | None):
+        self._ensure_dependency()
+        from_token = getattr(P115OpenClient, "from_token", None)
+        if callable(from_token):
+            return from_token(access_token, refresh_token or "")
+
+        app_id = 0
+        if self.settings.app_id:
+            try:
+                app_id = int(self.settings.app_id)
+            except (TypeError, ValueError):
+                app_id = 0
+        return P115OpenClient(
+            access_token,
+            refresh_token or "",
+            app_id=app_id,
+            console_qrcode=False,
+        )
+
+    @staticmethod
+    def _get_first_callable(target, *method_names: str):
+        for method_name in method_names:
+            method = getattr(target, method_name, None)
+            if callable(method):
+                return method
+        raise Client115Error(f"p115client 缺少兼容方法：{', '.join(method_names)}")
+
     @staticmethod
     def _is_invalid_access_token_error(message: str) -> bool:
         code = Real115Client._extract_auth_error_code(message)
@@ -146,9 +173,7 @@ class Real115Client:
             expires_at = datetime.now(timezone.utc) + timedelta(seconds=max(0, token.expires_in))
         self._access_token_expires_at = expires_at
         # Replace open client so subsequent calls use the new token immediately
-        self._open_client = P115OpenClient.from_token(
-            token.access_token, self.settings.refresh_token or ""
-        )
+        self._open_client = self._create_open_client(token.access_token, self.settings.refresh_token)
         save_tokens(
             token.access_token,
             self.settings.refresh_token,
@@ -250,8 +275,9 @@ class Real115Client:
         if not self.settings.access_token:
             raise Client115Error("ACCESS_TOKEN is not configured")
         if self._open_client is None:
-            self._open_client = P115OpenClient.from_token(
-                self.settings.access_token, self.settings.refresh_token or ""
+            self._open_client = self._create_open_client(
+                self.settings.access_token,
+                self.settings.refresh_token,
             )
         return self._open_client
 
@@ -487,8 +513,14 @@ class Real115Client:
         resolved_target_cid = target_cid or self.settings.offline_default_target_cid
         if resolved_target_cid:
             payload["wp_path_id"] = resolved_target_cid
+        open_client = self._get_open_client()
+        add_urls = self._get_first_callable(
+            open_client,
+            "offline_add_urls_open",
+            "clouddownload_task_add_urls_open",
+        )
         response = self._call(
-            lambda: self._get_open_client().offline_add_urls_open(payload),
+            lambda: add_urls(payload),
             auth_required=True,
         )
         data = self._normalize_offline_task_response(response)
