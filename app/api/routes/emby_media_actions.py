@@ -120,7 +120,14 @@ def _title_search_candidates(payload: EmbyMediaIntakeRequest) -> list[str]:
 
 def _resolve_item_context(payload: EmbyMediaIntakeRequest, request: Request) -> EmbyItemContext | None:
     if payload.emby_payload:
-        return build_item_context(payload.emby_payload)
+        try:
+            return build_item_context(payload.emby_payload)
+        except KeyError as exc:
+            missing_key = exc.args[0] if exc.args else "required key"
+            raise HTTPException(status_code=400, detail=f"invalid emby_payload: missing {missing_key}") from exc
+        except (TypeError, ValueError) as exc:
+            detail = str(exc) or exc.__class__.__name__
+            raise HTTPException(status_code=400, detail=f"invalid emby_payload: {detail}") from exc
 
     client = _emby_client_for_request(request)
     if client is None:

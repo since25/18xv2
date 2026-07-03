@@ -383,6 +383,20 @@ def test_metadata_candidate_intake_rejects_malformed_nfo_xml(client: TestClient)
     assert "nfo_xml" in response.json()["detail"]
 
 
+def test_metadata_candidate_intake_rejects_emby_payload_missing_id(client: TestClient) -> None:
+    response = client.post(
+        "/emby-media-actions/intake",
+        json={
+            "action": "metadata_blacklist",
+            "title": "bad-no-id",
+            "emby_payload": {"Name": "bad-no-id"},
+        },
+    )
+
+    assert response.status_code == 400
+    assert "emby_payload" in response.json()["detail"]
+
+
 def test_delete_plan_intake_requires_emby_item_id(client: TestClient) -> None:
     response = client.post("/emby-media-actions/intake", json={"action": "delete_plan"})
 
@@ -403,6 +417,22 @@ def test_delete_plan_intake_rejects_malformed_stream_url(client: TestClient) -> 
 
     assert response.status_code == 400
     assert "stream URL" in response.json()["detail"]
+
+
+def test_delete_plan_intake_rejects_emby_payload_missing_id(client: TestClient) -> None:
+    response = client.post(
+        "/emby-media-actions/intake",
+        json={
+            "action": "delete_plan",
+            "url": "http://192.168.70.138:5244/d/115_OPEN/%E7%94%B5%E5%BD%B1/bad-no-id.mkv",
+            "title": "bad-no-id",
+            "emby_item_id": "bad-no-id",
+            "emby_payload": {"Name": "bad-no-id"},
+        },
+    )
+
+    assert response.status_code == 400
+    assert "emby_payload" in response.json()["detail"]
 
 
 def test_delete_plan_intake_resolves_url_and_persists_remote_file_id(api_context) -> None:
