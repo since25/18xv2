@@ -27,7 +27,13 @@ def build_payload(action: str, path: str, source: str) -> dict:
         "blacklist": "metadata_blacklist",
         "whitelist": "metadata_whitelist",
     }
-    return {"action": action_map[action], "path": path, "source": source}
+    return {
+        "action": action_map[action],
+        "path": path,
+        "source": source,
+        "emby_item_id": path,
+        "title": Path(path).name or path,
+    }
 
 
 def _json_request(opener, url: str, payload: dict | None = None) -> dict:
