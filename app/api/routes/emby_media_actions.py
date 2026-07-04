@@ -139,18 +139,33 @@ def _select_item_for_path(items: list[dict], path: str | None) -> dict | None:
     return items[0]
 
 
-def _emby_client_for_request(request: Request) -> EmbyClient | None:
+def _configured_emby_user_ids() -> list[str]:
+    settings = get_settings()
+    user_ids: list[str] = []
+    for value in [settings.emby_user_id, *settings.emby_user_ids]:
+        if value and value not in user_ids:
+            user_ids.append(value)
+    return user_ids
+
+
+def _emby_clients_for_request(request: Request) -> list[EmbyClient]:
+    existing_clients = getattr(request.app.state, "emby_clients", None)
+    if existing_clients is not None:
+        return list(existing_clients)
     existing = getattr(request.app.state, "emby_client", None)
     if existing is not None:
-        return existing
+        return [existing]
     settings = get_settings()
-    if not (settings.emby_base_url and settings.emby_api_key and settings.emby_user_id):
-        return None
-    return EmbyClient(
-        base_url=settings.emby_base_url,
-        api_key=settings.emby_api_key,
-        user_id=settings.emby_user_id,
-    )
+    if not (settings.emby_base_url and settings.emby_api_key):
+        return []
+    return [
+        EmbyClient(
+            base_url=settings.emby_base_url,
+            api_key=settings.emby_api_key,
+            user_id=user_id,
+        )
+        for user_id in _configured_emby_user_ids()
+    ]
 
 
 def _title_search_candidates(payload: EmbyMediaIntakeRequest) -> list[str]:
@@ -179,26 +194,28 @@ def _resolve_item_context(payload: EmbyMediaIntakeRequest, request: Request) -> 
             detail = str(exc) or exc.__class__.__name__
             raise HTTPException(status_code=400, detail=f"invalid emby_payload: {detail}") from exc
 
-    client = _emby_client_for_request(request)
-    if client is None:
+    clients = _emby_clients_for_request(request)
+    if not clients:
         return None
 
     if _looks_like_real_emby_id(payload.emby_item_id):
-        try:
-            return build_item_context(client.get_item(str(payload.emby_item_id)))
-        except Exception:
-            pass
+        for client in clients:
+            try:
+                return build_item_context(client.get_item(str(payload.emby_item_id)))
+            except Exception:
+                pass
 
     titles = _title_search_candidates(payload)
     if not titles:
         return None
     for title in titles:
-        try:
-            item = _select_item_for_path(client.find_items_by_title(title), payload.path)
-        except Exception:
-            continue
-        if item is not None:
-            return build_item_context(item)
+        for client in clients:
+            try:
+                item = _select_item_for_path(client.find_items_by_title(title), payload.path)
+            except Exception:
+                continue
+            if item is not None:
+                return build_item_context(item)
     return None
 
 
