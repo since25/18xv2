@@ -170,6 +170,7 @@ class OrganizeTaskService:
         skipped_ambiguous_count = 0
         for source_path, source_hits in path_to_hits.items():
             keyword_ids = self._resolve_specific_keyword_ids(source_hits)
+            keyword_ids = self._apply_merge_policy(keyword_ids, entry_by_id)
             if not keyword_ids:
                 skipped_ambiguous_count += 1
                 continue
@@ -253,6 +254,7 @@ class OrganizeTaskService:
         conflicts: list[AmbiguousKeywordConflict] = []
         for source_path, source_hits in path_to_hits.items():
             keyword_ids = self._resolve_specific_keyword_ids(source_hits)
+            keyword_ids = self._apply_merge_policy(keyword_ids, entry_by_id)
             if len(keyword_ids) <= self.COMBINE_MULTI_MATCH_MAX:
                 continue
             sorted_options = sorted(
@@ -499,6 +501,19 @@ class OrganizeTaskService:
                 filtered_ids.add(keyword_id)
 
         return filtered_ids or keyword_ids
+
+    @staticmethod
+    def _apply_merge_policy(keyword_ids: set[int], entry_by_id: dict[int, KeywordEntry]) -> set[int]:
+        if len(keyword_ids) <= 1:
+            return keyword_ids
+        normal_ids = {
+            keyword_id
+            for keyword_id in keyword_ids
+            if entry_by_id[keyword_id].merge_policy == "normal"
+        }
+        if normal_ids:
+            return normal_ids
+        return keyword_ids
 
     @staticmethod
     def _is_term_covered_by_other_keyword(

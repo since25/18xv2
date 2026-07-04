@@ -9,6 +9,7 @@ from app.schemas.common import ORMModel, TimestampedResponse
 
 
 KeywordType = Literal["whitelist", "blacklist", "ignore", "tag"]
+KeywordMergePolicy = Literal["normal", "fallback_only"]
 
 
 class KeywordAliasResponse(TimestampedResponse):
@@ -22,6 +23,7 @@ class KeywordAliasResponse(TimestampedResponse):
 class KeywordEntryCreateRequest(BaseModel):
     canonical_name: str = Field(min_length=1, max_length=255)
     keyword_type: KeywordType
+    merge_policy: KeywordMergePolicy = "normal"
     aliases: list[str] = Field(default_factory=list, max_length=200)
     note: str | None = None
 
@@ -29,6 +31,7 @@ class KeywordEntryCreateRequest(BaseModel):
 class KeywordEntryUpdateRequest(BaseModel):
     canonical_name: str | None = Field(default=None, min_length=1, max_length=255)
     keyword_type: KeywordType | None = None
+    merge_policy: KeywordMergePolicy | None = None
     status: str | None = Field(default=None, max_length=32)
     note: str | None = None
 
@@ -36,6 +39,7 @@ class KeywordEntryUpdateRequest(BaseModel):
 class KeywordEntryBatchImportRequest(BaseModel):
     keywords: list[str] = Field(min_length=1, max_length=500)
     keyword_type: KeywordType
+    merge_policy: KeywordMergePolicy = "normal"
     import_id: int | None = None
     pattern: str | None = Field(default=None, max_length=500)
     flags: str | None = Field(default=None, max_length=20)
@@ -111,6 +115,7 @@ class KeywordEntryResponse(TimestampedResponse):
     canonical_name_normalized: str
     keyword_type: KeywordType
     status: str
+    merge_policy: KeywordMergePolicy
     note: str | None = None
     updated_at: datetime | None = None
     aliases: list[KeywordAliasResponse] = []

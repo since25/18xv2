@@ -39,6 +39,28 @@ class TestCreateEntry:
         assert "别名A" in alias_values
         assert "别名B" in alias_values
 
+    def test_create_entry_defaults_merge_policy_to_normal(self, db_session: Session):
+        svc = KeywordRegistryService(db_session)
+
+        entry = svc.create_entry(canonical_name="口巾SANG", keyword_type="whitelist")
+
+        assert entry.merge_policy == "normal"
+
+    def test_create_and_update_entry_persist_fallback_only_policy(self, db_session: Session):
+        svc = KeywordRegistryService(db_session)
+
+        entry = svc.create_entry(
+            canonical_name="露脸_泄密_反差_电报",
+            keyword_type="whitelist",
+            merge_policy="fallback_only",
+        )
+
+        assert entry.merge_policy == "fallback_only"
+
+        updated = svc.update_entry(entry.id, merge_policy="normal")
+
+        assert updated.merge_policy == "normal"
+
     def test_find_entry_by_keyword(self, db_session: Session):
         svc = KeywordRegistryService(db_session)
         svc.create_entry(canonical_name="查找目标", keyword_type="whitelist")
@@ -119,6 +141,7 @@ class TestMergeEntries:
         rows = db_session.scalars(select(WhitelistCandidate).order_by(WhitelistCandidate.id)).all()
         assert len(rows) == 2
         assert {row.matched_keyword_entry_id for row in rows} == {canonical.id}
+        assert {row.matched_keyword for row in rows} == {canonical.canonical_name}
         assert svc.find_entry_by_keyword("副白名单") is not None
         assert db_session.get(type(canonical), secondary.id) is None
 
@@ -156,6 +179,7 @@ class TestMergeEntries:
         rows = db_session.scalars(select(WhitelistCandidate)).all()
         assert len(rows) == 1
         assert rows[0].matched_keyword_entry_id == canonical.id
+        assert rows[0].matched_keyword == canonical.canonical_name
         assert rows[0].lifecycle_status == "submitted"
 
 

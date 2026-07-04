@@ -18,6 +18,7 @@ class KeywordEntry(TimestampMixin, Base):
     canonical_name_normalized: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     keyword_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active", index=True)
+    merge_policy: Mapped[str] = mapped_column(String(32), nullable=False, default="normal", server_default="normal", index=True)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 

@@ -379,6 +379,7 @@ export default function KeywordExtractorPage() {
       const payload: KeywordEntryBatchImportPayload = {
         keywords,
         keyword_type: listType,
+        merge_policy: 'normal',
         import_id: importId,
         source: activeSource,
         pattern: activeSource === 'manual' ? null : regexPattern,

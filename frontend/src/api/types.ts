@@ -41,12 +41,14 @@ export interface KeywordAlias {
   note: string | null
   created_at: string | null
 }
+export type KeywordMergePolicy = 'normal' | 'fallback_only'
 export interface KeywordEntry {
   id: number
   canonical_name: string
   canonical_name_normalized: string
   keyword_type: 'whitelist' | 'blacklist' | 'ignore' | 'tag'
   status: string
+  merge_policy: KeywordMergePolicy
   note: string | null
   aliases: KeywordAlias[]
   created_at: string | null
@@ -59,18 +61,21 @@ export interface KeywordEntryListResponse {
 export interface KeywordEntryCreatePayload {
   canonical_name: string
   keyword_type: KeywordEntry['keyword_type']
+  merge_policy: KeywordMergePolicy
   aliases: string[]
   note?: string | null
 }
 export interface KeywordEntryUpdatePayload {
   canonical_name?: string
   keyword_type?: KeywordEntry['keyword_type']
+  merge_policy?: KeywordMergePolicy
   status?: string
   note?: string | null
 }
 export interface KeywordEntryBatchImportPayload {
   keywords: string[]
   keyword_type: KeywordEntry['keyword_type']
+  merge_policy: KeywordMergePolicy
   import_id: number | null
   pattern?: string | null
   flags?: string | null

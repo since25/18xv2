@@ -62,6 +62,7 @@ def create_keyword(payload: KeywordEntryCreateRequest, db: Session = Depends(get
     entry = service.create_entry(
         canonical_name=payload.canonical_name,
         keyword_type=payload.keyword_type,
+        merge_policy=payload.merge_policy,
         note=payload.note,
         aliases=payload.aliases,
         source="manual",
@@ -78,6 +79,7 @@ def update_keyword(entry_id: int, payload: KeywordEntryUpdateRequest, db: Sessio
             entry_id,
             canonical_name=payload.canonical_name,
             keyword_type=payload.keyword_type,
+            merge_policy=payload.merge_policy,
             status=payload.status,
             note=payload.note,
         )
@@ -99,6 +101,7 @@ def batch_import_keywords(payload: KeywordEntryBatchImportRequest, db: Session =
         match_rule=payload.pattern,
         match_source=payload.source,
         keyword_type=payload.keyword_type,
+        merge_policy=payload.merge_policy,
     )
     service.sync_legacy_library()
     existing_count = sum(1 for item in existing_before.values() if item is not None)
@@ -262,6 +265,7 @@ def create_keyword_library_entries(
         entry = service.create_entry(
             canonical_name=keyword,
             keyword_type=payload.list_type,
+            merge_policy="normal",
             note=payload.note,
             aliases=[],
             source=payload.source,

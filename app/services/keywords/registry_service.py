@@ -111,6 +111,7 @@ class KeywordRegistryService:
         *,
         canonical_name: str,
         keyword_type: str,
+        merge_policy: str = "normal",
         note: str | None = None,
         aliases: list[str] | None = None,
         source: str = "manual",
@@ -118,6 +119,7 @@ class KeywordRegistryService:
         entry = self.create_entry_no_commit(
             canonical_name=canonical_name,
             keyword_type=keyword_type,
+            merge_policy=merge_policy,
             note=note,
             aliases=aliases,
             source=source,
@@ -131,6 +133,7 @@ class KeywordRegistryService:
         *,
         canonical_name: str,
         keyword_type: str,
+        merge_policy: str = "normal",
         note: str | None = None,
         aliases: list[str] | None = None,
         source: str = "manual",
@@ -146,6 +149,7 @@ class KeywordRegistryService:
             canonical_name=canonical_name.strip(),
             canonical_name_normalized=normalized,
             keyword_type=keyword_type,
+            merge_policy=merge_policy,
             note=note,
         )
         self.db.add(entry)
@@ -168,6 +172,7 @@ class KeywordRegistryService:
             detail={
                 "canonical_name": entry.canonical_name,
                 "keyword_type": entry.keyword_type,
+                "merge_policy": entry.merge_policy,
                 "aliases": aliases or [],
                 "source": source,
             },
@@ -210,6 +215,7 @@ class KeywordRegistryService:
         *,
         canonical_name: str | None = None,
         keyword_type: str | None = None,
+        merge_policy: str | None = None,
         status: str | None = None,
         note: str | None = None,
     ) -> KeywordEntry:
@@ -244,6 +250,8 @@ class KeywordRegistryService:
             )
         if keyword_type:
             entry.keyword_type = keyword_type
+        if merge_policy:
+            entry.merge_policy = merge_policy
         if status:
             entry.status = status
         if note is not None:
@@ -254,6 +262,7 @@ class KeywordRegistryService:
             detail={
                 "canonical_name": entry.canonical_name,
                 "keyword_type": entry.keyword_type,
+                "merge_policy": entry.merge_policy,
                 "status": entry.status,
                 "note_updated": note is not None,
             },
@@ -317,10 +326,12 @@ class KeywordRegistryService:
                 )
                 if conflict is not None:
                     self._merge_whitelist_candidate_state(conflict, candidate)
+                    conflict.matched_keyword = canonical.canonical_name
                     self.db.delete(candidate)
                     deduped_candidate_count += 1
                     continue
                 candidate.matched_keyword_entry_id = canonical.id
+                candidate.matched_keyword = canonical.canonical_name
                 moved_candidate_count += 1
             if entry.note:
                 suffix = f"\nMerged from #{entry.id}: {entry.canonical_name}"
@@ -355,6 +366,7 @@ class KeywordRegistryService:
         match_rule: str | None,
         match_source: str,
         keyword_type: str,
+        merge_policy: str = "normal",
     ) -> list[KeywordEntry]:
         entries: list[KeywordEntry] = []
         for raw_keyword in keywords:
@@ -366,6 +378,7 @@ class KeywordRegistryService:
                 entry = self.create_entry(
                     canonical_name=raw_keyword,
                     keyword_type=keyword_type,
+                    merge_policy=merge_policy,
                     source=match_source,
                 )
             examples = examples_by_keyword.get(raw_keyword) or []

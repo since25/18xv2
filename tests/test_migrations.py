@@ -3,10 +3,16 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
+import sqlalchemy as sa
+from alembic.migration import MigrationContext
+from alembic.operations import Operations
+
 
 class MigrationOrderRecorder:
     def __init__(self, existing_tables: set[str]) -> None:
         self.created_tables = set(existing_tables)
+        self.added_columns: list[tuple[str, object]] = []
+        self.created_indexes: list[tuple[tuple[object, ...], dict[str, object]]] = []
 
     def create_table(self, table_name: str, *elements, **kwargs) -> None:
         missing_targets = []
@@ -23,6 +29,16 @@ class MigrationOrderRecorder:
         self.created_tables.add(table_name)
 
     def create_index(self, *args, **kwargs) -> None:
+        self.created_indexes.append((args, kwargs))
+        return None
+
+    def add_column(self, table_name: str, column) -> None:
+        self.added_columns.append((table_name, column))
+
+    def drop_index(self, *args, **kwargs) -> None:
+        return None
+
+    def drop_column(self, *args, **kwargs) -> None:
         return None
 
     def create_foreign_key(
@@ -57,3 +73,36 @@ def test_dedupe_migration_creates_referenced_tables_before_foreign_keys(monkeypa
     monkeypatch.setattr(migration, "op", recorder)
 
     migration.upgrade()
+
+
+def test_keyword_entries_has_merge_policy_column():
+    migration_path = Path("alembic/versions/20260704_0009_keyword_merge_policy.py")
+    spec = importlib.util.spec_from_file_location("keyword_merge_policy_migration", migration_path)
+    assert spec is not None
+    assert spec.loader is not None
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+
+    engine = sa.create_engine("sqlite:///:memory:")
+    with engine.begin() as connection:
+        connection.execute(
+            sa.text(
+                """
+                CREATE TABLE keyword_entries (
+                    id INTEGER PRIMARY KEY,
+                    canonical_name VARCHAR(255) NOT NULL
+                )
+                """
+            )
+        )
+
+        migration.op = Operations(MigrationContext.configure(connection))
+        migration.upgrade()
+
+        columns = {
+            column["name"]: column
+            for column in sa.inspect(connection).get_columns("keyword_entries")
+        }
+
+    assert "merge_policy" in columns
+    assert columns["merge_policy"]["nullable"] is False

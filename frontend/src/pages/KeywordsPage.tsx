@@ -23,6 +23,7 @@ import type {
   KeywordEntry,
   KeywordEntryCreatePayload,
   KeywordEntryListResponse,
+  KeywordMergePolicy,
   KeywordOperationLog,
   SimilarKeywordPreviewResponse,
 } from '@/api/types'
@@ -45,6 +46,16 @@ const TYPE_OPTIONS = [
   { label: '标签', value: 'tag' },
 ]
 
+const MERGE_POLICY_OPTIONS: Array<{ label: string; value: KeywordMergePolicy; help: string }> = [
+  { label: '普通', value: 'normal', help: '可参与组合目录' },
+  { label: '低优先级', value: 'fallback_only', help: '仅在没有其他普通白名单命中时生效' },
+]
+
+const MERGE_POLICY_LABEL: Record<KeywordMergePolicy, string> = {
+  normal: '普通',
+  fallback_only: '低优先级',
+}
+
 export default function KeywordsPage() {
   const [entries, setEntries] = useState<KeywordEntry[]>([])
   const [total, setTotal] = useState(0)
@@ -65,6 +76,7 @@ export default function KeywordsPage() {
   const [editForm] = Form.useForm<{
     canonical_name: string
     keyword_type: KeywordEntry['keyword_type']
+    merge_policy: KeywordMergePolicy
     note: string | null
   }>()
   const [aliasForm] = Form.useForm<{ aliases: string }>()
@@ -133,6 +145,7 @@ export default function KeywordsPage() {
     try {
       await api.post('/keywords', {
         ...values,
+        merge_policy: values.merge_policy ?? 'normal',
         aliases: values.aliases,
         note: values.note?.trim() || null,
       })
@@ -145,7 +158,12 @@ export default function KeywordsPage() {
     }
   }
 
-  const handleUpdate = async (values: { canonical_name: string; keyword_type: KeywordEntry['keyword_type']; note: string | null }) => {
+  const handleUpdate = async (values: {
+    canonical_name: string
+    keyword_type: KeywordEntry['keyword_type']
+    merge_policy: KeywordMergePolicy
+    note: string | null
+  }) => {
     if (!editingEntry) {
       return
     }
@@ -153,6 +171,7 @@ export default function KeywordsPage() {
       await api.patch(`/keywords/${editingEntry.id}`, {
         canonical_name: values.canonical_name.trim(),
         keyword_type: values.keyword_type,
+        merge_policy: values.merge_policy,
         note: values.note?.trim() || null,
       })
       setEditingEntry(null)
@@ -290,17 +309,24 @@ export default function KeywordsPage() {
     {
       title: '关键词',
       dataIndex: 'canonical_name',
-      render: (value: string, record) => (
-        <div>
-          <Text strong>{value}</Text>
-          <div className="meta-tags">
-            <Tag color={TYPE_COLOR[record.keyword_type] ?? 'default'}>{record.keyword_type}</Tag>
-            <Tag color={record.status === 'active' ? 'green' : 'default'}>{record.status}</Tag>
-            <Tag>{`别名 ${record.aliases.length}`}</Tag>
+      render: (value: string, record) => {
+        const mergePolicy = record.merge_policy ?? 'normal'
+
+        return (
+          <div>
+            <Text strong>{value}</Text>
+            <div className="meta-tags">
+              <Tag color={TYPE_COLOR[record.keyword_type] ?? 'default'}>{record.keyword_type}</Tag>
+              <Tag color={record.status === 'active' ? 'green' : 'default'}>{record.status}</Tag>
+              <Tag color={mergePolicy === 'fallback_only' ? 'gold' : 'default'}>
+                {MERGE_POLICY_LABEL[mergePolicy]}
+              </Tag>
+              <Tag>{`别名 ${record.aliases.length}`}</Tag>
+            </div>
+            <Text type="secondary">{record.note || '无备注'}</Text>
           </div>
-          <Text type="secondary">{record.note || '无备注'}</Text>
-        </div>
-      ),
+        )
+      },
     },
     {
       title: '别名',
@@ -331,6 +357,7 @@ export default function KeywordsPage() {
               editForm.setFieldsValue({
                 canonical_name: record.canonical_name,
                 keyword_type: record.keyword_type,
+                merge_policy: record.merge_policy ?? 'normal',
                 note: record.note,
               })
             }}
@@ -385,7 +412,7 @@ export default function KeywordsPage() {
             <Form
               form={createForm}
               layout="vertical"
-              initialValues={{ keyword_type: 'whitelist', aliases: [] }}
+              initialValues={{ keyword_type: 'whitelist', merge_policy: 'normal', aliases: [] }}
               onFinish={handleCreate}
             >
               <Form.Item name="canonical_name" label="标准名称" rules={[{ required: true, message: '请输入标准名称' }]}>
@@ -394,6 +421,18 @@ export default function KeywordsPage() {
               <Form.Item name="keyword_type" label="类型" rules={[{ required: true }]}>
                 <Select options={TYPE_OPTIONS} />
               </Form.Item>
+              <Form.Item
+                name="merge_policy"
+                label="整理优先级"
+                rules={[{ required: true, message: '请选择整理优先级' }]}
+              >
+                <Select
+                  options={MERGE_POLICY_OPTIONS.map(({ label, value }) => ({ label, value }))}
+                />
+              </Form.Item>
+              <Text type="secondary">
+                低优先级关键词只在没有其他普通白名单命中时参与整理；修改后需重新生成整理任务才会生效。
+              </Text>
               <Form.Item
                 name="aliases"
                 label="别名（每行一个）"
@@ -558,6 +597,16 @@ export default function KeywordsPage() {
           <Form.Item name="keyword_type" label="类型" rules={[{ required: true }]}>
             <Select options={TYPE_OPTIONS} />
           </Form.Item>
+          <Form.Item
+            name="merge_policy"
+            label="整理优先级"
+            rules={[{ required: true, message: '请选择整理优先级' }]}
+          >
+            <Select options={MERGE_POLICY_OPTIONS.map(({ label, value }) => ({ label, value }))} />
+          </Form.Item>
+          <Text type="secondary">
+            低优先级关键词只在没有其他普通白名单命中时参与整理；修改后需重新生成整理任务才会生效。
+          </Text>
           <Form.Item name="note" label="备注">
             <Input.TextArea rows={4} />
           </Form.Item>

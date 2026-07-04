@@ -145,6 +145,143 @@ def test_generate_import_hits_creates_combined_task_for_three_real_keywords(db_s
     assert "SAP__六花__甜是甜甜老师的甜/专辑X" in task.target_path
     assert svc.list_ambiguous_conflicts(import_id=import_id) == []
 
+def test_generate_import_hits_ignores_fallback_keyword_when_normal_keyword_matches(db_session: Session):
+    import_id, keyword_ids = _seed_import(
+        db_session,
+        hits=[
+            ("口巾SANG", "口巾SANG"),
+            ("露脸_泄密_反差_电报", "露脸_泄密_反差_电报"),
+        ],
+    )
+    fallback_entry = db_session.get(KeywordEntry, keyword_ids[1])
+    assert fallback_entry is not None
+    fallback_entry.merge_policy = "fallback_only"
+    db_session.commit()
+
+    result = OrganizeTaskService(db_session).generate_tasks_from_import_hits(import_id=import_id)
+
+    assert result.created_count == 1
+    task = result.tasks[0]
+    assert task.keyword_entry_id == keyword_ids[0]
+    assert task.matched_canonical_name == "口巾SANG"
+    assert "口巾SANG/专辑X" in task.target_path
+    assert "露脸_泄密_反差_电报" not in task.target_path
+
+
+def test_generate_import_hits_uses_fallback_keyword_when_it_is_the_only_match(db_session: Session):
+    import_id, keyword_ids = _seed_import(
+        db_session,
+        hits=[("露脸_泄密_反差_电报", "露脸_泄密_反差_电报")],
+    )
+    fallback_entry = db_session.get(KeywordEntry, keyword_ids[0])
+    assert fallback_entry is not None
+    fallback_entry.merge_policy = "fallback_only"
+    db_session.commit()
+
+    result = OrganizeTaskService(db_session).generate_tasks_from_import_hits(import_id=import_id)
+
+    assert result.created_count == 1
+    task = result.tasks[0]
+    assert task.keyword_entry_id == keyword_ids[0]
+    assert task.matched_canonical_name == "露脸_泄密_反差_电报"
+    assert "露脸_泄密_反差_电报/专辑X" in task.target_path
+
+
+def test_generate_import_hits_combines_multiple_fallback_keywords_without_normal_match(db_session: Session):
+    import_id, keyword_ids = _seed_import(
+        db_session,
+        hits=[
+            ("露脸_泄密_反差_电报", "露脸_泄密_反差_电报"),
+            ("稀有主题合集", "稀有主题合集"),
+        ],
+    )
+    for keyword_id in keyword_ids:
+        entry = db_session.get(KeywordEntry, keyword_id)
+        assert entry is not None
+        entry.merge_policy = "fallback_only"
+    db_session.commit()
+
+    result = OrganizeTaskService(db_session).generate_tasks_from_import_hits(import_id=import_id)
+
+    assert result.created_count == 1
+    task = result.tasks[0]
+    assert task.keyword_entry_id is None
+    assert task.matched_canonical_name == "稀有主题合集 + 露脸_泄密_反差_电报"
+    assert "稀有主题合集__露脸_泄密_反差_电报/专辑X" in task.target_path
+
+
+def test_generate_import_hits_combines_normal_keywords_after_filtering_fallback(db_session: Session):
+    import_id, keyword_ids = _seed_import(
+        db_session,
+        hits=[
+            ("A", "A"),
+            ("B", "B"),
+            ("露脸_泄密_反差_电报", "露脸_泄密_反差_电报"),
+        ],
+    )
+    fallback_entry = db_session.get(KeywordEntry, keyword_ids[2])
+    assert fallback_entry is not None
+    fallback_entry.merge_policy = "fallback_only"
+    db_session.commit()
+
+    result = OrganizeTaskService(db_session).generate_tasks_from_import_hits(import_id=import_id)
+
+    assert result.created_count == 1
+    task = result.tasks[0]
+    assert task.keyword_entry_id is None
+    assert task.matched_canonical_name == "A + B"
+    assert "A__B/专辑X" in task.target_path
+    assert "露脸_泄密_反差_电报" not in task.target_path
+
+
+def test_list_ambiguous_conflicts_filters_fallback_keyword_when_normal_keywords_exist(db_session: Session):
+    import_id, keyword_ids = _seed_import(
+        db_session,
+        hits=[
+            ("A", "A"),
+            ("B", "B"),
+            ("C", "C"),
+            ("D", "D"),
+            ("露脸_泄密_反差_电报", "露脸_泄密_反差_电报"),
+        ],
+    )
+    fallback_entry = db_session.get(KeywordEntry, keyword_ids[4])
+    assert fallback_entry is not None
+    fallback_entry.merge_policy = "fallback_only"
+    db_session.commit()
+
+    conflicts = OrganizeTaskService(db_session).list_ambiguous_conflicts(import_id=import_id)
+
+    assert len(conflicts) == 1
+    assert conflicts[0].keywords == ["A", "B", "C", "D"]
+    assert "露脸_泄密_反差_电报" not in conflicts[0].keywords
+
+
+def test_generate_keyword_hits_honors_explicit_fallback_selection(db_session: Session):
+    import_id, keyword_ids = _seed_import(
+        db_session,
+        hits=[
+            ("口巾SANG", "口巾SANG"),
+            ("露脸_泄密_反差_电报", "露脸_泄密_反差_电报"),
+        ],
+    )
+    fallback_entry = db_session.get(KeywordEntry, keyword_ids[1])
+    assert fallback_entry is not None
+    fallback_entry.merge_policy = "fallback_only"
+    db_session.commit()
+
+    result = OrganizeTaskService(db_session).generate_tasks_from_keyword_hits(
+        import_id=import_id,
+        keyword_entry_id=keyword_ids[1],
+        target_root="/自选整理",
+    )
+
+    assert result.created_count == 1
+    task = result.tasks[0]
+    assert task.keyword_entry_id == keyword_ids[1]
+    assert task.matched_canonical_name == "露脸_泄密_反差_电报"
+    assert task.target_path == "/自选整理/专辑X"
+
 
 def test_get_node_details_returns_cid_and_paths(db_session: Session):
     ti = TreeImport(source_filename="test2.txt", status="done")
