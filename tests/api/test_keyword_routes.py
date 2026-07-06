@@ -84,6 +84,19 @@ def test_duplicate_scan_response_includes_reference_counts(db_session: Session):
     assert counts_by_id == {first.id: 1, second.id: 2}
 
 
+def test_list_keywords_serializes_emby_type_entries(client, db_session: Session):
+    """emby 元数据功能会往共用表写 keyword_type=emby_blacklist/emby_whitelist 的记录，
+    /keywords 列表必须能序列化它们，否则整个列表接口 500（复现线上 /extractor 报错）。"""
+    svc = KeywordRegistryService(db_session)
+    svc.create_entry(canonical_name="某演员", keyword_type="emby_blacklist", source="emby_media_actions")
+
+    response = client.get(KEYWORDS_BASE, params={"limit": 50})
+
+    assert response.status_code == 200
+    types = {entry["keyword_type"] for entry in response.json()["entries"]}
+    assert "emby_blacklist" in types
+
+
 def test_create_keyword_accepts_merge_policy(client):
     response = client.post(
         KEYWORDS_BASE,

@@ -8,7 +8,9 @@ from pydantic import BaseModel, Field
 from app.schemas.common import ORMModel, TimestampedResponse
 
 
-KeywordType = Literal["whitelist", "blacklist", "ignore", "tag"]
+# emby_blacklist / emby_whitelist 由 emby 元数据功能写入共用的 keyword_entries 表
+# （source=emby_media_actions），作为第一类关键词类型，须能在通用列表接口序列化
+KeywordType = Literal["whitelist", "blacklist", "ignore", "tag", "emby_blacklist", "emby_whitelist"]
 KeywordMergePolicy = Literal["normal", "fallback_only"]
 
 
