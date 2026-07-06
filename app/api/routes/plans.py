@@ -522,7 +522,7 @@ def plans_workbench() -> str:
       <p>这里集中查看整理计划、最近一次执行状态和日志摘要。计划默认先 dry-run，确认后再做真实执行。</p>
       <div class="hero-links">
         <a href="/workbench">返回统一工作台</a>
-        <a href="/keywords/workbench">返回关键词管理台</a>
+        <a href="/keywords">返回关键词管理台</a>
         <a href="/organize-tasks/workbench">打开整理任务台</a>
       </div>
     </section>

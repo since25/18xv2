@@ -181,7 +181,7 @@ def _render_home_page(*, client_ready: bool = True, client_error: str | None = N
         <h2>关键词提取器</h2>
         <p>适合导入目录树、手工关键词和正则提取，作为整个流程的起点。</p>
         <div class="actions">
-          <a class="button primary" href="/extractor/keywords/workbench">打开提取器</a>
+          <a class="button primary" href="/extractor">打开提取器</a>
         </div>
       </section>
 
@@ -189,7 +189,7 @@ def _render_home_page(*, client_ready: bool = True, client_error: str | None = N
         <h2>关键词管理台</h2>
         <p>集中维护白名单、黑名单、标签、别名、命中重建和目录树命中排行。</p>
         <div class="actions">
-          <a class="button primary" href="/keywords/workbench">打开关键词管理台</a>
+          <a class="button primary" href="/keywords">打开关键词管理台</a>
         </div>
       </section>
 

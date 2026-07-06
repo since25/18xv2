@@ -367,7 +367,7 @@ def organize_tasks_workbench() -> str:
     <section class="hero">
       <h1>关键词整理任务台</h1>
       <p>这里是整理主入口。系统会针对指定批次的目录树，只使用 active whitelist 关键词自动生成可整理任务，目标目录固定收口到 /根目录/已整理/安全化后的 canonical_name。</p>
-      <a href="/keywords/workbench">返回关键词管理台</a>
+      <a href="/keywords">返回关键词管理台</a>
       <a href="/plans/workbench">打开计划执行台</a>
       <a href="/workbench">返回统一工作台</a>
     </section>

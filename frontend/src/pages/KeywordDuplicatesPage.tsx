@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Alert, Button, Card, Col, InputNumber, Row, Select, Space, Tag, Typography, message } from 'antd'
-import { LinkOutlined, MergeOutlined, SearchOutlined } from '@ant-design/icons'
+import { MergeOutlined, SearchOutlined } from '@ant-design/icons'
 import { api } from '@/api/client'
 import type { KeywordDuplicatePair, KeywordDuplicateScanResponse } from '@/api/types'
 import PageScaffold from '@/layout/PageScaffold'
@@ -67,11 +67,6 @@ export default function KeywordDuplicatesPage() {
       title="重复词扫描"
       titleLevel={4}
       description="对现有关键词库做高相似度摸底，快速发现应该合并的标准词。"
-      actions={
-        <a href="/api/keywords/duplicates/workbench" target="_blank" rel="noreferrer">
-          <Button icon={<LinkOutlined />}>旧版扫描台</Button>
-        </a>
-      }
     >
 
       <Card className="soft-card" style={{ marginBottom: 16 }}>

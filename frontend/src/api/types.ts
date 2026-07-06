@@ -46,7 +46,7 @@ export interface KeywordEntry {
   id: number
   canonical_name: string
   canonical_name_normalized: string
-  keyword_type: 'whitelist' | 'blacklist' | 'ignore' | 'tag'
+  keyword_type: 'whitelist' | 'blacklist' | 'ignore' | 'tag' | 'emby_blacklist' | 'emby_whitelist'
   status: string
   merge_policy: KeywordMergePolicy
   note: string | null

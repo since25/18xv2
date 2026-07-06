@@ -18,7 +18,7 @@ import {
   message,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
-import { FileTextOutlined, LinkOutlined, ReloadOutlined, UploadOutlined } from '@ant-design/icons'
+import { FileTextOutlined, ReloadOutlined, UploadOutlined } from '@ant-design/icons'
 import { useSearchParams } from 'react-router-dom'
 import { api } from '@/api/client'
 import type {
@@ -547,9 +547,6 @@ export default function KeywordExtractorPage() {
             从目录树批量提取、筛选并入库关键词，恢复旧版从导入到治理的起始链路。
           </Paragraph>
         </div>
-        <a href="/api/extractor/keywords/workbench" target="_blank" rel="noreferrer">
-          <Button icon={<LinkOutlined />}>旧版提取器</Button>
-        </a>
       </div>
 
       <Row gutter={[16, 16]}>

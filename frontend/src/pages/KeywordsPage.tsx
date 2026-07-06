@@ -16,7 +16,7 @@ import {
   message,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
-import { LinkOutlined, MergeOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons'
+import { MergeOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons'
 import { Link } from 'react-router-dom'
 import { api } from '@/api/client'
 import type {
@@ -37,6 +37,18 @@ const TYPE_COLOR: Record<string, string> = {
   blacklist: 'red',
   ignore: 'orange',
   tag: 'blue',
+  emby_blacklist: 'volcano',
+  emby_whitelist: 'cyan',
+}
+
+// keyword_type 中文标签；emby_* 由 emby 元数据功能写入共用表，需能正常展示
+const TYPE_LABEL: Record<string, string> = {
+  whitelist: '白名单',
+  blacklist: '黑名单',
+  ignore: '忽略名',
+  tag: '标签',
+  emby_blacklist: 'Emby 黑名单',
+  emby_whitelist: 'Emby 白名单',
 }
 
 const TYPE_OPTIONS = [
@@ -316,7 +328,7 @@ export default function KeywordsPage() {
           <div>
             <Text strong>{value}</Text>
             <div className="meta-tags">
-              <Tag color={TYPE_COLOR[record.keyword_type] ?? 'default'}>{record.keyword_type}</Tag>
+              <Tag color={TYPE_COLOR[record.keyword_type] ?? 'default'}>{TYPE_LABEL[record.keyword_type] ?? record.keyword_type}</Tag>
               <Tag color={record.status === 'active' ? 'green' : 'default'}>{record.status}</Tag>
               <Tag color={mergePolicy === 'fallback_only' ? 'gold' : 'default'}>
                 {MERGE_POLICY_LABEL[mergePolicy]}
@@ -394,9 +406,6 @@ export default function KeywordsPage() {
           </Paragraph>
         </div>
         <Space wrap>
-          <a href="/api/keywords/workbench" target="_blank" rel="noreferrer">
-            <Button icon={<LinkOutlined />}>旧版关键词台</Button>
-          </a>
           <Link to="/hits">
             <Button>命中中心</Button>
           </Link>

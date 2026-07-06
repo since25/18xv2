@@ -89,4 +89,5 @@ def list_noise_file_candidates(
 
 @router.get("/keywords/workbench")
 def keyword_workbench() -> RedirectResponse:
-    return RedirectResponse(url="/extractor/keywords/workbench", status_code=307)
+    # 旧版服务端提取器已下线，重定向到 React 提取器页
+    return RedirectResponse(url="/extractor", status_code=307)

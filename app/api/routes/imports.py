@@ -74,7 +74,7 @@ def imports_workbench() -> str:
       <p>这里只展示批次级别信息，不再直接铺开整棵目录树。需要定位具体目录时，再进入节点页面按批次、关键词和层级筛选。</p>
       <a href="/workbench">返回统一工作台</a>
       <a href="/nodes">打开节点列表</a>
-      <a href="/extractor/keywords/workbench">打开提取器</a>
+      <a href="/extractor">打开提取器</a>
     </section>
     <div class="grid">
       <aside class="panel">
@@ -135,7 +135,7 @@ def imports_workbench() -> str:
           window.location.href = `/nodes?import_id=${item.id}`;
         });
         card.querySelector('[data-role="extractor"]').addEventListener('click', () => {
-          window.location.href = `/extractor/keywords/workbench`;
+          window.location.href = `/extractor`;
         });
         card.querySelector('[data-role="delete"]').addEventListener('click', async () => {
           const response = await fetch(`/imports/${item.id}`, { method: 'DELETE' });
