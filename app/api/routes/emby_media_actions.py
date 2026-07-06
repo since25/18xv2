@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -25,6 +26,8 @@ from app.services.emby_media_actions.delete_plan_service import EmbyDeletePlanSe
 from app.services.emby_media_actions.emby_client import EmbyClient, EmbyItemContext, build_item_context
 from app.services.emby_media_actions.metadata_candidate_service import VALID_TARGET_LISTS, EmbyMetadataCandidateService
 from app.services.emby_media_actions.strm_mapping_service import StrmMappingService, decode_115_open_path
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/emby-media-actions", tags=["emby-media-actions"])
 
@@ -202,8 +205,8 @@ def _resolve_item_context(payload: EmbyMediaIntakeRequest, request: Request) -> 
         for client in clients:
             try:
                 return build_item_context(client.get_item(str(payload.emby_item_id)))
-            except Exception:
-                pass
+            except Exception:  # noqa: BLE001 - 逐个 client 兜底，失败则试下一个/回退标题搜索
+                logger.debug("emby get_item 失败 item_id=%s，尝试下一个 client", payload.emby_item_id, exc_info=True)
 
     titles = _title_search_candidates(payload)
     if not titles:
@@ -212,7 +215,8 @@ def _resolve_item_context(payload: EmbyMediaIntakeRequest, request: Request) -> 
         for client in clients:
             try:
                 item = _select_item_for_path(client.find_items_by_title(title), payload.path)
-            except Exception:
+            except Exception:  # noqa: BLE001 - 逐个 client/标题兜底搜索，失败则试下一个
+                logger.debug("emby find_items_by_title 失败 title=%r，尝试下一个", title, exc_info=True)
                 continue
             if item is not None:
                 return build_item_context(item)
