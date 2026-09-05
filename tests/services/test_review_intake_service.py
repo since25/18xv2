@@ -36,8 +36,11 @@ def test_create_or_update_deduplicates_same_bucket_and_path(db_session):
     assert len(rows) == 1
     assert rows[0].status == "pending"
     candidates = parse_keyword_candidates(rows[0].extracted_keywords_json)
-    assert [item.keyword for item in candidates] == ["姝姬娘娘"]
+    # 新提取规则会额外切出父目录名与括号外的片段；括号命中仍排第一
+    assert candidates[0].keyword == "姝姬娘娘"
+    assert candidates[0].source == "bracket"
     assert candidates[0].match_status == "new"
+    assert "作品" in [item.keyword for item in candidates]
 
 
 def test_approve_creates_keyword_entry_and_hit(db_session):

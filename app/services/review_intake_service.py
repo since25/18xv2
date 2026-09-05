@@ -13,11 +13,17 @@ from sqlalchemy.orm import Session
 from app.models.keywords import KeywordHit
 from app.models.review_intake import ReviewIntakeItem
 from app.schemas.review_intake import ReviewKeywordCandidate
-from app.services.classifier.keyword_extractor_service import KeywordExtractorService
 from app.services.keywords.registry_service import KeywordRegistryService, normalize_keyword_text
+from app.services.review_intake_candidates import extract_raw_candidates
 
 VALID_BUCKETS = {"whitelist", "blacklist"}
 VALID_STATUSES = {"pending", "approved", "dismissed"}
+
+# 落库的候选数量上限：候选组承担"点它就能批准"的作用，提示组只负责
+# 告诉用户"这条可以跳过"或"点了会被拒"，两者分开限量。
+PICK_LIMIT = 9
+HINT_LIMIT = 3
+TOTAL_LIMIT = PICK_LIMIT + HINT_LIMIT
 
 
 def _normalize_path(raw_path: str) -> str:
@@ -260,6 +266,11 @@ class ReviewIntakeService:
         self.db.commit()
         return True
 
+    def _load_ignore_tokens(self, registry: KeywordRegistryService) -> set[str]:
+        """一次性取出全部"忽略"类关键词，避免逐候选查库。"""
+        entries, _total = registry.list_entries(keyword_type="ignore", status="active", limit=5000)
+        return {entry.canonical_name_normalized for entry in entries}
+
     def _extract_and_resolve_keywords(
         self,
         *,
@@ -270,31 +281,58 @@ class ReviewIntakeService:
         group_index: int,
         limit: int,
     ) -> list[ReviewKeywordCandidate]:
-        stats, _preview, _total_nodes = KeywordExtractorService(self.db).extract_regex_keywords_from_path(
-            raw_path=raw_path,
-            pattern=pattern,
-            flags=flags,
-            group_index=group_index,
-            limit=limit,
-        )
+        """切出候选词并标注它们与关键词库的关系。
+
+        pattern / flags / group_index 为保持接口兼容而保留，已不再使用；
+        limit 用作落库候选总数上限。
+        """
+        raw_candidates = extract_raw_candidates(raw_path)
         registry = KeywordRegistryService(self.db)
-        resolved: list[ReviewKeywordCandidate] = []
-        for stat in stats:
-            normalized = normalize_keyword_text(stat.keyword)
+        ignore_tokens = self._load_ignore_tokens(registry)
+
+        similar_map: dict[str, object] = {}
+        pending_for_similar = [
+            item.text
+            for item in raw_candidates
+            if normalize_keyword_text(item.text) not in ignore_tokens
+        ]
+        if pending_for_similar:
+            for suggestion in registry.suggest_similar(
+                pending_for_similar,
+                threshold=0.75,
+                limit=len(pending_for_similar),
+                keyword_types=[bucket, "tag"],
+            ):
+                similar_map.setdefault(suggestion.keyword, suggestion)
+
+        picks: list[ReviewKeywordCandidate] = []
+        hints: list[ReviewKeywordCandidate] = []
+        greyed: list[ReviewKeywordCandidate] = []
+
+        for item in raw_candidates:
+            normalized = normalize_keyword_text(item.text)
+
+            if normalized in ignore_tokens:
+                greyed.append(
+                    ReviewKeywordCandidate(
+                        keyword=item.text,
+                        count=1,
+                        source=item.source,
+                        examples=[],
+                        match_status="ignored",
+                    )
+                )
+                continue
+
             existing = registry.find_entry_by_keyword(normalized)
             if existing is not None:
-                if existing.keyword_type == "ignore":
-                    status = "ignored"
-                elif existing.keyword_type == bucket:
-                    status = "existing"
-                else:
-                    status = "conflict"
-                resolved.append(
+                status = "existing" if existing.keyword_type == bucket else "conflict"
+                hints.append(
                     ReviewKeywordCandidate(
-                        keyword=stat.keyword,
-                        count=stat.count,
-                        source=stat.source,
-                        examples=stat.examples,
+                        keyword=item.text,
+                        count=1,
+                        source=item.source,
+                        examples=[],
                         match_status=status,
                         matched_entry_id=existing.id,
                         matched_canonical_name=existing.canonical_name,
@@ -303,26 +341,26 @@ class ReviewIntakeService:
                 )
                 continue
 
-            similar = registry.suggest_similar(
-                [stat.keyword],
-                threshold=0.75,
-                limit=1,
-                keyword_types=[bucket, "tag"],
-            )
-            suggestion = similar[0] if similar else None
-            resolved.append(
+            suggestion = similar_map.get(item.text)
+            picks.append(
                 ReviewKeywordCandidate(
-                    keyword=stat.keyword,
-                    count=stat.count,
-                    source=stat.source,
-                    examples=stat.examples,
+                    keyword=item.text,
+                    count=1,
+                    source=item.source,
+                    examples=[],
                     match_status="similar" if suggestion else "new",
-                    matched_entry_id=suggestion.matched_entry_id if suggestion else None,
-                    matched_canonical_name=suggestion.matched_canonical_name if suggestion else None,
-                    similar_score=suggestion.score if suggestion else None,
+                    matched_entry_id=getattr(suggestion, "matched_entry_id", None),
+                    matched_canonical_name=getattr(suggestion, "matched_canonical_name", None),
+                    similar_score=getattr(suggestion, "score", None),
                 )
             )
-        return resolved
+
+        total_cap = max(1, min(limit, TOTAL_LIMIT))
+        # 落库顺序必须是"候选组在前"：find_first_actionable_keyword 与前端
+        # defaultKeyword 都取第一个可用词，提示组排前面会预填一个已存在的词。
+        # 提示组排在灰标签之前，避免被大量已忽略片段挤掉冲突警告
+        ordered = picks[:PICK_LIMIT] + hints[:HINT_LIMIT] + greyed
+        return ordered[:total_cap]
 
     def _validate_bucket(self, bucket: str) -> str:
         if bucket not in VALID_BUCKETS:
