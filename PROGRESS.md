@@ -289,3 +289,26 @@ Changed files:
 
 Rollback:
 - `git revert <本次 commit>`，或 `git checkout 7c461b5a -- scripts/review_intake_shortcut.py` 回到本轮改动前的版本。
+
+## 2026-09-05 - Task: 消除投递脚本双份拷贝 + 忽略本地 tmp 目录
+
+### What was done
+
+- IINA 项目里那份同名投递脚本的旧拷贝，改成直接软链接到本仓库这份，从此只有一个源文件，不会再出现「改了一边忘了另一边」的情况。IINA 实际走的调用路径没变，仍是本仓库的脚本。
+- 本仓库根目录的 `tmp/`（两份本地草稿）加入忽略清单，以后不会再出现在待提交列表里干扰判断。
+
+### Testing
+
+- 经软链接路径 `py_compile` 通过，且软链接内容与主文件一致。
+- 再次以无 tty 方式执行 `--login-only --base-url http://192.168.70.138:8010/api`，登录生产成功，退出码 0。
+- `git check-ignore -v tmp/tmp.md` 命中 `.gitignore:47:tmp/`，确认忽略生效。
+
+### Notes
+
+Changed files:
+- `.gitignore`：新增 `tmp/` 忽略规则。
+- 仓库外：`~/selfapp/IINA-script/legacy-18x-v2/scripts/review_intake_shortcut.py` 由实体拷贝改为指向本仓库脚本的软链接（原文件已备份到本次会话 scratchpad），并清理了该目录下针对旧拷贝的 `__pycache__`。
+
+Rollback:
+- `.gitignore` 改动：`git revert <本次 commit>`。
+- 软链接：删除该软链接后，把 scratchpad 里的 `legacy_review_intake_shortcut.py.bak` 复制回原路径即可。

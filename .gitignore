@@ -42,3 +42,6 @@ env/
 # postgres runtime data
 data/postgres/
 data/*.db.bak*
+
+# 本地临时草稿，不入库
+tmp/
