@@ -352,3 +352,28 @@ Changed files:
 Rollback:
 - 回退代码：`git revert 13bd36e0 9c88ca89 935fe624 2dfc3271`（或 `git checkout af4130ec -- app frontend tests scripts`），然后在服务器上 `git pull` 并重新执行 `docker compose -f docker/docker-compose.yml up -d --build app`。
 - 本次无数据库迁移、无接口变更，回滚不涉及数据处理；已回填的候选词会在下次投递或回滚后自然被旧规则覆盖。
+
+## 2026-09-05 - Task: 修复相似词建议失效
+
+### What was done
+
+- 修掉了关键词「相似词建议」的一个既有 bug：比对时只取库里按名称排序的前 20 个词，其余 1780 个完全不参与，所以待审核页的金色「相似」标签几乎不会触发，关键词页的相似词预览也一样失准。现在扫描全库。
+- 顺带确认了一件事：待审核页的候选词点选功能已经在线上正常工作，用户先前看到"还要复制粘贴"是浏览器缓存了部署前的旧页面所致，强制刷新即可。
+
+### Testing
+
+- 新增回归测试：先塞 30 个排序靠前的干扰词把目标词挤出前 20，再断言仍能匹配到。已验证该测试在旧写法下失败、修复后通过。
+- 全套自动化测试 326 项通过。
+- 性能实测：6 个候选词与 1800 条关键词比对耗时 44ms，不会拖慢 IINA 快捷键投递。
+- 生产部署后复验：容器正常、首页 200、线上 JS 包确认包含新版候选组件。
+
+### Notes
+
+Changed files:
+- `app/services/keywords/registry_service.py`：`suggest_similar` 显式传入扫描上限，不再落到 `list_entries` 默认的 20 条。
+- `tests/services/test_review_intake_candidates.py`：新增相似词建议的回归测试。
+
+已知未处理项（用户本轮明确不做）：nginx 未给首页文件设置 `Cache-Control`，浏览器会按文件年龄自行猜测缓存时长，导致每次部署后都需要强制刷新才能看到前端改动。用户选择每次自行强制刷新。
+
+Rollback:
+- `git revert ff6e514f`，然后服务器 `git pull` 并重新执行 `docker compose -f docker/docker-compose.yml up -d --build app`。
