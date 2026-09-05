@@ -312,3 +312,43 @@ Changed files:
 Rollback:
 - `.gitignore` 改动：`git revert <本次 commit>`。
 - 软链接：删除该软链接后，把 scratchpad 里的 `legacy_review_intake_shortcut.py.bak` 复制回原路径即可。
+
+## 2026-09-05 - Task: 待审核页关键词捕获优化与候选词点选
+
+### What was done
+
+- 解决了待审核页最费手的操作：以前关键词没被自动捕获时，要悬停标题看完整路径、在浮层里选中文字、复制、粘贴、再点批准，五步。现在候选词直接显示成标签，**点一下标签填入、再点批准即可**。
+- 找到了捕获失败的真正原因：老的提取逻辑只看文件名，从来不看上一级文件夹名，而 telegram 那批素材的人名恰恰写在文件夹名里。现在取材范围扩到「文件名 + 直接父目录」，抽取规则也从「只找【】括号」扩成「#标签 / 括号 / 按分隔符切片」三条。
+- 候选标签带颜色，一眼能看出这个词是新词、库里已经有了、还是和另一个名单冲突。以前冲突要等点了批准被接口拒绝才知道，现在列表上直接显示。面板顶部配了颜色图例。
+- 每个新词标签带一个「×」，点了（二次确认后）就把该词加进忽略库，以后不再作为候选出现。素材名里的露骨描述会被切成候选片段显示出来，这是清理它们的手段，用几次候选就会越来越干净。
+- 收紧了自动预填：只有 #标签 和括号里的词才自动填进输入框，按分隔符切出来的词一律留空要手动点选，避免「抖音」这类噪声词被不看就批准。
+- 生产上 12 条待审项已用新规则回填候选，零候选的已归零。
+
+### Testing
+
+- 全套自动化测试 325 项通过（新增 15 项候选提取单测，夹具全部使用脱敏假路径）。
+- 新增回归验证脚本 `scripts/verify_review_intake_candidates.py`，拿 272 条已批准的历史记录当标准答案集：
+  - 指标一（当初捕获失败、只能手工确认的 86 条）：命中率 **81.4%**，达到 80% 目标。
+  - 指标二（当初旧规则就能捕获的 186 条，防退化）：**100%**，无退化。
+  - 调优过程：首轮 69.8% → 放开装饰符分隔、按来源区分长度上限后 79.1% → 括号内再切片与去尾号变体后 81.4%。
+- 生产部署后复验：容器正常、首页 200、接口鉴权 401 正常、关键词 1800 条与待审项 284 条数据完好；容器内跑回归脚本指标一致。
+- 前端 `npm run build` 与 TypeScript 类型检查均通过。
+
+### Notes
+
+Changed files:
+- `app/services/review_intake_candidates.py`：新建，负责从路径切出候选词（切片、过滤、去重、排序）。
+- `app/services/review_intake_service.py`：投递时改用新模块；忽略词批量加载；候选不再重复存完整路径。
+- `frontend/src/pages/ReviewIntakePage.tsx`：候选可点选、平铺 5 个 +「更多」、状态色图例、「×」加忽略库、预填策略收紧。
+- `frontend/src/api/reviewIntake.ts`：新增写入忽略库的接口封装（复用现有关键词接口，后端未加端点）。
+- `frontend/src/index.css`：候选标签与图例样式。
+- `tests/services/test_review_intake_candidates.py`：新建，15 项单测。
+- `tests/services/test_review_intake_service.py`：既有断言编码的是旧行为，按新行为更新。
+- `scripts/verify_review_intake_candidates.py`：新建回归验证脚本。
+- `docs/superpowers/specs/2026-09-05-review-intake-candidate-picker-design.md`、`docs/superpowers/plans/2026-09-05-review-intake-candidate-picker.md`：设计文档与实施计划。
+
+已知取舍：素材名里的露骨描述会以短片段形式出现在候选里，这是平铺展示换来的代价，用户已知情并选定此方案，靠「×」加忽略库收敛。
+
+Rollback:
+- 回退代码：`git revert 13bd36e0 9c88ca89 935fe624 2dfc3271`（或 `git checkout af4130ec -- app frontend tests scripts`），然后在服务器上 `git pull` 并重新执行 `docker compose -f docker/docker-compose.yml up -d --build app`。
+- 本次无数据库迁移、无接口变更，回滚不涉及数据处理；已回填的候选词会在下次投递或回滚后自然被旧规则覆盖。
