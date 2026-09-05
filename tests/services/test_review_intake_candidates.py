@@ -108,3 +108,52 @@ def test_只取文件名与直接父目录不向上追溯():
 
     assert "mediastore" not in texts
     assert "archive" not in texts
+
+
+def test_括号内部粘着描述时切片也作为候选():
+    """【小葵CC(小莉)】这种，整块和拆出来的部分都要能选到。"""
+    path = "/vol/archive/tg/100-合集/100 - 【小葵CC(小莉)】第四弹.mp4"
+    texts = _texts(path)
+
+    assert "小葵CC(小莉)" in texts
+    assert "小葵CC" in texts
+    assert "小莉" in texts
+    # 整块必须排在拆出来的部分之前，否则旧规则本能命中的样本会被挤掉
+    assert texts.index("小葵CC(小莉)") < texts.index("小葵CC")
+
+
+def test_去掉片段尾部编号后的变体也是候选():
+    path = "/vol/archive/tg/100-小葵3 私拍/100 - x.mp4"
+    texts = _texts(path)
+
+    assert "小葵3" in texts
+    assert "小葵" in texts
+    assert texts.index("小葵3") < texts.index("小葵")
+
+
+def test_装饰符号被当作分隔符切开():
+    """▌ ✿ ⚫ @ 这类装饰符是把人名和描述粘在一起的主因。"""
+    path = "/vol/archive/tg/100-✿全裸盛宴✿ 女神娃娃▌小葵▌情欲按摩/100 - WWW.98T.LA@小莉.mp4"
+    texts = _texts(path)
+
+    assert "小葵" in texts
+    assert "小莉" in texts
+
+
+def test_标记来源允许更长的关键词():
+    """【】里是投稿者标出来的名字字段，可信度高，长度上限放宽到 32。"""
+    long_name = "dulianmaomaoxiaoxin"  # 19 字符，超过自由文本 16 的上限
+    path = f"/vol/archive/tg/100-合集/100 - 大神【{long_name}】更新.mp4"
+    texts = _texts(path)
+
+    assert long_name in texts
+
+
+def test_自由文本仍然卡在16字以内():
+    long_desc = "这是一段刻意写长的描述性文字"  # 14 字，边界内
+    too_long = "这是一段刻意写得更长一些的描述性文字用于越界"  # 越界
+    path = f"/vol/archive/tg/100-{long_desc} 小葵 {too_long}/100 - x.mp4"
+    texts = _texts(path)
+
+    assert "小葵" in texts
+    assert too_long not in texts

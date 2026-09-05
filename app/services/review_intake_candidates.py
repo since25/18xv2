@@ -17,11 +17,16 @@ from app.services.keywords.registry_service import normalize_keyword_text
 # 三条抽取规则
 HASHTAG_RE = re.compile(r"#([^\s#]+)")
 BRACKET_RE = re.compile(r"[【「『［\[]([^】」』］\]]+)[】」』］\]]")
-# 分隔符里刻意不含下划线：monmon_tw 这类账号型关键词被切开就废了，
-# 而下划线连接的纯数字串会在归一化之后被「纯数字」规则挡掉。
-SEPARATOR_RE = re.compile(r"[\s,，、:：;；\-/|~()（）\[\]【】]+")
+# 分隔符 = 一切非「字母/数字/下划线/文字」的字符。\w 在 Python 里本就包含中日韩文字，
+# 所以这一条同时切开空格、标点、@、点号，以及素材名里常见的装饰符（▌ ✿ ⚫️ 等）——
+# 生产样本显示这些装饰符是把人名和描述粘在一起的主因。
+# 刻意保留下划线：monmon_tw 这类账号型关键词被切开就废了，而下划线连接的纯数字串
+# 会在归一化之后被「纯数字」规则挡掉。
+SEPARATOR_RE = re.compile(r"\W+", re.UNICODE)
 # 文件名/目录名开头的流水号前缀，如 "163379-" 或 "25481 - "
 SERIAL_PREFIX_RE = re.compile(r"^\d+\s*[-_.]?\s*")
+# 片段尾部的编号后缀，如「杏吧爱坤3」「小葵2」——生产样本里人名后跟集数编号很常见
+TRAILING_INDEX_RE = re.compile(r"[0-9]+$")
 
 # 技术噪声表：文件命名带进来的通用词，与内容无关，稳定可硬编码。
 # 这不是露骨词表——露骨片段靠用户自己的「忽略」关键词库过滤。
@@ -36,7 +41,10 @@ NOISE_TOKENS = frozenset(
 )
 
 MIN_LENGTH = 2
-MAX_LENGTH = 16
+# 长度上限按来源区分：【】和 #标签 是投稿者自己标出来的名字字段，可信度高，
+# 放宽到 32；自由文本切片放宽会把整句露骨描述放进候选，仍按 16 卡死。
+MAX_LENGTH_MARKED = 32
+MAX_LENGTH_SEGMENT = 16
 SOURCE_RANK = {"hashtag": 0, "bracket": 1, "segment": 2}
 
 
@@ -77,7 +85,7 @@ def _mask_spans(text: str, spans: list[tuple[int, int]]) -> str:
     return "".join(chars)
 
 
-def is_noise(text: str) -> bool:
+def is_noise(text: str, source: str = "segment") -> bool:
     """结构过滤。所有判断都在归一化 + casefold 之后进行。
 
     normalize_keyword_text 会把 _ - / ~ ( ) . 等替换成空格，
@@ -86,7 +94,8 @@ def is_noise(text: str) -> bool:
     normalized = normalize_keyword_text(text).casefold()
     if not normalized:
         return True
-    if len(normalized) < MIN_LENGTH or len(normalized) > MAX_LENGTH:
+    max_length = MAX_LENGTH_SEGMENT if source == "segment" else MAX_LENGTH_MARKED
+    if len(normalized) < MIN_LENGTH or len(normalized) > max_length:
         return True
     tokens = normalized.split()
     if all(token.isdigit() for token in tokens):
@@ -113,31 +122,48 @@ def extract_raw_candidates(raw_path: str) -> list[RawCandidate]:
     collected: list[RawCandidate] = []
     order = 0
 
+    def take(token: str, source: str, from_parent: bool) -> None:
+        """收下一个片段，并顺带补上它的去尾号变体。
+
+        变体排在原片段之后，保证「整块」永远优先于「拆出来的部分」，
+        这样旧规则本就能命中的样本不会因为新增变体而被挤出前几名。
+        """
+        nonlocal order
+        token = token.strip()
+        if not token:
+            return
+        collected.append(RawCandidate(token, source, from_parent, order))
+        order += 1
+        trimmed = TRAILING_INDEX_RE.sub("", token).strip()
+        if trimmed and trimmed != token:
+            collected.append(RawCandidate(trimmed, source, from_parent, order))
+            order += 1
+
     for text, from_parent in _material_parts(raw_path):
         spans: list[tuple[int, int]] = []
 
         for match in HASHTAG_RE.finditer(text):
             spans.append(match.span())
-            token = match.group(1).strip("._- ")
-            if token:
-                collected.append(RawCandidate(token, "hashtag", from_parent, order))
-                order += 1
+            marked = match.group(1).strip("._- ")
+            take(marked, "hashtag", from_parent)
+            # 标签内部还可能粘着描述，把切片也一并作为候选（排在整块之后）
+            for piece in SEPARATOR_RE.split(marked):
+                if piece.strip() != marked:
+                    take(piece, "hashtag", from_parent)
 
         for match in BRACKET_RE.finditer(text):
             spans.append(match.span())
-            token = match.group(1).strip()
-            if token:
-                collected.append(RawCandidate(token, "bracket", from_parent, order))
-                order += 1
+            marked = match.group(1).strip()
+            take(marked, "bracket", from_parent)
+            for piece in SEPARATOR_RE.split(marked):
+                if piece.strip() != marked:
+                    take(piece, "bracket", from_parent)
 
         rest = SERIAL_PREFIX_RE.sub("", _mask_spans(text, spans), count=1)
         for piece in SEPARATOR_RE.split(rest):
-            token = piece.strip()
-            if token:
-                collected.append(RawCandidate(token, "segment", from_parent, order))
-                order += 1
+            take(piece, "segment", from_parent)
 
-    survivors = [item for item in collected if not is_noise(item.text)]
+    survivors = [item for item in collected if not is_noise(item.text, item.source)]
     survivors.sort(key=_sort_key)
 
     # 同一归一化文本跨来源只保留排名最高的一条
