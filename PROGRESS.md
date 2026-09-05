@@ -267,3 +267,25 @@
 当前状态：登录系统、Open API 扫码授权、Docker 部署、PostgreSQL 迁移、关键词命中重建性能问题均已完成并上线验证。
 重点待办：历史计划 `source_path` 漂移处理、2 个 duplicate_target 冲突任务、P2 文档补全、P3 前端细化。
 ```
+
+## 2026-09-05 - Task: IINA 待审投递脚本去掉写死的本机路径
+
+### What was done
+
+- IINA 快捷键投递白/黑名单用的脚本，原先把「读账号密码的 .env 文件」写死成一条本机绝对路径，一旦推到 GitHub 会把本机用户名和目录结构留在仓库历史里，换电脑也会直接失效。现在改成从当前用户主目录自动推导，另外支持用环境变量 `X18V2_ENV_FILE` 指到别的位置。
+- 顺手修掉一个隐患：读 .env 时如果账号或密码带引号（`pass="xxx"`），引号会被当成密码的一部分导致登录失败且报错看不出原因。现在自动剥掉首尾成对引号。
+- 本轮不改任何投递逻辑和接口，IINA 现有快捷键行为不变。
+
+### Testing
+
+- `.venv/bin/python -m py_compile scripts/review_intake_shortcut.py`：通过。
+- 单元级验证：默认凭据文件解析到真实 `.env`（账号 wang、密码非空）；带双引号/单引号/含 `=` 的值均正确剥离引号；`X18V2_ENV_FILE` 覆盖生效。
+- 端到端验证：删除本地 cookie 模拟登录态过期后，以非交互方式（无 tty，等同 IINA 调用环境）执行 `--login-only --base-url http://192.168.70.138:8010/api`，成功自动登录生产并重新写入 cookie，退出码 0。
+
+### Notes
+
+Changed files:
+- `scripts/review_intake_shortcut.py`：凭据文件路径改为主目录推导 + `X18V2_ENV_FILE` 覆盖；`.env` 解析支持剥离引号。
+
+Rollback:
+- `git revert <本次 commit>`，或 `git checkout 7c461b5a -- scripts/review_intake_shortcut.py` 回到本轮改动前的版本。
