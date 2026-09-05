@@ -26,6 +26,7 @@ import DataToolbar from '@/layout/DataToolbar'
 import PageScaffold from '@/layout/PageScaffold'
 import {
   approveReviewIntakeItem,
+  createIgnoreKeyword,
   createReviewIntakeItem,
   deleteReviewIntakeItem,
   dismissReviewIntakeItem,
@@ -35,6 +36,7 @@ import {
   type ReviewBucket,
   type ReviewIntakeItem,
   type ReviewIntakeSummary,
+  type ReviewKeywordCandidate,
   type ReviewStatus,
 } from '@/api/reviewIntake'
 
@@ -58,11 +60,48 @@ const MATCH_COLORS: Record<string, string> = {
   ignored: 'default',
 }
 
+// 面板顶部的颜色图例，省得记
+const MATCH_LEGEND: Array<{ status: string; label: string }> = [
+  { status: 'new', label: '新词' },
+  { status: 'similar', label: '有相似词' },
+  { status: 'existing', label: '库里已有' },
+  { status: 'conflict', label: '冲突' },
+  { status: 'ignored', label: '已忽略' },
+]
+
+// 行内平铺的候选个数，其余收进「更多」
+const VISIBLE_CANDIDATES = 5
+
+// 只有这两类来源是投稿者自己标出来的名字字段，才允许自动预填；
+// 自由文本切片一律留空，避免噪声词被直接批准。
+const PREFILL_SOURCES = new Set(['hashtag', 'bracket'])
+
+// 提示组：不是"选它"，而是"这条可以跳过"或"点了会被拒"
+const HINT_STATUSES = new Set(['existing', 'conflict'])
+
+function isHint(candidate: ReviewKeywordCandidate) {
+  return HINT_STATUSES.has(candidate.match_status)
+}
+
+// 和后端 normalize_keyword_text 保持一致的轻量归一化，用于「×」后本地去重移除
+function normalizeWord(word: string) {
+  return word
+    .normalize('NFKC')
+    .replace(/[_\-/]+/g, ' ')
+    .replace(/[^\w\u4e00-\u9fff\s·]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase()
+}
+
 function defaultKeyword(item: ReviewIntakeItem) {
-  const actionable = item.keyword_candidates.find((candidate) =>
-    ['new', 'similar', 'existing'].includes(candidate.match_status),
+  // 只预填 hashtag / 括号来源的候选。自由文本切片排第一的往往是「抖音」这类
+  // 噪声词，预填后用户不看就点批准会把噪声写进名单。
+  const actionable = item.keyword_candidates.find(
+    (candidate) =>
+      ['new', 'similar'].includes(candidate.match_status) && PREFILL_SOURCES.has(candidate.source),
   )
-  return item.approved_keyword ?? actionable?.keyword ?? item.keyword_candidates[0]?.keyword ?? ''
+  return item.approved_keyword ?? actionable?.keyword ?? ''
 }
 
 function itemLabel(item: ReviewIntakeItem) {
@@ -92,6 +131,8 @@ export default function ReviewIntakePage() {
   const [whitelistItems, setWhitelistItems] = useState<ReviewIntakeItem[]>([])
   const [blacklistItems, setBlacklistItems] = useState<ReviewIntakeItem[]>([])
   const [keywordDrafts, setKeywordDrafts] = useState<Record<number, string>>({})
+  const [expandedRows, setExpandedRows] = useState<Record<number, boolean>>({})
+  const [hiddenWords, setHiddenWords] = useState<string[]>([])
   const [loading, setLoading] = useState(false)
   const [submitting, setSubmitting] = useState(false)
 
@@ -159,6 +200,22 @@ export default function ReviewIntakePage() {
     }
   }
 
+  function pickKeyword(itemId: number, keyword: string) {
+    setKeywordDrafts((current) => ({ ...current, [itemId]: keyword }))
+  }
+
+  async function handleIgnoreWord(word: string) {
+    try {
+      await createIgnoreKeyword(word)
+      // 候选的状态色是投递那一刻算好存下来的，重新拉列表不会让它变灰，
+      // 所以这里直接在本地把所有同名标签隐藏掉。
+      setHiddenWords((current) => [...current, normalizeWord(word)])
+      void messageApi.success(`已把「${word}」加入忽略库`)
+    } catch (error) {
+      void messageApi.error(errorMessage(error, '加入忽略库失败'))
+    }
+  }
+
   async function handleApprove(item: ReviewIntakeItem) {
     const keyword = (keywordDrafts[item.id] ?? '').trim()
     if (!keyword) {
@@ -207,12 +264,22 @@ export default function ReviewIntakePage() {
   function columnsFor(bucketType: ReviewBucket): ColumnsType<ReviewIntakeItem> {
     return [
       {
-        title: '候选',
+        title: '候选（点一下填入右侧）',
         dataIndex: 'keyword_candidates',
-        width: 190,
-        render: (_: unknown, item) => (
-          <Space className="review-candidate-tags" size={[4, 4]} wrap>
-            {item.keyword_candidates.length ? item.keyword_candidates.map((candidate, index) => (
+        width: 300,
+        render: (_: unknown, item) => {
+          const usable = item.keyword_candidates.filter(
+            (candidate) => !hiddenWords.includes(normalizeWord(candidate.keyword)),
+          )
+          const hints = usable.filter(isHint)
+          const picks = usable.filter((candidate) => !isHint(candidate))
+          const expanded = expandedRows[item.id] ?? false
+          const shown = expanded ? picks : picks.slice(0, VISIBLE_CANDIDATES)
+          const restCount = picks.length - shown.length
+
+          const renderTag = (candidate: ReviewKeywordCandidate, index: number) => {
+            const canIgnore = ['new', 'similar'].includes(candidate.match_status)
+            return (
               <Tooltip
                 key={`${candidate.keyword}-${candidate.match_status}-${index}`}
                 title={pathTooltip(item.raw_path)}
@@ -220,28 +287,77 @@ export default function ReviewIntakePage() {
                 placement="topLeft"
               >
                 <Tag
-                  className="review-candidate-tag"
+                  className="review-candidate-tag review-candidate-tag--pickable"
                   color={MATCH_COLORS[candidate.match_status] ?? 'default'}
+                  onClick={() => pickKeyword(item.id, candidate.keyword)}
                 >
-                  {candidate.keyword}
+                  <span className="review-candidate-text">{candidate.keyword}</span>
+                  {canIgnore ? (
+                    <Popconfirm
+                      title={`把「${candidate.keyword}」加入忽略库？`}
+                      description="以后这个词不再作为候选出现"
+                      onConfirm={() => void handleIgnoreWord(candidate.keyword)}
+                    >
+                      <span
+                        className="review-candidate-drop"
+                        title="加入忽略库"
+                        onClick={(event) => event.stopPropagation()}
+                      >
+                        ×
+                      </span>
+                    </Popconfirm>
+                  ) : null}
                 </Tag>
               </Tooltip>
-            )) : (
-              <Tooltip
-                title={pathTooltip(item.raw_path)}
-                mouseEnterDelay={1}
-                placement="topLeft"
-              >
+            )
+          }
+
+          if (!usable.length) {
+            // 零候选行恰恰最需要看路径，悬停提示必须保留
+            return (
+              <Tooltip title={pathTooltip(item.raw_path)} mouseEnterDelay={1} placement="topLeft">
                 <Tag className="review-candidate-tag" color="default">未提取</Tag>
               </Tooltip>
-            )}
-          </Space>
-        ),
+            )
+          }
+
+          return (
+            <div className="review-candidate-cell">
+              {hints.length ? (
+                <div className="review-candidate-hints">
+                  <span className="review-candidate-hint-label">已在库中：</span>
+                  {hints.map(renderTag)}
+                </div>
+              ) : null}
+              <Space className="review-candidate-tags" size={[4, 4]} wrap>
+                {shown.map(renderTag)}
+                {restCount > 0 ? (
+                  <Button
+                    size="small"
+                    type="link"
+                    onClick={() => setExpandedRows((current) => ({ ...current, [item.id]: true }))}
+                  >
+                    更多 {restCount}
+                  </Button>
+                ) : null}
+                {expanded && picks.length > VISIBLE_CANDIDATES ? (
+                  <Button
+                    size="small"
+                    type="link"
+                    onClick={() => setExpandedRows((current) => ({ ...current, [item.id]: false }))}
+                  >
+                    收起
+                  </Button>
+                ) : null}
+              </Space>
+            </div>
+          )
+        },
       },
       {
         title: '确认关键词',
         key: 'keyword',
-        width: 180,
+        width: 170,
         render: (_: unknown, item) => (
           <Input
             size="small"
@@ -315,6 +431,11 @@ export default function ReviewIntakePage() {
         title={title}
         extra={<Tag color={bucketType === 'whitelist' ? 'green' : 'red'}>{items.length}</Tag>}
       >
+        <div className="review-legend">
+          {MATCH_LEGEND.map((entry) => (
+            <Tag key={entry.status} color={MATCH_COLORS[entry.status]}>{entry.label}</Tag>
+          ))}
+        </div>
         {items.length ? (
           <Table
             size="small"
@@ -324,7 +445,7 @@ export default function ReviewIntakePage() {
             columns={columnsFor(bucketType)}
             dataSource={items}
             tableLayout="fixed"
-            scroll={{ x: 556 }}
+            scroll={{ x: 676 }}
           />
         ) : (
           <Empty description="没有待处理记录" />

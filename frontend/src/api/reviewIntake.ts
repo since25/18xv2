@@ -107,3 +107,12 @@ export function restoreReviewIntakeItem(id: number) {
 export function deleteReviewIntakeItem(id: number) {
   return api.delete<{ ok: boolean }>(`/review-intake/items/${id}`)
 }
+
+// 把噪声片段写进「忽略」类关键词库，之后提取时会被过滤掉。
+// 复用现有的关键词创建接口，不新增后端端点。
+export function createIgnoreKeyword(word: string) {
+  return api.post<{ id: number }>('/keywords', {
+    canonical_name: word,
+    keyword_type: 'ignore',
+  })
+}

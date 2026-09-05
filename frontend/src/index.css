@@ -316,6 +316,53 @@ body {
   cursor: help;
 }
 
+.review-candidate-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* 提示组：库里已有 / 冲突，单独一行置顶，不占候选名额 */
+.review-candidate-hints {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.review-candidate-hint-label {
+  color: rgba(0, 0, 0, 0.45);
+  font-size: 12px;
+}
+
+.review-candidate-tag--pickable {
+  cursor: pointer;
+}
+
+.review-candidate-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 「×」= 把这个词加入忽略库，以后不再作为候选出现 */
+.review-candidate-drop {
+  margin-left: 6px;
+  opacity: 0.5;
+  font-weight: 600;
+}
+
+.review-candidate-drop:hover {
+  opacity: 1;
+}
+
+.review-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 8px;
+  opacity: 0.85;
+}
+
 .review-action-buttons .ant-btn {
   width: 28px;
   padding-inline: 0;
