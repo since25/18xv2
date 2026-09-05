@@ -157,3 +157,19 @@ def test_自由文本仍然卡在16字以内():
 
     assert "小葵" in texts
     assert too_long not in texts
+
+
+def test_相似词建议会扫描全部关键词而不是只看前二十条(db_session):
+    """回归：suggest_similar 早先漏传 limit，只比对按名称排序的前 20 条，
+    导致库大了之后这个功能实际失效。"""
+    from app.services.keywords.registry_service import KeywordRegistryService
+
+    registry = KeywordRegistryService(db_session)
+    # 先塞 30 个排序靠前的干扰词，把目标词挤出前 20
+    for index in range(30):
+        registry.create_entry(canonical_name=f"aaa{index:03d}", keyword_type="whitelist")
+    registry.create_entry(canonical_name="zzz小葵酱", keyword_type="whitelist")
+
+    suggestions = registry.suggest_similar(["zzz小葵酱酱"], threshold=0.75, limit=5)
+
+    assert any(item.matched_canonical_name == "zzz小葵酱" for item in suggestions)

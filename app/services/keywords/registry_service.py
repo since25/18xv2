@@ -15,6 +15,10 @@ from app.models.keywords import KeywordAlias, KeywordEntry, KeywordHit, KeywordL
 from app.models.whitelist import WhitelistCandidate
 
 
+# 相似度比对时一次扫描的关键词上限。生产库现有约 1800 条，留足余量。
+MAX_SIMILAR_SCAN_ENTRIES = 20000
+
+
 def normalize_keyword_text(raw: str) -> str:
     normalized = unicodedata.normalize("NFKC", raw or "")
     normalized = normalized.strip().replace("/", " ")
@@ -491,7 +495,9 @@ class KeywordRegistryService:
         limit: int = 20,
         keyword_types: list[str] | None = None,
     ) -> list[SimilarKeywordSuggestion]:
-        entries, _total = self.list_entries(status="active")
+        # 必须显式传 limit：list_entries 默认只返回 20 条，不传的话相似度比对
+        # 只覆盖按名称排序的前 20 个词，库里其余的词全都不参与，等于这个功能失效。
+        entries, _total = self.list_entries(status="active", limit=MAX_SIMILAR_SCAN_ENTRIES)
         if keyword_types:
             entries = [entry for entry in entries if entry.keyword_type in set(keyword_types)]
         suggestions: list[SimilarKeywordSuggestion] = []
