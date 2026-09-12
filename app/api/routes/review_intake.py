@@ -9,6 +9,10 @@ from app.api.deps import get_db
 from app.models.review_intake import ReviewIntakeItem
 from app.schemas.review_intake import (
     ReviewIntakeApproveRequest,
+    ReviewIntakeBatchApproveRequest,
+    ReviewIntakeBatchIdsRequest,
+    ReviewIntakeBatchResponse,
+    ReviewIntakeBatchResultItem,
     ReviewIntakeCreateRequest,
     ReviewIntakeDismissRequest,
     ReviewIntakeItemResponse,
@@ -16,7 +20,11 @@ from app.schemas.review_intake import (
     ReviewIntakePathRequest,
     ReviewIntakeSummaryResponse,
 )
-from app.services.review_intake_service import ReviewIntakeService, parse_keyword_candidates
+from app.services.review_intake_service import (
+    BatchOutcome,
+    ReviewIntakeService,
+    parse_keyword_candidates,
+)
 
 router = APIRouter(prefix="/review-intake", tags=["review-intake"])
 
@@ -145,6 +153,54 @@ def approve_item(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return _to_response(item)
+
+
+def _to_batch_response(outcomes: list[BatchOutcome]) -> ReviewIntakeBatchResponse:
+    results = [
+        ReviewIntakeBatchResultItem(
+            id=outcome.id,
+            ok=outcome.ok,
+            item=_to_response(outcome.item) if outcome.item is not None else None,
+            error=outcome.error,
+        )
+        for outcome in outcomes
+    ]
+    succeeded = sum(1 for outcome in outcomes if outcome.ok)
+    return ReviewIntakeBatchResponse(
+        succeeded=succeeded,
+        failed=len(outcomes) - succeeded,
+        results=results,
+    )
+
+
+@router.post("/items/batch-approve", response_model=ReviewIntakeBatchResponse)
+def batch_approve_items(
+    payload: ReviewIntakeBatchApproveRequest,
+    db: Session = Depends(get_db),
+) -> ReviewIntakeBatchResponse:
+    outcomes = ReviewIntakeService(db).batch_approve(
+        entries=[(entry.id, entry.keyword) for entry in payload.items],
+        note=payload.note,
+    )
+    return _to_batch_response(outcomes)
+
+
+@router.post("/items/batch-dismiss", response_model=ReviewIntakeBatchResponse)
+def batch_dismiss_items(
+    payload: ReviewIntakeBatchIdsRequest,
+    db: Session = Depends(get_db),
+) -> ReviewIntakeBatchResponse:
+    outcomes = ReviewIntakeService(db).batch_dismiss(ids=payload.ids, note=payload.note)
+    return _to_batch_response(outcomes)
+
+
+@router.post("/items/batch-delete", response_model=ReviewIntakeBatchResponse)
+def batch_delete_items(
+    payload: ReviewIntakeBatchIdsRequest,
+    db: Session = Depends(get_db),
+) -> ReviewIntakeBatchResponse:
+    outcomes = ReviewIntakeService(db).batch_delete(ids=payload.ids)
+    return _to_batch_response(outcomes)
 
 
 @router.post("/items/{item_id}/dismiss", response_model=ReviewIntakeItemResponse)

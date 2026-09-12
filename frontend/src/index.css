@@ -289,13 +289,6 @@ body {
   margin: 6px 0;
 }
 
-.review-intake-panels {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 620px), 1fr));
-  gap: 16px;
-  align-items: start;
-}
-
 .review-intake-card {
   min-width: 0;
 }
@@ -368,16 +361,94 @@ body {
   padding-inline: 0;
 }
 
-.review-path-tooltip {
-  max-width: min(560px, calc(100vw - 48px));
+/* 路径行：常驻显示且可划词，划完直接变成关键词 */
+.review-path-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  padding: 2px 0 2px 40px;
   line-height: 1.5;
+}
+
+.review-path-label {
+  flex: none;
+  color: rgba(0, 0, 0, 0.45);
+  font-size: 12px;
+}
+
+.review-path-text {
+  flex: 1 1 320px;
+  min-width: 0;
+  color: rgba(0, 0, 0, 0.65);
+  cursor: text;
+  font-size: 12px;
+  user-select: text;
   word-break: break-all;
 }
 
-.review-path-tooltip-label {
-  margin-bottom: 4px;
-  color: rgba(255, 255, 255, 0.72);
+.review-path-error {
+  flex: none;
+  color: #cf1322;
   font-size: 12px;
+}
+
+.review-keyword-cell {
+  width: 100%;
+}
+
+/* 已填好关键词并勾选的行 */
+.review-row--ready > td {
+  background: rgba(82, 196, 26, 0.08);
+}
+
+/* 批量提交失败的行留在原地并标红 */
+.review-row--failed > td {
+  background: rgba(255, 77, 79, 0.1);
+}
+
+/* 底部批量操作栏，选中任意一行后浮出 */
+.review-batch-bar {
+  position: fixed;
+  right: 24px;
+  bottom: 20px;
+  left: 24px;
+  z-index: 20;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 16px;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.16);
+}
+
+.review-batch-count {
+  font-weight: 600;
+}
+
+.review-confirm-words {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.review-editor-hint {
+  margin-bottom: 8px;
+  color: rgba(0, 0, 0, 0.45);
+}
+
+.review-ignore-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 320px;
+  overflow-y: auto;
 }
 
 .emby-media-actions-grid {

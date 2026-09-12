@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 import hashlib
 import json
@@ -24,6 +26,16 @@ VALID_STATUSES = {"pending", "approved", "dismissed"}
 PICK_LIMIT = 9
 HINT_LIMIT = 3
 TOTAL_LIMIT = PICK_LIMIT + HINT_LIMIT
+
+
+@dataclass(slots=True)
+class BatchOutcome:
+    """批量操作里单条记录的处理结果，成功和失败都要能被前端逐条看见。"""
+
+    id: int
+    ok: bool
+    item: ReviewIntakeItem | None = None
+    error: str | None = None
 
 
 def _normalize_path(raw_path: str) -> str:
@@ -180,6 +192,60 @@ class ReviewIntakeService:
         return result
 
     def approve(self, *, item_id: int, keyword: str, note: str | None) -> ReviewIntakeItem:
+        item = self._approve_one(item_id=item_id, keyword=keyword, note=note)
+        KeywordRegistryService(self.db).sync_legacy_library()
+        self.db.refresh(item)
+        return item
+
+    def batch_approve(
+        self,
+        *,
+        entries: Sequence[tuple[int, str]],
+        note: str | None = None,
+    ) -> list[BatchOutcome]:
+        """逐条独立批准：一条失败只回滚它自己，其余照常写入。"""
+        outcomes: list[BatchOutcome] = []
+        has_success = False
+        for item_id, keyword in entries:
+            try:
+                item = self._approve_one(item_id=item_id, keyword=keyword, note=note)
+            except (LookupError, ValueError) as exc:
+                self.db.rollback()
+                outcomes.append(BatchOutcome(id=item_id, ok=False, error=str(exc)))
+                continue
+            has_success = True
+            outcomes.append(BatchOutcome(id=item_id, ok=True, item=item))
+        if has_success:
+            # 旧版关键词库同步是全量重建，整批只做一次
+            KeywordRegistryService(self.db).sync_legacy_library()
+            for outcome in outcomes:
+                if outcome.item is not None:
+                    self.db.refresh(outcome.item)
+        return outcomes
+
+    def batch_dismiss(self, *, ids: Sequence[int], note: str | None = None) -> list[BatchOutcome]:
+        outcomes: list[BatchOutcome] = []
+        for item_id in ids:
+            try:
+                item = self.dismiss(item_id=item_id, note=note)
+            except (LookupError, ValueError) as exc:
+                self.db.rollback()
+                outcomes.append(BatchOutcome(id=item_id, ok=False, error=str(exc)))
+                continue
+            outcomes.append(BatchOutcome(id=item_id, ok=True, item=item))
+        return outcomes
+
+    def batch_delete(self, *, ids: Sequence[int]) -> list[BatchOutcome]:
+        outcomes: list[BatchOutcome] = []
+        for item_id in ids:
+            if self.delete(item_id=item_id):
+                outcomes.append(BatchOutcome(id=item_id, ok=True))
+            else:
+                outcomes.append(BatchOutcome(id=item_id, ok=False, error="待审核项不存在"))
+        return outcomes
+
+    def _approve_one(self, *, item_id: int, keyword: str, note: str | None) -> ReviewIntakeItem:
+        """把一条待审核项写进正式名单，不做旧版关键词库同步。"""
         item = self.db.get(ReviewIntakeItem, item_id)
         if item is None:
             raise LookupError("待审核项不存在")
@@ -228,7 +294,6 @@ class ReviewIntakeService:
         if note is not None:
             item.note = note
         self.db.commit()
-        registry.sync_legacy_library()
         self.db.refresh(item)
         return item
 

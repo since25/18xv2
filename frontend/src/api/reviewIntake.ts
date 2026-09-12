@@ -87,25 +87,8 @@ export function getReviewIntakeSummary() {
   return api.get<ReviewIntakeSummary>('/review-intake/summary')
 }
 
-export function approveReviewIntakeItem(id: number, keyword: string, note?: string | null) {
-  return api.post<ReviewIntakeItem>(`/review-intake/items/${id}/approve`, {
-    keyword,
-    note: note ?? null,
-  })
-}
-
-export function dismissReviewIntakeItem(id: number, note?: string | null) {
-  return api.post<ReviewIntakeItem>(`/review-intake/items/${id}/dismiss`, {
-    note: note ?? null,
-  })
-}
-
 export function restoreReviewIntakeItem(id: number) {
   return api.post<ReviewIntakeItem>(`/review-intake/items/${id}/restore`)
-}
-
-export function deleteReviewIntakeItem(id: number) {
-  return api.delete<{ ok: boolean }>(`/review-intake/items/${id}`)
 }
 
 // 把噪声片段写进「忽略」类关键词库，之后提取时会被过滤掉。
@@ -115,4 +98,35 @@ export function createIgnoreKeyword(word: string) {
     canonical_name: word,
     keyword_type: 'ignore',
   })
+}
+
+export interface ReviewIntakeBatchResultItem {
+  id: number
+  ok: boolean
+  item: ReviewIntakeItem | null
+  error: string | null
+}
+
+export interface ReviewIntakeBatchResponse {
+  succeeded: number
+  failed: number
+  results: ReviewIntakeBatchResultItem[]
+}
+
+export interface ReviewIntakeBatchApproveEntry {
+  id: number
+  keyword: string
+}
+
+// 批量接口逐条返回结果，一条失败不影响其它条
+export function batchApproveReviewIntakeItems(items: ReviewIntakeBatchApproveEntry[]) {
+  return api.post<ReviewIntakeBatchResponse>('/review-intake/items/batch-approve', { items })
+}
+
+export function batchDismissReviewIntakeItems(ids: number[]) {
+  return api.post<ReviewIntakeBatchResponse>('/review-intake/items/batch-dismiss', { ids })
+}
+
+export function batchDeleteReviewIntakeItems(ids: number[]) {
+  return api.post<ReviewIntakeBatchResponse>('/review-intake/items/batch-delete', { ids })
 }

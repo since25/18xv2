@@ -88,3 +88,59 @@ def test_invalid_bucket_is_rejected(client):
     )
 
     assert resp.status_code == 422
+
+
+def _create(client, raw_path: str, bucket: str = "whitelist") -> int:
+    return client.post(f"/review-intake/{bucket}", json={"raw_path": raw_path}).json()["id"]
+
+
+def test_batch_approve_route_returns_per_item_results(client):
+    ok_id = _create(client, "/Volumes/finish/作品【姝姬娘娘】.mp4")
+    bad_id = _create(client, "/Volumes/finish/作品【小仙女下午茶】.mp4")
+
+    resp = client.post(
+        "/review-intake/items/batch-approve",
+        json={
+            "items": [
+                {"id": ok_id, "keyword": "姝姬娘娘"},
+                {"id": bad_id, "keyword": "x"},
+                {"id": 999999, "keyword": "任意词"},
+            ]
+        },
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["succeeded"] == 1
+    assert data["failed"] == 2
+    assert data["results"][0]["ok"] is True
+    assert data["results"][0]["item"]["status"] == "approved"
+    assert data["results"][1]["ok"] is False
+    assert data["results"][1]["error"]
+    assert data["results"][2]["error"]
+
+    pending = client.get("/review-intake/items?bucket=whitelist&status=pending").json()
+    assert pending["total"] == 1
+
+
+def test_batch_dismiss_and_delete_routes(client):
+    first = _create(client, "/Volumes/finish/作品【姝姬娘娘】.mp4")
+    second = _create(client, "/Volumes/finish/作品【小仙女下午茶】.mp4")
+
+    dismissed = client.post("/review-intake/items/batch-dismiss", json={"ids": [first, second]})
+    assert dismissed.status_code == 200
+    assert dismissed.json()["succeeded"] == 2
+
+    deleted = client.post("/review-intake/items/batch-delete", json={"ids": [first, 999999]})
+    assert deleted.status_code == 200
+    body = deleted.json()
+    assert body["succeeded"] == 1
+    assert body["failed"] == 1
+
+    remaining = client.get("/review-intake/items?bucket=whitelist&status=").json()
+    assert remaining["total"] == 1
+
+
+def test_batch_approve_rejects_empty_payload(client):
+    resp = client.post("/review-intake/items/batch-approve", json={"items": []})
+    assert resp.status_code == 422

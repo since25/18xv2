@@ -50,6 +50,21 @@ class ReviewIntakeDismissRequest(BaseModel):
     note: str | None = None
 
 
+class ReviewIntakeBatchApproveEntry(BaseModel):
+    id: int
+    keyword: str = Field(min_length=1, max_length=255)
+
+
+class ReviewIntakeBatchApproveRequest(BaseModel):
+    items: list[ReviewIntakeBatchApproveEntry] = Field(min_length=1, max_length=500)
+    note: str | None = None
+
+
+class ReviewIntakeBatchIdsRequest(BaseModel):
+    ids: list[int] = Field(min_length=1, max_length=500)
+    note: str | None = None
+
+
 class ReviewIntakeItemResponse(BaseModel):
     id: int
     bucket: ReviewBucket
@@ -81,3 +96,16 @@ class ReviewIntakeSummaryResponse(BaseModel):
     blacklist_approved: int = 0
     whitelist_dismissed: int = 0
     blacklist_dismissed: int = 0
+
+
+class ReviewIntakeBatchResultItem(BaseModel):
+    id: int
+    ok: bool
+    item: ReviewIntakeItemResponse | None = None
+    error: str | None = None
+
+
+class ReviewIntakeBatchResponse(BaseModel):
+    succeeded: int
+    failed: int
+    results: list[ReviewIntakeBatchResultItem]

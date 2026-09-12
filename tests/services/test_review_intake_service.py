@@ -84,3 +84,67 @@ def test_dismissed_item_is_restored_when_submitted_again(db_session):
     assert restored.id == item.id
     assert restored.status == "pending"
     assert restored.reviewed_at is None
+
+
+def test_batch_approve_reports_each_item_independently(db_session):
+    """批量批准逐条独立提交：一条失败不影响其它条。"""
+    service = ReviewIntakeService(db_session)
+    ok_item = _submit(service, "/Volumes/finish/作品【姝姬娘娘】.mp4")
+    short_item = _submit(service, "/Volumes/finish/作品【小仙女】.mp4")
+    missing_id = 999999
+
+    outcomes = service.batch_approve(
+        entries=[(ok_item.id, "姝姬娘娘"), (short_item.id, "x"), (missing_id, "任意词")],
+    )
+
+    assert [outcome.ok for outcome in outcomes] == [True, False, False]
+    assert outcomes[0].item is not None and outcomes[0].item.status == "approved"
+    assert "太短" in (outcomes[1].error or "")
+    assert "不存在" in (outcomes[2].error or "")
+
+    # 失败的那条必须仍然停在待审核，且没有被写进关键词库
+    db_session.refresh(short_item)
+    assert short_item.status == "pending"
+    registry = KeywordRegistryService(db_session)
+    assert registry.find_entry_by_keyword("姝姬娘娘") is not None
+    assert registry.find_entry_by_keyword("x") is None
+
+
+def test_batch_approve_surfaces_bucket_conflict(db_session):
+    """已在黑名单的词不能被批量批准进白名单，错误原因要能看见。"""
+    service = ReviewIntakeService(db_session)
+    black = _submit(service, "/Volumes/finish/作品【姝姬娘娘】.mp4", bucket="blacklist")
+    service.approve(item_id=black.id, keyword="姝姬娘娘", note=None)
+    white = _submit(service, "/Volumes/other/作品【姝姬娘娘】.mp4", bucket="whitelist")
+
+    outcomes = service.batch_approve(entries=[(white.id, "姝姬娘娘")])
+
+    assert outcomes[0].ok is False
+    assert "blacklist" in (outcomes[0].error or "")
+    db_session.refresh(white)
+    assert white.status == "pending"
+
+
+def test_batch_dismiss_skips_approved_items(db_session):
+    service = ReviewIntakeService(db_session)
+    pending = _submit(service, "/Volumes/finish/作品【姝姬娘娘】.mp4")
+    approved = _submit(service, "/Volumes/finish/作品【小仙女下午茶】.mp4")
+    service.approve(item_id=approved.id, keyword="小仙女下午茶", note=None)
+
+    outcomes = service.batch_dismiss(ids=[pending.id, approved.id])
+
+    assert outcomes[0].ok is True
+    assert outcomes[1].ok is False
+    db_session.refresh(pending)
+    assert pending.status == "dismissed"
+
+
+def test_batch_delete_reports_missing_ids(db_session):
+    service = ReviewIntakeService(db_session)
+    item = _submit(service, "/Volumes/finish/作品【姝姬娘娘】.mp4")
+
+    outcomes = service.batch_delete(ids=[item.id, 999999])
+
+    assert outcomes[0].ok is True
+    assert outcomes[1].ok is False
+    assert db_session.scalars(select(ReviewIntakeItem)).all() == []

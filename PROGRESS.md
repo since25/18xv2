@@ -377,3 +377,37 @@ Changed files:
 
 Rollback:
 - `git revert ff6e514f`，然后服务器 `git pull` 并重新执行 `docker compose -f docker/docker-compose.yml up -d --build app`。
+
+## 2026-09-12 - Task: 待审核页改版，加批量批准与划词选词
+
+### What was done
+
+- 待审核页原来白/黑两张表并排挤在一起，现在改成上方 Tab 切换、表格占满整行，候选词一屏平铺得下，不用再点「更多」展开。
+- 新增批量操作：点候选词、划词或手动输入关键词后，这一行会自动勾选并高亮；页面底部浮出操作栏，一次性完成批准、忽略、删除或把噪声词加进忽略库。批量批准前会弹确认并列出即将写入的词，没填关键词的行自动跳过。
+- 解决了"候选词都不满意就得悬停-复制-粘贴"的问题：完整路径现在常驻显示在每行下方，直接在路径上拖选或双击选词就能填进关键词框；疑难的词可以点笔形按钮打开弹层，在完整路径上删改出想要的词。候选词还支持 Shift+点击追加，方便把两个词拼成一个。
+- 批量提交改成逐条独立处理：成功的行直接从列表消失，失败的行留在原地标红并写明原因（比如某个词已经在另一个名单里），不会出现"以为全进了其实有几条被拒"的情况。
+- 批准后不再整页重拉列表，只刷新顶部统计数字，列表不闪、滚动位置不跳。
+
+### Testing
+
+- 后端新增 7 项测试（批量批准部分失败、跨名单冲突、批量忽略跳过已批准项、批量删除报告不存在的 id），全套 333 项通过。
+- 前端新增待审核页测试 8 项（点候选自动勾选、Shift 追加、路径划词填入、批量批准后成功行消失失败行标红且不整页重拉、编辑弹层、Tab 切换、批量忽略只提交当前 Tab、忽略库弹层只列选中行的候选词），全套 20 项通过。
+- 前端 `tsc` 类型检查通过，`npm run build` 构建通过；`eslint` 仅剩 2 项改动前就存在的历史告警（`EmbyMediaActionsPage` 与本页的 `useEffect` 写法），本轮未引入新告警。
+- 未做浏览器实机点击验证，改动行为以上述自动化测试为准。
+
+### Notes
+
+Changed files:
+- `app/services/review_intake_service.py`：拆出不做旧库同步的单条批准逻辑，新增 `batch_approve` / `batch_dismiss` / `batch_delete`，逐条独立提交并返回结果。
+- `app/schemas/review_intake.py`：新增批量请求与逐条结果的数据结构。
+- `app/api/routes/review_intake.py`：新增三个批量接口，单条接口保持不变。
+- `frontend/src/pages/ReviewIntakePage.tsx`：页面重写，Tab 布局、行选择、底部批量操作栏、路径划词、编辑弹层、忽略库弹层。
+- `frontend/src/api/reviewIntake.ts`：新增批量接口调用，移除已无人使用的单条批准/忽略/删除封装。
+- `frontend/src/index.css`：路径行、选中与失败行底色、底部操作栏等样式。
+- `frontend/src/test/setup.ts`：补 jsdom 缺失的 `ResizeObserver` 与 `matchMedia`，否则 antd 表格与 Tab 无法在测试里渲染。
+- `frontend/src/pages/ReviewIntakePage.test.tsx`、`tests/api/test_review_intake_routes.py`、`tests/services/test_review_intake_service.py`：新增测试。
+- `docs/review-intake-usage.md`：新增页面使用说明。
+
+Rollback:
+- `git revert <本次提交号>`，然后服务器 `git pull` 并重新执行 `docker compose -f docker/docker-compose.yml up -d --build app`。
+- 本次无数据库迁移，回滚不涉及数据处理；已批准写入名单的关键词不会因回滚被撤销，需要时在关键词页手动删除。
