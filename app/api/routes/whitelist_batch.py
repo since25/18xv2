@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     from pydantic import BaseModel
 
 from app.api.deps import get_db
+from app.services.background_job_service import BackgroundJobService
 from app.schemas.whitelist import (
     ActiveJobsResponse,
     BulkDismissRequest,
@@ -43,25 +44,32 @@ logger = logging.getLogger(__name__)
 _scan_lock = asyncio.Lock()
 _submit_lock = asyncio.Lock()
 # job_id 用 uuid4 字符串，避免重启后 id 复用导致陈旧前端订阅冲突
-_jobs: dict[str, dict] = {}
 _JOB_RETENTION_SECONDS = 600  # done 后 10 分钟内仍可被 SSE/active 查到
+# 仅作为旧测试/旧进程兼容 fallback；正式状态以 background_jobs 表为准。
+_jobs: dict[str, dict] = {}
 
 
-def _new_job(job_type: str) -> str:
+def _new_job(job_type: str, db: Session) -> str:
     job_id = str(uuid.uuid4())
-    _jobs[job_id] = {
-        "job_id": job_id,
-        "job_type": job_type,
-        "stage": "等待开始",
-        "current": 0,
-        "total": 0,
-        "done": False,
-        "error": None,
-        "summary": None,
-        "started_at": datetime.now(UTC).isoformat(),
-        "finished_at": None,
-    }
+    state = BackgroundJobService.create(db, job_id, f"whitelist:{job_type}")
+    _jobs[job_id] = state
     return job_id
+
+
+def _public_state(state: dict | None) -> dict | None:
+    if state is None:
+        return None
+    result = dict(state)
+    # 兼容旧测试/旧内存快照，它们使用未加命名空间的 job_type。
+    if result["job_type"] in {"scan", "submit"}:
+        return result
+    if result["job_type"].startswith("whitelist:"):
+        result["job_type"] = result["job_type"].split(":", 1)[1]
+    return result
+
+
+def _job_type_matches(state: dict, job_type: str) -> bool:
+    return state["job_type"] in {job_type, f"whitelist:{job_type}"}
 
 
 # ── Scan job ────────────────────────────────────────────────────────────
@@ -72,7 +80,7 @@ async def start_scan_job(
 ) -> dict:
     if _scan_lock.locked():
         raise HTTPException(status_code=409, detail="已有扫描任务在运行，请等待完成")
-    job_id = _new_job("scan")
+    job_id = _new_job("scan", db)
     asyncio.create_task(_run_scan_job(job_id, payload))
     return {"job_id": job_id, "status": "pending"}
 
@@ -95,15 +103,26 @@ def _run_blocking_job(
     session = SessionLocal()
     try:
         def cb(stage: str, current: int, total: int) -> None:
-            _jobs[job_id].update(stage=stage, current=current, total=total)
+            BackgroundJobService.update(session, job_id, stage=stage, current=current, total=total)
+            if job_id in _jobs:
+                _jobs[job_id].update(stage=stage, current=current, total=total)
 
         summary = work(session, cb)
-        _jobs[job_id].update(stage="完成", summary=summary.model_dump(), done=True)
+        BackgroundJobService.update(
+            session, job_id, stage="完成", summary=summary.model_dump(), done=True,
+            finished_at=datetime.now(UTC),
+        )
+        if job_id in _jobs:
+            _jobs[job_id].update(stage="完成", summary=summary.model_dump(), done=True, finished_at=datetime.now(UTC).isoformat())
     except Exception as exc:
         logger.exception("job %s 失败", job_id)
-        _jobs[job_id].update(stage="失败", error=str(exc), done=True)
+        BackgroundJobService.update(
+            session, job_id, stage="失败", error=str(exc), done=True,
+            finished_at=datetime.now(UTC),
+        )
+        if job_id in _jobs:
+            _jobs[job_id].update(stage="失败", error=str(exc), done=True, finished_at=datetime.now(UTC).isoformat())
     finally:
-        _jobs[job_id]["finished_at"] = datetime.now(UTC).isoformat()
         session.close()
 
 
@@ -140,7 +159,7 @@ async def start_submit_job(
 ) -> dict:
     if _submit_lock.locked():
         raise HTTPException(status_code=409, detail="已有提交任务在运行，请等待完成")
-    job_id = _new_job("submit")
+    job_id = _new_job("submit", db)
     asyncio.create_task(_run_submit_job(job_id, payload))
     return {"job_id": job_id, "status": "pending"}
 
@@ -179,11 +198,15 @@ async def job_progress(job_id: str) -> StreamingResponse:
         """
         sent_done_once = False
         while True:
-            state = _jobs.get(job_id)
+            from app.db.session import SessionLocal
+            with SessionLocal() as state_session:
+                state = BackgroundJobService.get(state_session, job_id)
+            if state is None:
+                state = _jobs.get(job_id)
             if state is None:
                 yield f"data: {json.dumps({'error': 'not found'})}\n\n"
                 break
-            yield f"data: {json.dumps(state)}\n\n"
+            yield f"data: {json.dumps(_public_state(state), ensure_ascii=False)}\n\n"
             if state["done"]:
                 if sent_done_once:
                     break
@@ -195,17 +218,23 @@ async def job_progress(job_id: str) -> StreamingResponse:
 
 @router.get("/jobs/active", response_model=ActiveJobsResponse)
 async def active_jobs() -> ActiveJobsResponse:
-    scan = next(
-        (j for j in _jobs.values() if j["job_type"] == "scan" and not j["done"]),
-        None,
-    )
-    submit = next(
-        (j for j in _jobs.values() if j["job_type"] == "submit" and not j["done"]),
-        None,
-    )
+    from app.db.session import SessionLocal
+    with SessionLocal() as session:
+        scan = next(
+            (j for j in BackgroundJobService.list_active(session) if _job_type_matches(j, "scan")),
+            None,
+        )
+        submit = next(
+            (j for j in BackgroundJobService.list_active(session) if _job_type_matches(j, "submit")),
+            None,
+        )
+    if scan is None:
+        scan = next((j for j in _jobs.values() if _job_type_matches(j, "scan") and not j.get("done")), None)
+    if submit is None:
+        submit = next((j for j in _jobs.values() if _job_type_matches(j, "submit") and not j.get("done")), None)
     return ActiveJobsResponse(
-        scan=JobFrame.model_validate(scan) if scan else None,
-        submit=JobFrame.model_validate(submit) if submit else None,
+        scan=JobFrame.model_validate(_public_state(scan)) if scan else None,
+        submit=JobFrame.model_validate(_public_state(submit)) if submit else None,
     )
 
 
@@ -219,15 +248,11 @@ async def _sweep_jobs() -> None:
         try:
             await asyncio.sleep(_SWEEP_INTERVAL_SECONDS)
             now = datetime.now(UTC)
-            expired = []
-            for jid, j in list(_jobs.items()):
-                if j["done"] and j["finished_at"]:
-                    finished = datetime.fromisoformat(j["finished_at"])
-                    if (now - finished).total_seconds() > _JOB_RETENTION_SECONDS:
-                        expired.append(jid)
-            for jid in expired:
-                _jobs.pop(jid, None)
-                logger.info("sweep: 回收 job %s", jid)
+            from app.db.session import SessionLocal
+            with SessionLocal() as session:
+                removed = BackgroundJobService.purge_expired(session, _JOB_RETENTION_SECONDS)
+            if removed:
+                logger.info("sweep: 回收 %d 条已完成 job", removed)
         except asyncio.CancelledError:
             break
         except Exception:

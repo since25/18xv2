@@ -4,7 +4,7 @@ import json
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import get_115_client, get_db
@@ -146,6 +146,46 @@ def list_plans(
     offset: int = 0,
     db: Session = Depends(get_db),
 ) -> PlanSummaryPageResponse:
+    safe_limit = max(1, min(limit, 200))
+    safe_offset = max(0, offset)
+
+    # 无筛选时直接在 SQL 层分页，避免计划数量增长后把所有 items/jobs
+    # 一次性加载到内存。带统计筛选的旧逻辑仍保留，确保筛选语义不变。
+    if (
+        min_item_count is None
+        and max_item_count is None
+        and latest_job_status is None
+        and include_completed
+    ):
+        total = db.scalar(select(func.count()).select_from(OrganizationPlan)) or 0
+        plans = list(
+            db.scalars(
+                select(OrganizationPlan)
+                .order_by(OrganizationPlan.id.desc())
+                .offset(safe_offset)
+                .limit(safe_limit)
+                .options(selectinload(OrganizationPlan.items), selectinload(OrganizationPlan.jobs))
+            ).all()
+        )
+        items: list[PlanSummaryResponse] = []
+        for plan in plans:
+            latest_job = max(plan.jobs, key=lambda item: item.id) if plan.jobs else None
+            items.append(
+                PlanSummaryResponse(
+                    id=plan.id,
+                    strategy_version=plan.strategy_version,
+                    scope_desc=plan.scope_desc,
+                    status=plan.status,
+                    dry_run=plan.dry_run,
+                    created_at=plan.created_at,
+                    item_count=len(plan.items),
+                    latest_job_id=latest_job.id if latest_job else None,
+                    latest_job_status=latest_job.status if latest_job else None,
+                    latest_job_dry_run=latest_job.dry_run if latest_job else None,
+                )
+            )
+        return PlanSummaryPageResponse(total=int(total), items=items)
+
     summaries = _list_plan_summaries(
         db,
         min_item_count=min_item_count,
@@ -153,8 +193,6 @@ def list_plans(
         latest_job_status=latest_job_status,
         include_completed=include_completed,
     )
-    safe_limit = max(1, min(limit, 200))
-    safe_offset = max(0, offset)
     return PlanSummaryPageResponse(total=len(summaries), items=summaries[safe_offset : safe_offset + safe_limit])
 
 

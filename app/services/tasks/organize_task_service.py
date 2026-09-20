@@ -85,17 +85,22 @@ class OrganizeTaskService:
         )
 
         normalized_root = self._normalize_target_root(target_root)
+        hit_paths = {hit.source_path for hit in hits}
+        nodes_by_path = {
+            node.raw_path: node
+            for node in self.db.scalars(
+                select(TreeNode)
+                .where(TreeNode.import_id == import_id)
+                .where(TreeNode.node_type == "folder")
+                .where(TreeNode.raw_path.in_(hit_paths))
+            ).all()
+        } if hit_paths else {}
         seen_paths: set[str] = set()
         created_tasks: list[OrganizeTask] = []
         for hit in hits:
             if hit.source_path in seen_paths:
                 continue
-            node = self.db.scalar(
-                select(TreeNode)
-                .where(TreeNode.import_id == import_id)
-                .where(TreeNode.raw_path == hit.source_path)
-                .where(TreeNode.node_type == "folder")
-            )
+            node = nodes_by_path.get(hit.source_path)
             if node is None:
                 continue
             seen_paths.add(hit.source_path)
@@ -166,6 +171,15 @@ class OrganizeTaskService:
         path_to_hits = self._group_folder_hits_by_source_path(import_id=import_id, hits=hits)
 
         entry_by_id = {entry.id: entry for entry in whitelist_entries}
+        nodes_by_path = {
+            node.raw_path: node
+            for node in self.db.scalars(
+                select(TreeNode)
+                .where(TreeNode.import_id == import_id)
+                .where(TreeNode.node_type == "folder")
+                .where(TreeNode.raw_path.in_(list(path_to_hits)))
+            ).all()
+        } if path_to_hits else {}
         created_tasks: list[OrganizeTask] = []
         skipped_ambiguous_count = 0
         for source_path, source_hits in path_to_hits.items():
@@ -177,12 +191,7 @@ class OrganizeTaskService:
             if len(keyword_ids) > self.COMBINE_MULTI_MATCH_MAX:
                 skipped_ambiguous_count += 1
                 continue
-            node = self.db.scalar(
-                select(TreeNode)
-                .where(TreeNode.import_id == import_id)
-                .where(TreeNode.raw_path == source_path)
-                .where(TreeNode.node_type == "folder")
-            )
+            node = nodes_by_path.get(source_path)
             if node is None:
                 continue
             if len(keyword_ids) == 1:
@@ -455,17 +464,20 @@ class OrganizeTaskService:
         import_id: int,
         hits: list[KeywordHit],
     ) -> dict[str, list[KeywordHit]]:
+        candidate_paths = {hit.source_path for hit in hits if hit.keyword_entry_id is not None}
+        if not candidate_paths:
+            return {}
+        folder_paths = set(
+            self.db.scalars(
+                select(TreeNode.raw_path)
+                .where(TreeNode.import_id == import_id)
+                .where(TreeNode.node_type == "folder")
+                .where(TreeNode.raw_path.in_(candidate_paths))
+            ).all()
+        )
         path_to_hits: dict[str, list[KeywordHit]] = {}
         for hit in hits:
-            if hit.keyword_entry_id is None:
-                continue
-            node = self.db.scalar(
-                select(TreeNode)
-                .where(TreeNode.import_id == import_id)
-                .where(TreeNode.raw_path == hit.source_path)
-                .where(TreeNode.node_type == "folder")
-            )
-            if node is None:
+            if hit.keyword_entry_id is None or hit.source_path not in folder_paths:
                 continue
             path_to_hits.setdefault(hit.source_path, []).append(hit)
         return path_to_hits

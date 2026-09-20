@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import OrderedDict
-from datetime import datetime
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import HTMLResponse
@@ -37,10 +37,11 @@ def _build_batch_summaries(rows: list[MagnetDownloadTask]) -> list[MagnetTaskBat
     summaries: list[MagnetTaskBatchSummaryResponse] = []
     for batch_id, items in grouped.items():
         ordered_items = sorted(items, key=lambda item: item.id)
+        created_times = [item.created_at for item in ordered_items if item.created_at is not None]
         summaries.append(
             MagnetTaskBatchSummaryResponse(
                 batch_id=batch_id,
-                created_at=min(item.created_at for item in ordered_items if item.created_at is not None) or datetime.utcnow(),
+                created_at=min(created_times) if created_times else datetime.now(UTC),
                 total_count=len(ordered_items),
                 submitted_count=sum(1 for item in ordered_items if item.status == "submitted"),
                 duplicate_skipped_count=sum(1 for item in ordered_items if item.status == "duplicate_skipped"),
@@ -164,8 +165,8 @@ def magnet_tasks_workbench() -> str:
     .grid { display:grid; grid-template-columns:360px 1fr; gap:18px; margin-top:22px; }
     .panel { padding:20px; }
     label { display:block; margin:12px 0 6px; color:var(--muted); font-size:13px; }
-    input, button, textarea { width:100%; border-radius:14px; border:1px solid var(--line); font:inherit; }
-    input, textarea { padding:12px 14px; background:#fff; }
+    input, select, button, textarea { width:100%; border-radius:14px; border:1px solid var(--line); font:inherit; }
+    input, select, textarea { padding:12px 14px; background:#fff; }
     button { padding:12px 14px; cursor:pointer; background:var(--accent); color:#fff; border:none; font-weight:600; }
     button.secondary { background:var(--soft); color:var(--accent); border:1px solid rgba(18,95,84,.2); }
     .actions { display:flex; gap:10px; margin-top:14px; }
@@ -191,6 +192,8 @@ def magnet_tasks_workbench() -> str:
     </section>
     <div class="grid">
       <aside class="panel">
+        <label for="treeImportSelect">目录树批次（必选）</label>
+        <select id="treeImportSelect"><option value="">正在加载批次…</option></select>
         <label for="keywordEntryId">关键词 ID（可选）</label>
         <input id="keywordEntryId" type="number" min="1" placeholder="例如：123" />
         <label for="queryInput">搜索词</label>
@@ -271,6 +274,30 @@ def magnet_tasks_workbench() -> str:
       return body;
     }
 
+    function selectedTreeImportId() {
+      const value = $("treeImportSelect").value;
+      return value ? Number(value) : null;
+    }
+
+    async function loadTreeImports() {
+      const select = $("treeImportSelect");
+      try {
+        const response = await fetch("/imports/data?limit=100");
+        const body = await response.json();
+        if (!response.ok) throw new Error(body.detail || "加载批次失败");
+        select.innerHTML = '<option value="">请选择目录树批次</option>';
+        body.items.forEach((item) => {
+          const option = document.createElement("option");
+          option.value = String(item.id);
+          option.textContent = `#${item.id} · ${item.source_filename}`;
+          select.appendChild(option);
+        });
+      } catch (error) {
+        select.innerHTML = '<option value="">批次加载失败</option>';
+        $("statusBox").textContent = String(error);
+      }
+    }
+
     $("searchBtn").addEventListener("click", async () => {
       $("statusBox").textContent = "正在搜索 article 数据库...";
       try {
@@ -294,9 +321,14 @@ def magnet_tasks_workbench() -> str:
         $("statusBox").textContent = "先勾选要做去重检查的候选项。";
         return;
       }
-      $("statusBox").textContent = "正在检查 115 是否已有重复资源...";
+      const treeImportId = selectedTreeImportId();
+      if (!treeImportId) {
+        $("statusBox").textContent = "请先选择目录树批次。";
+        return;
+      }
+      $("statusBox").textContent = "正在检查目录树是否已有重复资源...";
       try {
-        const body = await postJson("/magnet-tasks/duplicate-check", { items });
+        const body = await postJson("/magnet-tasks/duplicate-check", { items, tree_import_id: treeImportId });
         state.duplicateMap = new Map(body.items.map((item) => [item.source_tid, item]));
         render();
         const duplicateCount = body.items.filter((item) => item.duplicate_status !== "clear").length;
@@ -312,12 +344,18 @@ def magnet_tasks_workbench() -> str:
         $("statusBox").textContent = "先勾选要提交的候选项。";
         return;
       }
+      const treeImportId = selectedTreeImportId();
+      if (!treeImportId) {
+        $("statusBox").textContent = "请先选择目录树批次。";
+        return;
+      }
       $("statusBox").textContent = "正在提交磁力到 115...";
       try {
         const body = await postJson("/magnet-tasks/submit", {
           items,
           target_cid: $("targetCidInput").value || null,
           force_submit: $("forceSubmitCheckbox").checked,
+          tree_import_id: treeImportId,
         });
         $("statusBox").textContent = `已创建 ${body.created_count} 条任务，成功提交 ${body.submitted_count} 条，跳过重复 ${body.duplicate_skipped_count} 条。`;
       } catch (error) {
@@ -331,6 +369,7 @@ def magnet_tasks_workbench() -> str:
     $("clearBtn").addEventListener("click", () => {
       document.querySelectorAll('input[data-index]').forEach((box) => box.checked = false);
     });
+    loadTreeImports();
     render();
   </script>
 </body>

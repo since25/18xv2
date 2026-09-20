@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from threading import Lock
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -21,6 +22,9 @@ class EmbyDeleteSummary:
 
 
 class EmbyDeletePlanService:
+    _active_plan_ids: set[int] = set()
+    _active_lock = Lock()
+
     def __init__(self, db: Session, client_115, allowed_roots: list[str]) -> None:
         self.db = db
         self.client_115 = client_115
@@ -239,8 +243,19 @@ class EmbyDeletePlanService:
         plan = self.db.get(EmbyDeletePlan, plan_id)
         if plan is None:
             raise LookupError("delete plan not found")
-        if plan.status not in {"draft", "confirmed"}:
+        if plan.status not in {"draft", "confirmed", "interrupted"}:
             raise ValueError("delete plan is not executable")
+        with self._active_lock:
+            if plan_id in self._active_plan_ids:
+                raise ValueError(f"delete plan {plan_id} is already running")
+            self._active_plan_ids.add(plan_id)
+        try:
+            return self._execute_plan_locked(plan)
+        finally:
+            with self._active_lock:
+                self._active_plan_ids.discard(plan_id)
+
+    def _execute_plan_locked(self, plan: EmbyDeletePlan) -> EmbyDeleteSummary:
         plan.status = "running"
         plan.confirmed_at = plan.confirmed_at or datetime.now(UTC)
         plan.started_at = datetime.now(UTC)

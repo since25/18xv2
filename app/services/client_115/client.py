@@ -19,6 +19,7 @@ import hashlib
 import logging
 import re
 import secrets
+import threading
 import time
 
 from app.core.config import Settings, get_settings
@@ -65,6 +66,10 @@ class Real115Client:
         self._last_request_at: float = 0.0
         self._last_refresh_time: float = 0.0
         self._refresh_retry_after: float = 0.0
+        # FastAPI sync 路由跑在线程池、后台 job 跑在 asyncio.to_thread，
+        # 限流与刷新状态必须跨线程安全。
+        self._rate_lock = threading.Lock()
+        self._refresh_lock = threading.Lock()
         self._auth_ready: bool = bool(self.settings.access_token)
         self._auth_status: str = "ok" if self.settings.access_token else "missing"
         self._last_auth_error: str | None = None
@@ -179,7 +184,9 @@ class Real115Client:
             self.settings.refresh_token,
             access_token_expires_at=expires_at,
         )
-        get_settings.cache_clear()
+        # 注意：不要在这里 get_settings.cache_clear()——清缓存后新 Settings 从 env
+        # 重新读取，拿到的是过期 token，反而让各处的 settings 实例分裂。
+        # 本对象持有的 settings 已在上面被直接更新，token 共享通道就是该实例。
         self._refresh_retry_after = 0.0
         self._set_auth_state("ok", ready=True)
 
@@ -238,9 +245,11 @@ class Real115Client:
         self._record_auth_error(message)
 
     def refresh_access_token_and_persist(self) -> TokenPayload:
-        token = self.refresh_access_token()
-        self._persist_tokens(token)
-        self._last_refresh_time = time.monotonic()
+        # 串行化刷新：多线程同时遇到 token 失效时，避免并发 refresh 触发 115 频控
+        with self._refresh_lock:
+            token = self.refresh_access_token()
+            self._persist_tokens(token)
+            self._last_refresh_time = time.monotonic()
         logger.info("115 access token refreshed and persisted")
         return token
 
@@ -266,9 +275,13 @@ class Real115Client:
         min_interval = max(0, self.settings.api_min_interval_ms) / 1000
         if min_interval <= 0:
             return
-        elapsed = time.monotonic() - self._last_request_at
-        if elapsed < min_interval:
-            time.sleep(min_interval - elapsed)
+        # 锁内 sleep + 立即占位时间戳：多线程并发时请求按 min_interval 串行发出，
+        # 而不是多个线程同时 sleep 到同一时刻后并发打满接口。
+        with self._rate_lock:
+            elapsed = time.monotonic() - self._last_request_at
+            if elapsed < min_interval:
+                time.sleep(min_interval - elapsed)
+            self._last_request_at = time.monotonic()
 
     def _get_open_client(self):
         self._ensure_dependency()
@@ -296,12 +309,10 @@ class Real115Client:
                     self.refresh_access_token_and_persist()
                 self._wait_for_rate_limit()
                 payload = check_response(operation())
-                self._last_request_at = time.monotonic()
                 if auth_required:
                     self._set_auth_state("ok", ready=True)
                 return payload
             except Exception as exc:  # noqa: BLE001
-                self._last_request_at = time.monotonic()
                 last_error = exc
                 error_code = self._extract_auth_error_code(str(exc))
                 if auth_required and (
@@ -478,6 +489,14 @@ class Real115Client:
         payload = self.get_file(file_id=file_id)
         data = payload.get("data", {})
         return self.build_path_from_paths(data.get("paths", []), data.get("file_name"))
+
+    def get_file_info(self, file_id: str) -> dict:
+        """返回 fs_info 的 data 部分（file_size / utime / file_name 等原始字段）。"""
+        payload = self.get_file(file_id=file_id)
+        data = payload.get("data")
+        if not isinstance(data, dict):
+            raise Client115Error(f"115 fs_info returned unexpected payload for file_id={file_id}")
+        return data
 
     def search_nodes(
         self, keyword: str, limit: int = 20, offset: int = 0, folders_only: bool = False
@@ -659,6 +678,18 @@ class Fake115Client:
 
     def get_full_path(self, file_id: str) -> str:
         return self.nodes[file_id].path
+
+    def get_file_info(self, file_id: str) -> dict:
+        node = self.nodes.get(file_id)
+        if node is None:
+            raise Client115Error("Node not found")
+        return {
+            "file_id": node.id,
+            "file_name": node.name,
+            "file_category": "1" if node.is_file else "0",
+            "file_size": None,
+            "utime": None,
+        }
 
     def search_nodes(self, keyword: str, limit: int = 20, offset: int = 0, folders_only: bool = False) -> list[NodePayload]:
         keyword = keyword.lower()

@@ -102,6 +102,8 @@ class DedupeDeletePlanService:
         plan = self.db.get(DedupeDeletePlan, plan_id)
         if plan is None:
             raise ValueError(f"Delete plan {plan_id} not found")
+        if plan.status in {"completed", "completed_with_errors"}:
+            raise ValueError("Delete plan has already finished")
 
         plan.status = "running"
         plan.confirmed_at = plan.confirmed_at or datetime.now(UTC)

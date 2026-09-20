@@ -89,7 +89,7 @@ class KeywordRegistryService:
     def list_entries(self, *, keyword_type: str | None = None, status: str | None = None, query: str | None = None, skip: int = 0, limit: int = 20) -> tuple[list[KeywordEntry], int]:
         stmt = self._base_query()
         if keyword_type:
-                    stmt = stmt.where(KeywordEntry.keyword_type == keyword_type)
+            stmt = stmt.where(KeywordEntry.keyword_type == keyword_type)
         if status:
             stmt = stmt.where(KeywordEntry.status == status)
         if query:
@@ -540,7 +540,14 @@ class KeywordRegistryService:
         if tree_path:
             normalized_tree_path = tree_path.strip().strip("/")
             if normalized_tree_path:
-                stmt = stmt.where(KeywordHit.source_path.startswith(normalized_tree_path))
+                # 按完整路径段匹配，避免 "foo/bar" 误命中 "foo/barbaz"；
+                # autoescape 防止用户路径中的 % / _ 被 LIKE 当作通配符。
+                stmt = stmt.where(
+                    or_(
+                        KeywordHit.source_path == normalized_tree_path,
+                        KeywordHit.source_path.startswith(f"{normalized_tree_path}/", autoescape=True),
+                    )
+                )
         if keyword_type:
             stmt = stmt.where(KeywordEntry.keyword_type == keyword_type)
         if status:

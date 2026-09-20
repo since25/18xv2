@@ -3,13 +3,16 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse, StreamingResponse
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
+from app.services.background_job_service import BackgroundJobService
 from app.models.tree import NodeFile, TreeImport, TreeNode
 from app.schemas.imports import (
     RemoteFetchRequest,
@@ -29,8 +32,23 @@ logger = logging.getLogger(__name__)
 # 注意：locked() 检查和 create_task 之间不是真正原子的，但在单用户场景下
 # FastAPI 的单线程事件循环使并发 POST 极少，锁本身在 _run_import 中保证串行
 _import_lock = asyncio.Lock()
-# 进度快照：import_id → {stage, current, total, done, error}；done 后 5s 回收
+# 进度快照：import_id → {stage, current, total, done, error, finished_at}；
+# 正常由 SSE 在 done 后 5s 回收，但客户端不订阅进度时条目会永久残留，
+# 因此启动新任务前再做一次兜底清理。
 _progress: dict[int, dict] = {}
+_PROGRESS_RETENTION_SECONDS = 600
+
+
+def _prune_progress() -> None:
+    now = time.monotonic()
+    expired = [
+        key
+        for key, state in _progress.items()
+        if state.get("done") and state.get("finished_at") is not None
+        and now - state["finished_at"] > _PROGRESS_RETENTION_SECONDS
+    ]
+    for key in expired:
+        _progress.pop(key, None)
 
 
 @router.get("", response_class=HTMLResponse)
@@ -182,14 +200,20 @@ def list_imports(
     offset: int = 0,
     db: Session = Depends(get_db),
 ) -> TreeImportPageResponse:
-    stmt = select(TreeImport).order_by(TreeImport.id.desc())
+    stmt = select(TreeImport)
+    count_stmt = select(func.count()).select_from(TreeImport)
     if query:
         stmt = stmt.where(TreeImport.source_filename.contains(query))
-    rows = list(db.scalars(stmt).all())
-    sliced = rows[offset : offset + max(1, min(limit, 200))]
+        count_stmt = count_stmt.where(TreeImport.source_filename.contains(query))
+    safe_limit = max(1, min(limit, 200))
+    safe_offset = max(0, offset)
+    rows = db.scalars(
+        stmt.order_by(TreeImport.id.desc()).offset(safe_offset).limit(safe_limit)
+    ).all()
+    total = db.scalar(count_stmt) or 0
     return TreeImportPageResponse(
-        total=len(rows),
-        items=[TreeImportSummaryResponse.model_validate(row) for row in sliced],
+        total=int(total),
+        items=[TreeImportSummaryResponse.model_validate(row) for row in rows],
     )
 
 
@@ -265,6 +289,8 @@ async def remote_fetch_tree(  # 必须是 async def，asyncio.create_task 需要
     if _import_lock.locked():
         raise HTTPException(status_code=409, detail="已有导入任务在运行，请稍后再试")
 
+    _prune_progress()
+    BackgroundJobService.purge_expired(db)
     tree_import = TreeImport(
         status="pending",
         source_filename=f"remote:{payload.path_label}",
@@ -276,8 +302,11 @@ async def remote_fetch_tree(  # 必须是 async def，asyncio.create_task 需要
     db.refresh(tree_import)
     import_id = tree_import.id
 
+    BackgroundJobService.create(db, str(import_id), "remote_import")
     _progress[import_id] = {
-        "stage": "等待开始", "current": 0, "total": 0, "done": False, "error": None
+        "job_id": str(import_id), "job_type": "remote_import",
+        "stage": "等待开始", "current": 0, "total": 0, "done": False, "error": None, "summary": None,
+        "started_at": datetime.now(UTC).isoformat(), "finished_at": None,
     }
     asyncio.create_task(_run_import(import_id, payload))
     return {"import_id": import_id, "status": "pending"}
@@ -291,10 +320,13 @@ async def _run_import(import_id: int, payload: RemoteFetchRequest) -> None:
 def _blocking_import(import_id: int, payload: RemoteFetchRequest) -> None:
     from app.db.session import SessionLocal
 
-    def cb(stage: str, current: int, total: int) -> None:
-        _progress[import_id].update(stage=stage, current=current, total=total)
-
     session = SessionLocal()
+
+    def cb(stage: str, current: int, total: int) -> None:
+        BackgroundJobService.update(session, str(import_id), stage=stage, current=current, total=total)
+        if import_id in _progress:
+            _progress[import_id].update(stage=stage, current=current, total=total)
+
     try:
         RemoteTreeFetchService(session).fetch_subtree(
             cid=payload.cid,
@@ -304,7 +336,9 @@ def _blocking_import(import_id: int, payload: RemoteFetchRequest) -> None:
             import_id=import_id,
             progress_cb=cb,
         )
-        _progress[import_id].update(stage="完成", done=True)
+        BackgroundJobService.update(session, str(import_id), stage="完成", done=True, finished_at=datetime.now(UTC))
+        if import_id in _progress:
+            _progress[import_id].update(stage="完成", done=True)
     except Exception as exc:
         try:
             from app.models.tree import TreeImport as TI
@@ -314,8 +348,13 @@ def _blocking_import(import_id: int, payload: RemoteFetchRequest) -> None:
                 session.commit()
         except Exception as inner:
             logger.warning("导入失败后更新 DB 状态出错 import_id=%d: %s", import_id, inner)
-        _progress[import_id].update(stage="失败", error=str(exc), done=True)
+        BackgroundJobService.update(session, str(import_id), stage="失败", error=str(exc), done=True, finished_at=datetime.now(UTC))
+        if import_id in _progress:
+            _progress[import_id].update(stage="失败", error=str(exc), done=True)
     finally:
+        progress_state = _progress.get(import_id)
+        if progress_state is not None:
+            progress_state["finished_at"] = time.monotonic()
         session.close()
 
 
@@ -324,7 +363,12 @@ async def import_progress(import_id: int) -> StreamingResponse:
     """SSE 接口：每秒推送导入进度，done=True 后 5 秒结束并回收内存条目。"""
     async def event_stream():
         while True:
-            state = _progress.get(import_id)
+            from app.db.session import SessionLocal
+            with SessionLocal() as session:
+                state = BackgroundJobService.get(session, str(import_id))
+            # 保留内存 fallback，兼容旧客户端/测试手动注入的进度快照。
+            if state is None:
+                state = _progress.get(import_id)
             if state is None:
                 yield f"data: {json.dumps({'error': 'not found'})}\n\n"
                 break

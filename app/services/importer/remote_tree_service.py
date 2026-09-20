@@ -17,7 +17,7 @@ import requests as http_requests
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.models.tree import TreeImport, TreeNode
+from app.models.tree import NodeFile, TreeImport, TreeNode
 from app.services.classifier.keyword_classifier import normalize_folder_name
 from app.services.importer.tree_parser import parse_tree_bytes
 
@@ -130,6 +130,7 @@ class RemoteTreeFetchService:
                     depth_limit=depth_limit,
                     raw_bytes=raw_bytes,
                     source_label=label,
+                    folders_only=folders_only,
                     progress_cb=progress_cb,
                 )
             raise RuntimeError(f"fs_export_dir 返回异常：{export_resp}")
@@ -158,8 +159,14 @@ class RemoteTreeFetchService:
             raise RuntimeError("等待目录树导出超时（>3分钟）")
 
         # 3. 获取下载链接并下载（需空 user-agent，否则 403）
+        # 必须带超时：之前无 timeout，下载挂起会让导入任务永远卡住，
+        # _import_lock 不释放导致后续所有远程导入一直 409。
         download_url = client.download_url(pick_code)
-        raw_bytes = http_requests.get(str(download_url), headers={"user-agent": ""}).content
+        raw_bytes = http_requests.get(
+            str(download_url),
+            headers={"user-agent": ""},
+            timeout=(10, 300),
+        ).content
         logger.info("目录树 txt 下载完成，大小=%d bytes", len(raw_bytes))
 
         if progress_cb:
@@ -171,6 +178,7 @@ class RemoteTreeFetchService:
             depth_limit=depth_limit,
             raw_bytes=raw_bytes,
             source_label=label,
+            folders_only=folders_only,
             progress_cb=progress_cb,
         )
 
@@ -182,12 +190,16 @@ class RemoteTreeFetchService:
         depth_limit: int,
         raw_bytes: bytes,
         source_label: str,
+        folders_only: bool = True,
         progress_cb: Callable[[str, int, int], None] | None = None,
     ) -> TreeImport:
         logger.info("开始解析目录树文本 source=%s cid=%s", source_label, cid)
         parsed_nodes = parse_tree_bytes(raw_bytes)
         folder_nodes_data = [p for p in parsed_nodes if p.node_type == "folder"]
-        logger.info("解析完成，文件夹节点数=%d", len(folder_nodes_data))
+        # folders_only=False 时保留文件节点：之前文件被静默丢弃，导致去重扫描、
+        # 噪音清理、关键词文件命中等依赖 node_files 的功能对远程批次全部失效。
+        file_nodes_data = [] if folders_only else [p for p in parsed_nodes if p.node_type == "file"]
+        logger.info("解析完成，文件夹节点数=%d 文件节点数=%d", len(folder_nodes_data), len(file_nodes_data))
 
         # 更新已有占位记录（不 INSERT 新行）
         tree_import = self.db.get(TreeImport, import_id)
@@ -224,13 +236,37 @@ class RemoteTreeFetchService:
         path_to_id: dict[str, int] = {n.raw_path: n.id for n in db_nodes}
         for node in db_nodes:
             node.parent_id = path_to_id.get(node.parent_path or "")
+
+        # 阶段 3：folders_only=False 时写入文件节点（导出 txt 不含 fid，remote_file_id 留空）
+        db_files: list[NodeFile] = []
+        if file_nodes_data:
+            seen_file_paths: set[str] = set()
+            for p in file_nodes_data:
+                if p.raw_path in seen_file_paths:
+                    continue
+                seen_file_paths.add(p.raw_path)
+                db_files.append(NodeFile(
+                    import_id=tree_import.id,
+                    folder_node_id=path_to_id.get(p.parent_path or ""),
+                    raw_name=p.name,
+                    normalized_name=p.name.strip(),
+                    raw_path=p.raw_path,
+                    parent_path=p.parent_path,
+                    depth=p.depth,
+                    file_ext=Path(p.name).suffix.lower() or None,
+                    fingerprint_hint=p.fingerprint_hint,
+                ))
+            self.db.add_all(db_files)
+
         if progress_cb:
             progress_cb("写入数据库", len(db_nodes), len(db_nodes))
 
         tree_import.status = "completed"
         tree_import.note = f"cid={cid} depth_limit={depth_limit} folders={len(db_nodes)}"
+        if db_files:
+            tree_import.note += f" files={len(db_files)}"
         self.db.commit()
         self.db.refresh(tree_import)
-        logger.info("远端目录树快照完成：import_id=%d cid=%s folders=%d",
-                    tree_import.id, cid, len(db_nodes))
+        logger.info("远端目录树快照完成：import_id=%d cid=%s folders=%d files=%d",
+                    tree_import.id, cid, len(db_nodes), len(db_files))
         return tree_import

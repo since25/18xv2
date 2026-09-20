@@ -114,10 +114,28 @@ class NoiseCleanupService:
             items=items,
         )
 
+    @staticmethod
+    def _normalize_for_prefix_check(path: str) -> str:
+        cleaned = path.strip().strip("/")
+        if not cleaned:
+            return ""
+        return "/".join(part for part in cleaned.split("/") if part)
+
     def _ensure_allowed(self, source_path: str, dry_run: bool) -> None:
         if dry_run:
             return
-        if not any(source_path.startswith(prefix) for prefix in self.settings.test_allowed_path_prefixes):
+        # 与 executor 同一套边界规则：规范化后按路径段比较，
+        # 避免 "/根目录/测试2/x" 被 "/根目录/测试" 前缀误放行。
+        normalized_source = self._normalize_for_prefix_check(source_path)
+        normalized_prefixes = [
+            self._normalize_for_prefix_check(prefix) for prefix in self.settings.test_allowed_path_prefixes
+        ]
+        if "" in normalized_prefixes:
+            return
+        if not any(
+            normalized_source == prefix or normalized_source.startswith(f"{prefix}/")
+            for prefix in normalized_prefixes
+        ):
             raise PermissionError(f"Real deletion is not allowed for path: {source_path}")
 
     @staticmethod
@@ -136,13 +154,23 @@ class NoiseCleanupService:
             raise Client115Error("Path is empty")
         current_id = "0"
         for part in parts:
-            listing = self.client.list_files(cid=current_id, limit=500, offset=0, show_dir=1)
-            matched_id = None
-            for item in listing.get("data", []):
-                if item.get("fn") == part:
-                    matched_id = str(item.get("fid"))
-                    break
+            matched_id = self._find_child_id(current_id, part)
             if matched_id is None:
                 raise Client115Error(f"Path not found: {path}")
             current_id = matched_id
         return current_id
+
+    def _find_child_id(self, parent_id: str, name: str) -> str | None:
+        """分页遍历子节点，目录超过一页（500 项）时也能找到目标。"""
+        offset = 0
+        limit = 500
+        while True:
+            listing = self.client.list_files(cid=parent_id, limit=limit, offset=offset, show_dir=1)
+            data = listing.get("data", [])
+            for item in data:
+                if item.get("fn") == name:
+                    return str(item.get("fid"))
+            count = int(listing.get("count") or len(data) or 0)
+            offset += len(data)
+            if not data or offset >= count:
+                return None

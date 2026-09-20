@@ -20,6 +20,20 @@ _DATA_DIR = Path("data")
 _RECORDS_FILE = _DATA_DIR / "open_api_auth_records.json"
 _session_lock = Lock()
 _sessions: dict[str, "_OpenAuthSession"] = {}
+# 扫码会话只在扫码窗口内有效，创建新会话时惰性清理过期记录，避免 _sessions 只增不减。
+_SESSION_TTL_SECONDS = 30 * 60
+
+
+def _prune_sessions() -> None:
+    """清理过期会话（调用方必须已持有 _session_lock）。"""
+    now_ts = datetime.now().astimezone().timestamp()
+    expired = [
+        sid
+        for sid, item in _sessions.items()
+        if now_ts - datetime.fromisoformat(item.created_at).timestamp() > _SESSION_TTL_SECONDS
+    ]
+    for sid in expired:
+        _sessions.pop(sid, None)
 
 
 @dataclass(slots=True)
@@ -140,6 +154,7 @@ def create_open_auth_session(request: Request) -> OpenAuthSessionResponse:
     )
     session.qr_image_url = f"/api/tools/open-auth/sessions/{session.session_id}/qrcode"
     with _session_lock:
+        _prune_sessions()
         _sessions[session.session_id] = session
     return _to_response(session)
 
@@ -162,34 +177,47 @@ def poll_open_auth_session(session_id: str, request: Request) -> OpenAuthSession
     client: Real115Client = request.app.state.client_115
     with _session_lock:
         session = _sessions.get(session_id)
-        if session is None:
-            raise HTTPException(status_code=404, detail="Open API 扫码会话不存在")
+    if session is None:
+        raise HTTPException(status_code=404, detail="Open API 扫码会话不存在")
 
+    with _session_lock:
         if session.completed or session.status in {-1, -2, -3}:
             return _to_response(session)
+        # 网络调用必须在锁外进行：之前在锁内轮询/换 token，
+        # 一个卡顿请求会阻塞所有授权会话的创建与查询。
+        uid = session.uid
+        time_value = session.time_value
+        sign = session.sign
+        code_verifier = session.code_verifier
 
-        try:
-            payload = client.poll_device_status(session.uid, session.time_value, session.sign)
-            session.status = _status_from_payload(payload)
-            session.message = _resolve_status_text(session.status)
-            session.updated_at = _now_iso()
+    new_status: int | None = None
+    error_text = ""
+    token_expires_at = None
+    try:
+        payload = client.poll_device_status(uid, time_value, sign)
+        new_status = _status_from_payload(payload)
+        if new_status == 2:
+            token = client.exchange_device_code(uid, code_verifier)
+            client.persist_token_payload(token)
+            status_info = client.get_auth_status_info()
+            request.app.state.client_115_ready = bool(status_info["ready"])
+            request.app.state.client_115_last_error = status_info["error"]
+            request.app.state.client_115_last_error_at = status_info["error_at"]
+            request.app.state.client_115_status = status_info["status"]
+            request.app.state.client_115_access_token_expires_at = status_info["access_token_expires_at"]
+            token_expires_at = status_info["access_token_expires_at"]
+    except Client115Error as exc:
+        new_status = -3
+        error_text = str(exc)
 
-            if session.status == 2 and not session.completed:
-                token = client.exchange_device_code(session.uid, session.code_verifier)
-                client.persist_token_payload(token)
-                status_info = client.get_auth_status_info()
-                request.app.state.client_115_ready = bool(status_info["ready"])
-                request.app.state.client_115_last_error = status_info["error"]
-                request.app.state.client_115_last_error_at = status_info["error_at"]
-                request.app.state.client_115_status = status_info["status"]
-                request.app.state.client_115_access_token_expires_at = status_info["access_token_expires_at"]
-                session.completed = True
-                _append_record(token_expires_at=status_info["access_token_expires_at"])
-        except Client115Error as exc:
-            session.status = -3
-            session.message = "error"
-            session.error = str(exc)
-            session.updated_at = _now_iso()
-
-        _sessions[session_id] = session
-        return _to_response(session)
+    with _session_lock:
+        if new_status is not None:
+            session.status = new_status
+            session.message = _resolve_status_text(new_status) if new_status >= 0 else "error"
+        if error_text:
+            session.error = error_text
+        session.updated_at = _now_iso()
+        if new_status == 2 and not session.completed:
+            session.completed = True
+            _append_record(token_expires_at=token_expires_at)
+    return _to_response(session)

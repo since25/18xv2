@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 import json
 from pathlib import PurePosixPath
 import re
+from threading import Lock
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
@@ -15,6 +16,9 @@ from app.services.client_115.client import Client115Error
 
 
 class PlanExecutor:
+    _active_plan_ids: set[int] = set()
+    _active_lock = Lock()
+
     def __init__(self, db: Session, client=None):
         self.db = db
         self.client = client
@@ -165,14 +169,16 @@ class PlanExecutor:
         return undo_action, self._encode_payload(payload)
 
     def _execute_item(self, item, dry_run: bool) -> tuple[bool, str, str | None, str | None, tuple[str, str] | None]:
+        # noop 项不执行任何实际操作，提前返回，避免无意义的路径解析 API 调用
+        # （源路径已不存在时 noop 也不应被 blocked）。
+        if item.action_type == "noop":
+            return True, "noop", None, None, None
+
         self._ensure_allowed(item.source_path, dry_run=dry_run)
 
         source_id = self._resolve_path_to_id(item.source_path)
         source_info = self.client.get_file(file_id=source_id).get("data", {})
         source_name = source_info.get("file_name") or PurePosixPath(item.source_path).name
-
-        if item.action_type == "noop":
-            return True, "noop", None, None, None
 
         target_parent_path, target_name = self._target_parent_and_name(item.suggested_target_path)
         target_parent_id, created_segments = self._ensure_directory(target_parent_path, dry_run=dry_run)
@@ -194,12 +200,24 @@ class PlanExecutor:
         if dry_run:
             return True, "dry_run", None, self._encode_payload(raw_response), None
 
-        if source_name != target_name:
-            rename_result = self.client.rename_node(source_id, target_name, dry_run=False)
-            raw_response["rename"] = rename_result.payload
+        renamed = False
+        try:
+            if source_name != target_name:
+                rename_result = self.client.rename_node(source_id, target_name, dry_run=False)
+                raw_response["rename"] = rename_result.payload
+                renamed = True
 
-        move_result = self.client.move_node(source_id, target_parent_id, dry_run=False)
-        raw_response["move"] = move_result.payload
+            move_result = self.client.move_node(source_id, target_parent_id, dry_run=False)
+            raw_response["move"] = move_result.payload
+        except Exception:
+            # rename 成功但 move 失败时，尽量恢复原文件名，避免留下半完成状态。
+            if renamed:
+                try:
+                    self.client.rename_node(source_id, source_name, dry_run=False)
+                except Exception:
+                    # 原始异常更重要；rollback record 仍会保留供人工处理。
+                    pass
+            raise
         return True, "success", None, self._encode_payload(raw_response), rollback_spec
 
     def execute_plan(
@@ -216,6 +234,31 @@ class PlanExecutor:
         )
         if plan is None:
             raise ValueError(f"Plan {plan_id} not found")
+        with self._active_lock:
+            if plan_id in self._active_plan_ids:
+                raise ValueError(f"Plan {plan_id} is already running")
+            self._active_plan_ids.add(plan_id)
+        try:
+            return self._execute_plan_locked(
+                plan,
+                dry_run=dry_run,
+                confirm_real_run=confirm_real_run,
+                requested_by=requested_by,
+                operator_note=operator_note,
+            )
+        finally:
+            with self._active_lock:
+                self._active_plan_ids.discard(plan_id)
+
+    def _execute_plan_locked(
+        self,
+        plan: OrganizationPlan,
+        *,
+        dry_run: bool,
+        confirm_real_run: bool,
+        requested_by: str | None,
+        operator_note: str | None,
+    ) -> ExecutionJob:
         if len(plan.items) > self.settings.executor_max_items_per_run:
             raise ValueError(
                 f"Plan has {len(plan.items)} items, exceeding EXECUTOR_MAX_ITEMS_PER_RUN={self.settings.executor_max_items_per_run}"

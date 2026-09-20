@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import re
+import threading
 
 from sqlalchemy import create_engine, text
+from sqlalchemy.engine import Engine
 
 from app.core.config import Settings, get_settings
 from app.services.keywords.registry_service import normalize_keyword_text, similarity_score
@@ -28,8 +30,36 @@ class SourceArticleDatabaseError(RuntimeError):
 class SourceArticleDatabaseService:
     cjk_pattern = re.compile(r"[\u4e00-\u9fff]")
 
+    # engine 按连接 URL 缓存复用：之前每次搜索都 create_engine 且从不 dispose，
+    # 连接池和引擎对象会随搜索次数无限堆积。
+    _engine_cache: dict[str, Engine] = {}
+    _engine_lock = threading.Lock()
+
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or get_settings()
+
+    def _get_engine(self) -> Engine:
+        url = self._database_url()
+        with self._engine_lock:
+            engine = self._engine_cache.get(url)
+            if engine is None:
+                engine = create_engine(
+                    url,
+                    future=True,
+                    pool_size=2,
+                    max_overflow=2,
+                    pool_pre_ping=True,
+                )
+                self._engine_cache[url] = engine
+            return engine
+
+    @classmethod
+    def dispose_engines(cls) -> None:
+        """释放全部缓存 engine（测试或服务停机时调用）。"""
+        with cls._engine_lock:
+            for engine in cls._engine_cache.values():
+                engine.dispose()
+            cls._engine_cache.clear()
 
     def _database_url(self) -> str:
         if not self.settings.source_article_db_host or not self.settings.source_article_db_name:
@@ -46,9 +76,8 @@ class SourceArticleDatabaseService:
         if not normalized_query:
             return []
         resolved_limit = max(1, limit or self.settings.source_article_search_limit)
-        engine = create_engine(self._database_url(), future=True)
         sql, params = self._build_search_sql(query=normalized_query, limit=resolved_limit)
-        with engine.connect() as conn:
+        with self._get_engine().connect() as conn:
             rows = conn.execute(sql, params).mappings().all()
         return [
             ArticleRecord(

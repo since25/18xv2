@@ -17,6 +17,7 @@ EXPECTED_PUBLIC_METHODS = {
     "list_files",
     "get_file",
     "get_full_path",
+    "get_file_info",
     "search_nodes",
     "submit_magnet_download",
     "create_folder",

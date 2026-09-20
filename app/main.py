@@ -40,18 +40,58 @@ async def lifespan(app: FastAPI):
     app.state.client_115_access_token_expires_at = status_info["access_token_expires_at"]
     logger.info("115 client singleton ready in passive mode")
 
-    # 上次异常退出可能留下 status="pending" 的记录，防止 UI 显示永久 pending
+    # 上次异常退出可能留下 pending/running 记录，防止 UI 显示永久运行。
     from app.db.session import SessionLocal as _SessionLocal
     from app.models.tree import TreeImport as _TreeImport
+    from app.models.organization import ExecutionJob as _ExecutionJob
+    from app.models.emby_media_actions import EmbyDeletePlan as _EmbyDeletePlan
+    from app.models.dedupe import DedupeDeletePlan as _DedupeDeletePlan
+    from app.services.background_job_service import BackgroundJobService as _BackgroundJobService
     with _SessionLocal() as _s:
-        interrupted = (
-            _s.query(_TreeImport)
-            .filter(_TreeImport.status == "pending")
-            .update({"status": "interrupted"})
-        )
+        # 测试环境或旧版本数据库可能尚未创建全部可选业务表，恢复逻辑不能阻止服务启动。
+        from sqlalchemy import inspect as _inspect
+        table_names = set(_inspect(_s.bind).get_table_names())
+        interrupted_imports = 0
+        interrupted_jobs = 0
+        interrupted_emby = 0
+        interrupted_dedupe = 0
+        interrupted_background_jobs = 0
+        if _TreeImport.__tablename__ in table_names:
+            interrupted_imports = (
+                _s.query(_TreeImport)
+                .filter(_TreeImport.status == "pending")
+                .update({"status": "interrupted"})
+            )
+        if _ExecutionJob.__tablename__ in table_names:
+            interrupted_jobs = (
+                _s.query(_ExecutionJob)
+                .filter(_ExecutionJob.status == "running")
+                .update({"status": "interrupted"})
+            )
+        if _EmbyDeletePlan.__tablename__ in table_names:
+            interrupted_emby = (
+                _s.query(_EmbyDeletePlan)
+                .filter(_EmbyDeletePlan.status == "running")
+                .update({"status": "interrupted"})
+            )
+        if _DedupeDeletePlan.__tablename__ in table_names:
+            interrupted_dedupe = (
+                _s.query(_DedupeDeletePlan)
+                .filter(_DedupeDeletePlan.status == "running")
+                .update({"status": "interrupted"})
+            )
+        if _BackgroundJobService.__module__.endswith("background_job_service") and "background_jobs" in table_names:
+            interrupted_background_jobs = _BackgroundJobService.recover_running(_s)
         _s.commit()
-        if interrupted:
-            logger.info("lifespan: 清理 %d 条残留 pending 导入记录 → interrupted", interrupted)
+        if interrupted_imports or interrupted_jobs or interrupted_emby:
+            logger.info(
+                "lifespan: 恢复中断记录 imports=%d jobs=%d emby=%d dedupe=%d background=%d",
+                interrupted_imports,
+                interrupted_jobs,
+                interrupted_emby,
+                interrupted_dedupe,
+                interrupted_background_jobs,
+            )
 
     # 启动白名单 job sweeper
     from app.api.routes.whitelist_batch import _sweep_jobs as _sweep_whitelist_jobs

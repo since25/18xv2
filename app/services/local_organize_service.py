@@ -52,7 +52,8 @@ class LocalOrganizeService:
         max_results: int = 500,
     ) -> LocalOrganizeScanResponse:
         resolved_root = self._resolve_dir(root_path, field_name="root_path")
-        resolved_target = self._resolve_target(target_root)
+        # 扫描是只读操作，不能顺手创建目标目录（mkdir 副作用放到 execute）
+        resolved_target = self._resolve_target(target_root, create=False)
         rules = self._build_request_rules(whitelist_keywords) or self._load_default_whitelist_rules()
         if not rules:
             raise ValueError("No active whitelist keywords found in request or database")
@@ -111,7 +112,7 @@ class LocalOrganizeService:
         confirm_execute: bool = False,
     ) -> LocalOrganizeExecuteResponse:
         resolved_root = self._resolve_dir(root_path, field_name="root_path")
-        resolved_target = self._resolve_target(target_root)
+        resolved_target = self._resolve_target(target_root, create=not dry_run)
         if not dry_run and not confirm_execute:
             raise ValueError("confirm_execute must be true for real execution")
 
@@ -336,9 +337,10 @@ class LocalOrganizeService:
         return candidate
 
     @staticmethod
-    def _resolve_target(path_value: str) -> Path:
+    def _resolve_target(path_value: str, *, create: bool = True) -> Path:
         candidate = Path(path_value).expanduser().resolve()
-        candidate.mkdir(parents=True, exist_ok=True)
+        if create:
+            candidate.mkdir(parents=True, exist_ok=True)
         return candidate
 
     @staticmethod

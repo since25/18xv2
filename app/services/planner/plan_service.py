@@ -236,6 +236,11 @@ class PlanService:
             counts = Counter(target_paths)
             for task in chunk:
                 conflict_status, reason = self.conflict_detector.detect(task.source_path, task.target_path, counts)
+                # organize_task_id 必须始终出现在 reason 里（执行器靠它回写任务状态），
+                # 否则 noop / duplicate_target 项执行后任务永远停在 pending。
+                item_reason = f"organize_task_id={task.id}"
+                if reason:
+                    item_reason = f"{reason}; {item_reason}"
                 item = OrganizationPlanItem(
                     plan_id=plan.id,
                     node_id=task.node_id,
@@ -244,7 +249,7 @@ class PlanService:
                     action_type="noop" if conflict_status == "noop" else "move",
                     confidence=0.99,
                     conflict_status=conflict_status,
-                    reason=reason or f"organize_task_id={task.id}",
+                    reason=item_reason,
                 )
                 self.db.add(item)
             plans.append(plan)

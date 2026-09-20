@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
+from threading import Lock
 
 from app.api.deps import require_authenticated_user
 from app.core.auth import verify_password
@@ -10,6 +12,35 @@ from app.services.auth.session_store import SessionStore
 from app.services.auth.user_store import UserStore
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+_LOGIN_FAILURES: dict[str, list[datetime]] = {}
+_LOGIN_FAILURE_LOCK = Lock()
+_LOGIN_WINDOW = timedelta(minutes=15)
+_LOGIN_LOCKOUT = timedelta(minutes=5)
+_LOGIN_MAX_FAILURES = 5
+
+
+def _login_key(request: Request) -> str:
+    return request.client.host if request.client else "unknown"
+
+
+def _is_login_locked(key: str, now: datetime) -> bool:
+    with _LOGIN_FAILURE_LOCK:
+        failures = [stamp for stamp in _LOGIN_FAILURES.get(key, []) if now - stamp < _LOGIN_WINDOW]
+        _LOGIN_FAILURES[key] = failures
+        return len(failures) >= _LOGIN_MAX_FAILURES
+
+
+def _record_login_failure(key: str, now: datetime) -> None:
+    with _LOGIN_FAILURE_LOCK:
+        failures = [stamp for stamp in _LOGIN_FAILURES.get(key, []) if now - stamp < _LOGIN_WINDOW]
+        failures.append(now)
+        _LOGIN_FAILURES[key] = failures
+
+
+def _clear_login_failures(key: str) -> None:
+    with _LOGIN_FAILURE_LOCK:
+        _LOGIN_FAILURES.pop(key, None)
 
 
 class LoginRequest(BaseModel):
@@ -65,14 +96,22 @@ def login(payload: LoginRequest, request: Request, response: Response) -> LoginR
     if not settings.auth_enabled:
         return LoginResponse(success=True, username=settings.auth_username)
 
+    now = datetime.now(UTC)
+    login_key = _login_key(request)
+    if _is_login_locked(login_key, now):
+        raise HTTPException(status_code=429, detail="Too many login failures; try again later")
+
     stored_user = UserStore(settings).load()
     if stored_user is None:
         raise HTTPException(status_code=503, detail="Admin password is not initialized")
     if payload.username != settings.auth_username:
+        _record_login_failure(login_key, now)
         raise HTTPException(status_code=401, detail="Invalid username or password")
     if not verify_password(payload.password, stored_user.password_hash):
+        _record_login_failure(login_key, now)
         raise HTTPException(status_code=401, detail="Invalid username or password")
 
+    _clear_login_failures(login_key)
     session = SessionStore(settings).create_session(username=settings.auth_username)
     _set_session_cookie(request, response, session.session_id)
     return LoginResponse(success=True, username=settings.auth_username)

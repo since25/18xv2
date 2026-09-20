@@ -52,6 +52,21 @@ _ALLOWED_APPS = {item["app"] for item in CLIENT_OPTIONS}
 
 _session_lock = Lock()
 _sessions: dict[str, "_LoginSession"] = {}
+# 扫码会话只在扫码窗口内有效，超过 30 分钟的记录已无意义，创建新会话时惰性清理，
+# 避免 _sessions 只增不减。
+_SESSION_TTL_SECONDS = 30 * 60
+
+
+def _prune_sessions() -> None:
+    """清理过期会话（调用方必须已持有 _session_lock）。"""
+    now_ts = datetime.now().astimezone().timestamp()
+    expired = [
+        sid
+        for sid, item in _sessions.items()
+        if now_ts - datetime.fromisoformat(item.created_at).timestamp() > _SESSION_TTL_SECONDS
+    ]
+    for sid in expired:
+        _sessions.pop(sid, None)
 
 
 @dataclass(slots=True)
@@ -300,6 +315,7 @@ def create_login_session(payload: CreateSessionRequest) -> SessionResponse:
         updated_at=timestamp,
     )
     with _session_lock:
+        _prune_sessions()
         _sessions[session.session_id] = session
     return _to_response(session)
 
@@ -308,43 +324,58 @@ def create_login_session(payload: CreateSessionRequest) -> SessionResponse:
 def poll_login_session(session_id: str) -> SessionResponse:
     with _session_lock:
         session = _sessions.get(session_id)
-        if session is None:
-            raise HTTPException(status_code=404, detail="扫码会话不存在")
+    if session is None:
+        raise HTTPException(status_code=404, detail="扫码会话不存在")
 
+    with _session_lock:
         if session.status in {-1, -2, -3} or (session.status == 2 and session.saved_path):
             return _to_response(session)
+        # 网络调用必须在锁外进行：之前在锁内请求 115 接口（超时最长 20s+），
+        # 一个卡顿的轮询会阻塞所有扫码会话的创建与查询。
+        qrcode_token = dict(session.qrcode_token)
+        uid = session.uid
+        app_name = session.app
+        file_name = session.file_name
+        already_saved = bool(session.saved_path)
 
-        status_resp = _fetch_qrcode_status(dict(session.qrcode_token))
-        status = int((status_resp.get("data") or {}).get("status", 0))
-        session.status = status
-        session.message = _resolve_status_text(status)
-        session.updated_at = _now_iso()
+    status_resp = _fetch_qrcode_status(qrcode_token)
+    status = int((status_resp.get("data") or {}).get("status", 0))
 
-        if status == 2 and not session.saved_path:
-            try:
-                result_resp = _fetch_login_result(session.uid, session.app)
-                if not result_resp.get("state"):
-                    session.status = -3
-                    session.message = "result_error"
-                    session.error = _format_115_error(result_resp)
-                    session.updated_at = _now_iso()
-                    _sessions[session.session_id] = session
-                    return _to_response(session)
-                cookies = _normalize_cookie_payload(result_resp["data"]["cookie"])
+    new_status = status
+    new_message = _resolve_status_text(status)
+    cookies_text = ""
+    saved_path_str = ""
+    error_text = ""
+
+    if status == 2 and not already_saved:
+        try:
+            result_resp = _fetch_login_result(uid, app_name)
+            if not result_resp.get("state"):
+                new_status = -3
+                new_message = "result_error"
+                error_text = _format_115_error(result_resp)
+            else:
+                cookies_text = _normalize_cookie_payload(result_resp["data"]["cookie"])
                 _COOKIES_DIR.mkdir(parents=True, exist_ok=True)
-                saved_path = _COOKIES_DIR / session.file_name
-                saved_path.write_text(cookies + "\n", encoding="utf-8")
-                session.cookies = cookies
-                session.saved_path = str(saved_path)
-                _append_record(session)
-            except Exception as exc:  # noqa: BLE001
-                session.status = -3
-                session.message = "result_error"
-                session.error = str(exc)
-                session.updated_at = _now_iso()
+                saved_path = _COOKIES_DIR / file_name
+                saved_path.write_text(cookies_text + "\n", encoding="utf-8")
+                saved_path_str = str(saved_path)
+        except Exception as exc:  # noqa: BLE001
+            new_status = -3
+            new_message = "result_error"
+            error_text = str(exc)
 
-        _sessions[session.session_id] = session
-        return _to_response(session)
+    with _session_lock:
+        session.status = new_status
+        session.message = new_message
+        session.updated_at = _now_iso()
+        if error_text:
+            session.error = error_text
+        if saved_path_str:
+            session.cookies = cookies_text
+            session.saved_path = saved_path_str
+            _append_record(session)
+    return _to_response(session)
 
 
 # ── Embedded HTML ──────────────────────────────────────────────────────────
