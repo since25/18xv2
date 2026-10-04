@@ -1,6 +1,6 @@
 import { api } from './client'
 
-export type ReviewBucket = 'whitelist' | 'blacklist'
+export type ReviewBucket = 'whitelist' | 'blacklist' | 'keyword'
 export type ReviewStatus = 'pending' | 'approved' | 'dismissed'
 
 export interface ReviewKeywordCandidate {
@@ -46,6 +46,9 @@ export interface ReviewIntakeSummary {
   blacklist_approved: number
   whitelist_dismissed: number
   blacklist_dismissed: number
+  keyword_pending: number
+  keyword_approved: number
+  keyword_dismissed: number
 }
 
 export interface ReviewIntakeCreatePayload {
@@ -53,6 +56,7 @@ export interface ReviewIntakeCreatePayload {
   raw_path: string
   source?: string
   note?: string | null
+  keyword?: string
 }
 
 export interface ReviewIntakeListParams {

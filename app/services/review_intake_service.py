@@ -18,7 +18,7 @@ from app.schemas.review_intake import ReviewKeywordCandidate
 from app.services.keywords.registry_service import KeywordRegistryService, normalize_keyword_text
 from app.services.review_intake_candidates import extract_raw_candidates
 
-VALID_BUCKETS = {"whitelist", "blacklist"}
+VALID_BUCKETS = {"whitelist", "blacklist", "keyword"}
 VALID_STATUSES = {"pending", "approved", "dismissed"}
 
 # 落库的候选数量上限：候选组承担"点它就能批准"的作用，提示组只负责
@@ -83,6 +83,7 @@ class ReviewIntakeService:
         flags: str,
         group_index: int,
         limit: int,
+        keyword: str | None = None,
     ) -> ReviewIntakeItem:
         bucket = self._validate_bucket(bucket)
         cleaned_path = raw_path.strip()
@@ -91,14 +92,20 @@ class ReviewIntakeService:
 
         normalized_path = _normalize_path(cleaned_path)
         path_hash = _path_hash(normalized_path)
-        candidates = self._extract_and_resolve_keywords(
-            bucket=bucket,
-            raw_path=cleaned_path,
-            pattern=pattern,
-            flags=flags,
-            group_index=group_index,
-            limit=limit,
-        )
+        if keyword is not None:
+            cleaned_keyword = keyword.strip()
+            if not cleaned_keyword:
+                raise ValueError("keyword is required")
+            candidates = [ReviewKeywordCandidate(keyword=cleaned_keyword, source="manual", match_status="new")]
+        else:
+            candidates = self._extract_and_resolve_keywords(
+                bucket=bucket,
+                raw_path=cleaned_path,
+                pattern=pattern,
+                flags=flags,
+                group_index=group_index,
+                limit=limit,
+            )
         candidates_json = json.dumps(
             [item.model_dump() for item in candidates],
             ensure_ascii=False,
@@ -184,6 +191,9 @@ class ReviewIntakeService:
             "blacklist_approved": 0,
             "whitelist_dismissed": 0,
             "blacklist_dismissed": 0,
+            "keyword_pending": 0,
+            "keyword_approved": 0,
+            "keyword_dismissed": 0,
         }
         for bucket, status, count in rows:
             key = f"{bucket}_{status}"
@@ -258,15 +268,17 @@ class ReviewIntakeService:
             raise ValueError("关键词太短")
 
         registry = KeywordRegistryService(self.db)
+        # `keyword` 是独立的待审核队列；批准后写入现有通用 tag 类型。
+        target_keyword_type = "tag" if item.bucket == "keyword" else item.bucket
         existing = registry.find_entry_by_keyword(normalized_keyword)
-        if existing is not None and existing.keyword_type != item.bucket:
+        if existing is not None and existing.keyword_type != target_keyword_type:
             raise ValueError(
-                f"关键词已存在于 {existing.keyword_type}，不能直接归入 {item.bucket}"
+                f"关键词已存在于 {existing.keyword_type}，不能直接归入 {target_keyword_type}"
             )
         if existing is None:
             entry = registry.create_entry(
                 canonical_name=cleaned_keyword,
-                keyword_type=item.bucket,
+                keyword_type=target_keyword_type,
                 note=note,
                 source="review_intake",
             )
@@ -429,7 +441,7 @@ class ReviewIntakeService:
 
     def _validate_bucket(self, bucket: str) -> str:
         if bucket not in VALID_BUCKETS:
-            raise ValueError("bucket must be whitelist or blacklist")
+            raise ValueError("bucket must be whitelist, blacklist, or keyword")
         return bucket
 
 

@@ -6,7 +6,7 @@
 ## 页面结构
 
 - 顶部「手动投递」：粘贴路径、选择白/黑名单、按状态和关键字筛选。
-- 下方 Tab：`白名单待审` / `黑名单待审`，各自一张占满整行的表格，数字是当前列表条数。
+- 下方 Tab：`白名单待审` / `黑名单待审` / `关键词待审`，各自一张占满整行的表格，数字是当前列表条数。
 - 每行分两部分：上半行是候选词、确认关键词输入框、状态和单条操作；下半行常驻显示完整路径。
 
 ## 确认关键词的四种方式
@@ -31,6 +31,15 @@
 
 批量操作只作用在当前 Tab 上，不会影响另一个名单。
 
+## 待审核-关键词
+
+`keyword` 是独立的待审核 bucket，用于 App 自定义关键词提交。它不在提交时归入黑名单或白名单，也不直接写入关键词库。
+
+- App 使用 `POST /review-intake/keyword`，请求包含 `raw_path`、`source` 和用户输入的 `keyword`。
+- 同一 `keyword + path` 会更新原记录，保持待审核队列去重。
+- 在「关键词待审」Tab 中批准后，关键词写入现有通用 `tag` 类型，并保留原待审核记录的 `bucket = keyword`。
+- 关键词待审的批准、忽略、恢复、删除复用现有单条和批量接口。
+
 ## 结果反馈
 
 批量提交是**逐条独立处理**的，一条失败不影响其它条：
@@ -46,6 +55,16 @@
 | `POST /review-intake/items/batch-approve` | 入参 `{"items": [{"id": 1, "keyword": "词"}], "note": null}` |
 | `POST /review-intake/items/batch-dismiss` | 入参 `{"ids": [1, 2]}` |
 | `POST /review-intake/items/batch-delete` | 入参 `{"ids": [1, 2]}` |
+
+快捷提交接口：`POST /review-intake/keyword`，示例：
+
+```json
+{
+  "raw_path": "/Volumes/qbbtdn/作品/文件.mp4",
+  "source": "fklema-ios",
+  "keyword": "用户输入的关键词"
+}
+```
 
 三个接口统一返回 `{"succeeded": n, "failed": m, "results": [{"id", "ok", "item", "error"}]}`。
 单条的 `approve` / `dismiss` / `restore` / `delete` 接口保持不变，快捷键投递流程不受影响。

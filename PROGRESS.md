@@ -411,3 +411,27 @@ Changed files:
 Rollback:
 - `git revert <本次提交号>`，然后服务器 `git pull` 并重新执行 `docker compose -f docker/docker-compose.yml up -d --build app`。
 - 本次无数据库迁移，回滚不涉及数据处理；已批准写入名单的关键词不会因回滚被撤销，需要时在关键词页手动删除。
+## 2026-10-04 - Task: 新增待审核-关键词契约
+
+### What was done
+
+- 增加 `keyword` 待审核 bucket 和 `/review-intake/keyword` 快捷提交端点，支持携带用户明确输入的关键词。
+- 待审核后台新增「关键词待审」Tab、统计数字和手动投递选项；批准后复用现有关键词库，以 `tag` 类型落库。
+- 更新待审核接口说明，并补充服务层、路由层和前端页面测试覆盖。
+
+### Testing
+
+- `.venv/bin/python -m pytest -q tests/services/test_review_intake_service.py tests/api/test_review_intake_routes.py`：16 项通过。
+- `cd frontend && npm run build`：构建通过。
+- `cd frontend && npm test -- --run`：16 项通过。
+
+### Notes
+
+Changed files:
+- `app/schemas/review_intake.py`、`app/services/review_intake_service.py`、`app/api/routes/review_intake.py`：新增 `keyword` bucket 和显式关键词提交。
+- `frontend/src/api/reviewIntake.ts`、`frontend/src/pages/ReviewIntakePage.tsx`：新增关键词待审 Tab 与统计。
+- `tests/`、`frontend/src/pages/ReviewIntakePage.test.tsx`：补充契约测试和调用次数更新。
+- `docs/review-intake-usage.md`：记录新接口和审核行为。
+
+Rollback:
+- 回退本轮修改即可恢复仅支持白名单/黑名单的待审核契约；无数据库迁移。

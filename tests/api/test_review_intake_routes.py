@@ -60,6 +60,30 @@ def test_shortcut_bucket_endpoints_create_pending_items(client):
     assert resp.json()["total"] == 1
 
 
+def test_keyword_bucket_endpoint_creates_pending_item(client):
+    resp = client.post(
+        "/review-intake/keyword",
+        json={
+            "raw_path": "/Volumes/finish/作品【姝姬娘娘】.mp4",
+            "source": "fklema-ios",
+            "keyword": "用户指定词",
+        },
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["bucket"] == "keyword"
+    assert data["status"] == "pending"
+    assert data["keyword_candidates"][0]["keyword"] == "用户指定词"
+
+    approved = client.post(
+        f"/review-intake/items/{data['id']}/approve",
+        json={"keyword": "用户指定词"},
+    )
+    assert approved.status_code == 200
+    assert client.get("/keywords?keyword_type=tag&query=用户指定词").json()["total"] == 1
+
+
 def test_approve_route_persists_keyword(client):
     created = client.post(
         "/review-intake/blacklist",

@@ -77,6 +77,9 @@ const SUMMARY: ReviewIntakeSummary = {
   blacklist_approved: 0,
   whitelist_dismissed: 0,
   blacklist_dismissed: 0,
+  keyword_pending: 0,
+  keyword_approved: 0,
+  keyword_dismissed: 0,
 }
 
 function listResponse(items: ReviewIntakeItem[]): ReviewIntakeListResponse {
@@ -168,7 +171,7 @@ describe('ReviewIntakePage', () => {
       screen.getByText(/关键词已存在于 blacklist，不能直接归入 whitelist/),
     ).toBeInTheDocument()
     // 列表不再整页重拉，只刷新顶部统计
-    expect(listReviewIntakeItems).toHaveBeenCalledTimes(2)
+    expect(listReviewIntakeItems).toHaveBeenCalledTimes(3)
   })
 
   it('编辑弹层可以从完整路径里改出关键词', async () => {

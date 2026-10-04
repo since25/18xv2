@@ -61,6 +61,7 @@ def _submit_with_bucket(
             raw_path=payload.raw_path,
             source=payload.source,
             note=payload.note,
+            keyword=payload.keyword,
             pattern=payload.pattern,
             flags=payload.flags,
             group_index=payload.group_index,
@@ -80,6 +81,7 @@ def create_item(
         raw_path=payload.raw_path,
         source=payload.source,
         note=payload.note,
+        keyword=payload.keyword,
         pattern=payload.pattern,
         flags=payload.flags,
         group_index=payload.group_index,
@@ -102,6 +104,15 @@ def create_blacklist_item(
     db: Session = Depends(get_db),
 ) -> ReviewIntakeItemResponse:
     return _submit_with_bucket(bucket="blacklist", payload=payload, db=db)
+
+
+@router.post("/keyword", response_model=ReviewIntakeItemResponse)
+def create_keyword_item(
+    payload: ReviewIntakePathRequest,
+    db: Session = Depends(get_db),
+) -> ReviewIntakeItemResponse:
+    """提交到独立的待审核-关键词队列；批准后写入通用 tag 类型。"""
+    return _submit_with_bucket(bucket="keyword", payload=payload, db=db)
 
 
 @router.get("/items", response_model=ReviewIntakeListResponse)

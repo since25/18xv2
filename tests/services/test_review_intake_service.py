@@ -59,6 +59,18 @@ def test_approve_creates_keyword_entry_and_hit(db_session):
     assert hits[0].match_source == "review_intake"
 
 
+def test_keyword_bucket_approves_into_generic_tag_keyword_type(db_session):
+    service = ReviewIntakeService(db_session)
+    item = _submit(service, "/Volumes/finish/作品【姝姬娘娘】.mp4", bucket="keyword")
+
+    approved = service.approve(item_id=item.id, keyword="姝姬娘娘", note="自定义关键词")
+
+    assert approved.bucket == "keyword"
+    entry = KeywordRegistryService(db_session).find_entry_by_keyword("姝姬娘娘")
+    assert entry is not None
+    assert entry.keyword_type == "tag"
+
+
 def test_approve_blocks_keyword_type_conflict(db_session):
     KeywordRegistryService(db_session).create_entry(
         canonical_name="姝姬娘娘",

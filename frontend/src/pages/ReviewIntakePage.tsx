@@ -48,6 +48,7 @@ import {
 const BUCKET_OPTIONS: Array<{ label: string; value: ReviewBucket }> = [
   { label: '白名单', value: 'whitelist' },
   { label: '黑名单', value: 'blacklist' },
+  { label: '关键词', value: 'keyword' },
 ]
 
 const STATUS_OPTIONS: Array<{ label: string; value: ReviewStatus | '' }> = [
@@ -127,11 +128,13 @@ function defaultKeyword(item: ReviewIntakeItem) {
 }
 
 function itemLabel(item: ReviewIntakeItem) {
-  return item.bucket === 'whitelist' ? '白名单' : '黑名单'
+  return bucketLabel(item.bucket)
 }
 
 function bucketLabel(bucket: ReviewBucket) {
-  return bucket === 'whitelist' ? '白名单' : '黑名单'
+  if (bucket === 'whitelist') return '白名单'
+  if (bucket === 'blacklist') return '黑名单'
+  return '关键词'
 }
 
 function errorMessage(error: unknown, fallback: string) {
@@ -149,6 +152,7 @@ export default function ReviewIntakePage() {
   const [summary, setSummary] = useState<ReviewIntakeSummary | null>(null)
   const [whitelistItems, setWhitelistItems] = useState<ReviewIntakeItem[]>([])
   const [blacklistItems, setBlacklistItems] = useState<ReviewIntakeItem[]>([])
+  const [keywordItems, setKeywordItems] = useState<ReviewIntakeItem[]>([])
   const [keywordDrafts, setKeywordDrafts] = useState<Record<number, string>>({})
   const [selectedIds, setSelectedIds] = useState<number[]>([])
   const [failures, setFailures] = useState<Record<number, string>>({})
@@ -164,10 +168,13 @@ export default function ReviewIntakePage() {
   const stats = useMemo(() => [
     { key: 'white-pending', label: '白待审', value: summary?.whitelist_pending ?? 0 },
     { key: 'black-pending', label: '黑待审', value: summary?.blacklist_pending ?? 0 },
-    { key: 'approved', label: '已批准', value: (summary?.whitelist_approved ?? 0) + (summary?.blacklist_approved ?? 0) },
+    { key: 'keyword-pending', label: '关键词待审', value: summary?.keyword_pending ?? 0 },
+    { key: 'approved', label: '已批准', value: (summary?.whitelist_approved ?? 0) + (summary?.blacklist_approved ?? 0) + (summary?.keyword_approved ?? 0) },
   ], [summary])
 
-  const activeItems = activeBucket === 'whitelist' ? whitelistItems : blacklistItems
+  const activeItems = activeBucket === 'whitelist'
+    ? whitelistItems
+    : activeBucket === 'blacklist' ? blacklistItems : keywordItems
 
   // 选择状态是全局的，但批量动作只作用在当前 Tab 上，避免误伤另一边
   const activeSelectedIds = useMemo(
@@ -209,17 +216,19 @@ export default function ReviewIntakePage() {
   async function loadItems(nextSearch = search) {
     setLoading(true)
     try {
-      const [white, black, nextSummary] = await Promise.all([
+      const [white, black, keyword, nextSummary] = await Promise.all([
         listReviewIntakeItems({ bucket: 'whitelist', status, search: nextSearch || undefined, page_size: 200 }),
         listReviewIntakeItems({ bucket: 'blacklist', status, search: nextSearch || undefined, page_size: 200 }),
+        listReviewIntakeItems({ bucket: 'keyword', status, search: nextSearch || undefined, page_size: 200 }),
         getReviewIntakeSummary(),
       ])
       setWhitelistItems(white.items)
       setBlacklistItems(black.items)
+      setKeywordItems(keyword.items)
       setSummary(nextSummary)
       setSelectedIds([])
       setFailures({})
-      seedDrafts([...white.items, ...black.items])
+      seedDrafts([...white.items, ...black.items, ...keyword.items])
     } catch (error) {
       void messageApi.error(errorMessage(error, '加载待审核列表失败'))
     } finally {
@@ -567,7 +576,7 @@ export default function ReviewIntakePage() {
             size="small"
             value={keywordDrafts[item.id] ?? ''}
             onChange={(event) => setDraft(item.id, event.target.value)}
-            placeholder={item.bucket === 'whitelist' ? '白名单词' : '黑名单词'}
+            placeholder={`${bucketLabel(item.bucket)}词`}
           />
           <Tooltip title="从完整路径里编辑">
             <Button
@@ -692,6 +701,11 @@ export default function ReviewIntakePage() {
       key: 'blacklist',
       label: `黑名单待审 ${blacklistItems.length}`,
       children: renderTable(blacklistItems),
+    },
+    {
+      key: 'keyword',
+      label: `关键词待审 ${keywordItems.length}`,
+      children: renderTable(keywordItems),
     },
   ]
 

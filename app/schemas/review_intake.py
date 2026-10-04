@@ -5,7 +5,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-ReviewBucket = Literal["whitelist", "blacklist"]
+ReviewBucket = Literal["whitelist", "blacklist", "keyword"]
 
 
 class ReviewKeywordCandidate(BaseModel):
@@ -25,6 +25,7 @@ class ReviewIntakeCreateRequest(BaseModel):
     raw_path: str = Field(min_length=1, max_length=20000)
     source: str = Field(default="shortcut", max_length=64)
     note: str | None = None
+    keyword: str | None = Field(default=None, min_length=1, max_length=255)
     pattern: str = Field(default=r"[【「『［\[]([^】」』］\]]+)[】」』］\]]", min_length=1, max_length=500)
     flags: str = Field(default="", max_length=20)
     group_index: int = Field(default=1, ge=0, le=20)
@@ -35,6 +36,7 @@ class ReviewIntakePathRequest(BaseModel):
     raw_path: str = Field(min_length=1, max_length=20000)
     source: str = Field(default="shortcut", max_length=64)
     note: str | None = None
+    keyword: str | None = Field(default=None, min_length=1, max_length=255)
     pattern: str = Field(default=r"[【「『［\[]([^】」』］\]]+)[】」』］\]]", min_length=1, max_length=500)
     flags: str = Field(default="", max_length=20)
     group_index: int = Field(default=1, ge=0, le=20)
@@ -96,6 +98,9 @@ class ReviewIntakeSummaryResponse(BaseModel):
     blacklist_approved: int = 0
     whitelist_dismissed: int = 0
     blacklist_dismissed: int = 0
+    keyword_pending: int = 0
+    keyword_approved: int = 0
+    keyword_dismissed: int = 0
 
 
 class ReviewIntakeBatchResultItem(BaseModel):
