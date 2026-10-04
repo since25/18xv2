@@ -435,3 +435,25 @@ Changed files:
 
 Rollback:
 - 回退本轮修改即可恢复仅支持白名单/黑名单的待审核契约；无数据库迁移。
+## 2026-10-04 - Task: 推送并部署待审核-关键词功能
+
+### What was done
+
+- 提交 `099a4d50 feat: add keyword review intake bucket` 并推送到 `origin/main`。
+- 生产服务器 `/mnt/user/docker1/18xv2` 快进同步到该提交，完成 Docker 镜像构建和 `docker compose up -d --build` 重建。
+- 生产容器已加载新的 `keyword` 待审核契约和前端关键词待审 Tab。
+
+### Testing
+
+- 本地 `.venv/bin/python -m pytest -q`：342 项通过。
+- 生产 `docker compose ps`：`docker-app-1` 与 `docker-postgres-1` 均运行中，PostgreSQL healthy。
+- 生产 `curl http://127.0.0.1:8010/api/healthz`：返回 `status=ok`、`authorization_status=ok`、`client_115=true`。
+- 生产 `GET /api/auth/me` 未登录返回 401，登录保护正常。
+
+### Notes
+
+Changed files:
+- `PROGRESS.md`: 记录本次推送和生产部署结果。
+
+Rollback:
+- 回退部署提交 `099a4d50` 并重新执行 Docker 构建部署；本次无数据库迁移。
