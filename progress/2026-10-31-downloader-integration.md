@@ -130,3 +130,23 @@
 
 - Changed files: see `git status --short`; no Git commit, push, deployment, or production RN request was performed.
 - Rollback: disable `DOWNLOADER_ENABLED`, remove the downloader router/page, and run Alembic downgrade for `20261031_0011` if the schema must be removed.
+
+## Production deployment — 2026-10-31 07:02 PDT
+
+### What was done
+
+- 提交并推送 18x_v2 下载器集成：`4f073bc1949c18c7db56c26155edb6b62bdee947`。
+- Unraid `root@192.168.70.138:/mnt/user/docker1/18xv2` 已快进到该提交并重建 `docker-app-1`。
+- 容器启动时自动执行 Alembic，数据库版本已到 `20261031_0011`。
+- 生产 RN 保持独立运行态；18x 的 RN 集成默认仍由服务器 `.env` 控制，未写入下载器密码或 Cookie。
+
+### Testing
+
+- 本地：后端 `352 passed`；前端 `8 files / 21 tests passed`；前端生产构建、Python 编译和 `git diff --check` 通过。
+- 18x：`docker compose ps` 显示 app/postgres 运行，`/api/healthz` 返回 `status: ok`、`service_status: ok`；首次探测发生在容器启动瞬间并重试后通过。
+
+### Notes
+
+- Changed files: 本条部署记录。
+- Backup: `backups/deploy-20261031-220120-4f073bc1`（服务器目录内，包含部署前提交、`.env` 和 PostgreSQL dump）。
+- Rollback: 先停止 app，使用该目录恢复 PostgreSQL dump 和 `.env`，将 checkout 回退到 `6592638b`，再按 `docker/docker-compose.yml` 重建并启动；回退前保留失败部署现场。
