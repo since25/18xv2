@@ -48,6 +48,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { key: '/emby-media-actions', label: 'Emby 动作', icon: <PlaySquareOutlined /> },
       { key: '/dedupe', label: '文件去重', icon: <SafetyCertificateOutlined /> },
       { key: '/magnet-tasks', label: '磁力下载', icon: <CloudDownloadOutlined /> },
+      { key: '/downloader', label: '下载器资源包', icon: <CloudDownloadOutlined /> },
     ],
   },
   {

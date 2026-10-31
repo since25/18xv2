@@ -1,0 +1,175 @@
+from __future__ import annotations
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.api.deps import get_db
+from app.core.config import get_settings
+from app.models.downloader import DownloaderSyncRun
+from app.schemas.downloader import (
+    DownloaderCandidateListResponse,
+    DownloaderControlRequest,
+    DownloaderSelectRequest,
+    DownloaderSubmitRequest,
+    DownloaderTaskListResponse,
+)
+from app.services.downloader.client import DownloaderClient, DownloaderRemoteError
+from app.services.downloader.sync_service import DownloaderSyncService
+
+router = APIRouter(prefix="/downloader", tags=["downloader"])
+
+
+def _client() -> DownloaderClient:
+    settings = get_settings()
+    if not settings.downloader_enabled or not settings.downloader_base_url:
+        raise HTTPException(status_code=503, detail="RN 下载器集成未启用或地址未配置")
+    return DownloaderClient(settings)
+
+
+def _remote_error(error: DownloaderRemoteError) -> HTTPException:
+    return HTTPException(status_code=502, detail={"error_code": error.code, "message": str(error)})
+
+
+@router.get("/status")
+def downloader_status(db: Session = Depends(get_db)) -> dict:
+    settings = get_settings()
+    latest = db.scalar(select(DownloaderSyncRun).order_by(DownloaderSyncRun.id.desc()))
+    payload = {
+        "enabled": bool(settings.downloader_enabled and settings.downloader_base_url),
+        "node_key": settings.downloader_node_key,
+        "base_url_configured": bool(settings.downloader_base_url),
+        "latest_sync": {
+            "kind": latest.kind,
+            "status": latest.status,
+            "packages_seen": latest.packages_seen,
+            "candidates_created": latest.candidates_created,
+            "tasks_seen": latest.tasks_seen,
+            "error_message": latest.error_message,
+            "started_at": latest.started_at.isoformat() if latest.started_at else None,
+            "finished_at": latest.finished_at.isoformat() if latest.finished_at else None,
+        }
+        if latest
+        else None,
+    }
+    if not payload["enabled"]:
+        payload.update({"remote_ready": False, "remote": None})
+        return payload
+    try:
+        payload.update({"remote_ready": True, "remote": _client().health()})
+    except DownloaderRemoteError as error:
+        payload.update({"remote_ready": False, "remote": {"error_code": error.code, "message": str(error)}})
+    return payload
+
+
+@router.post("/sync")
+def sync_downloader(db: Session = Depends(get_db)) -> dict:
+    client = _client()
+    try:
+        packages = DownloaderSyncService.sync_packages(db, client, node_key=get_settings().downloader_node_key)
+    except DownloaderRemoteError as error:
+        raise _remote_error(error) from error
+    return {
+        "packages_seen": packages.packages_seen,
+        "packages_updated": packages.packages_updated,
+        "candidates_created": packages.candidates_created,
+        "candidates_dismissed": packages.candidates_dismissed,
+    }
+
+
+@router.get("/packages", response_model=DownloaderCandidateListResponse)
+def list_downloader_candidates(
+    candidate_status: str | None = Query(default="pending"),
+    keyword_entry_id: int | None = Query(default=None),
+    search: str | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=200),
+    db: Session = Depends(get_db),
+) -> DownloaderCandidateListResponse:
+    items, total = DownloaderSyncService.list_candidates(
+        db,
+        candidate_status=candidate_status,
+        keyword_entry_id=keyword_entry_id,
+        search=search,
+        page=page,
+        page_size=page_size,
+    )
+    return DownloaderCandidateListResponse(items=items, total=total, page=page, page_size=page_size)
+
+
+@router.post("/packages/{candidate_id}/select")
+def select_downloader_candidate(
+    candidate_id: int,
+    payload: DownloaderSelectRequest,
+    db: Session = Depends(get_db),
+) -> dict:
+    try:
+        candidate = DownloaderSyncService.select_candidate(db, candidate_id, payload.selected)
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    return {"candidate_id": candidate.id, "status": candidate.status}
+
+
+@router.post("/download-batches")
+def submit_downloader_batches(
+    payload: DownloaderSubmitRequest,
+    db: Session = Depends(get_db),
+) -> dict:
+    try:
+        result = DownloaderSyncService.submit_selected(
+            db,
+            _client(),
+            payload.candidate_ids,
+            node_key=get_settings().downloader_node_key,
+        )
+    except DownloaderRemoteError as error:
+        raise _remote_error(error) from error
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    return {"submitted": result.submitted, "skipped": result.skipped, "failed": result.failed, "items": result.items}
+
+
+@router.get("/tasks", response_model=DownloaderTaskListResponse)
+def list_downloader_tasks(
+    limit: int = Query(default=100, ge=1, le=500),
+    db: Session = Depends(get_db),
+) -> DownloaderTaskListResponse:
+    items, total = DownloaderSyncService.list_tasks(db, node_key=get_settings().downloader_node_key, limit=limit)
+    return DownloaderTaskListResponse(items=items, total=total)
+
+
+@router.post("/tasks/sync")
+def sync_downloader_tasks(db: Session = Depends(get_db)) -> dict:
+    try:
+        result = DownloaderSyncService.sync_tasks(db, _client(), node_key=get_settings().downloader_node_key)
+    except DownloaderRemoteError as error:
+        raise _remote_error(error) from error
+    return {"tasks_seen": result.tasks_seen, "tasks_updated": result.tasks_updated}
+
+
+@router.post("/control")
+def control_downloader(payload: DownloaderControlRequest) -> dict:
+    try:
+        return _client().set_download_state(payload.state)
+    except DownloaderRemoteError as error:
+        raise _remote_error(error) from error
+
+
+@router.post("/tasks/{task_id}/cancel")
+def cancel_downloader_task(task_id: str) -> dict:
+    try:
+        return _client().cancel_task(task_id)
+    except DownloaderRemoteError as error:
+        raise _remote_error(error) from error
+
+
+@router.post("/tasks/{task_id}/retry")
+def retry_downloader_task(task_id: str) -> dict:
+    try:
+        return _client().retry_task(task_id)
+    except DownloaderRemoteError as error:
+        raise _remote_error(error) from error

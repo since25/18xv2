@@ -21,6 +21,34 @@ _PUBLIC_PATHS = {
 }
 
 
+def _downloader_integration_enabled(settings) -> bool:
+    return bool(getattr(settings, "downloader_enabled", False) and getattr(settings, "downloader_base_url", None))
+
+
+def _sync_downloader_once(settings) -> None:
+    """执行一次只读同步；不创建新的下载批次。"""
+    from app.db.session import SessionLocal
+    from app.services.downloader.client import DownloaderClient
+    from app.services.downloader.sync_service import DownloaderSyncService
+
+    with SessionLocal() as session:
+        client = DownloaderClient(settings)
+        DownloaderSyncService.sync_packages(session, client, node_key=settings.downloader_node_key)
+        DownloaderSyncService.sync_tasks(session, client, node_key=settings.downloader_node_key)
+
+
+async def _downloader_sync_loop(settings) -> None:
+    interval = max(int(getattr(settings, "downloader_sync_interval_seconds", 60)), 10)
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            await asyncio.to_thread(_sync_downloader_once, settings)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 - one remote outage must not stop the app
+            logger.exception("RN downloader sync failed")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """启动时创建 115 client 单例，仅读取本地 token 状态，不主动 refresh。"""
@@ -102,6 +130,12 @@ async def lifespan(app: FastAPI):
     app.state.dedupe_job_sweeper = asyncio.create_task(_sweep_dedupe_jobs())
     logger.info("文件去重 sweeper 已启动")
 
+    downloader_sweeper = None
+    if _downloader_integration_enabled(settings):
+        downloader_sweeper = asyncio.create_task(_downloader_sync_loop(settings))
+        app.state.downloader_sweeper = downloader_sweeper
+        logger.info("RN 下载器同步 sweeper 已启动")
+
     yield
 
     sweeper = getattr(app.state, "whitelist_job_sweeper", None)
@@ -110,6 +144,9 @@ async def lifespan(app: FastAPI):
     dedupe_sweeper = getattr(app.state, "dedupe_job_sweeper", None)
     if dedupe_sweeper is not None:
         dedupe_sweeper.cancel()
+    if downloader_sweeper is not None:
+        downloader_sweeper.cancel()
+        await asyncio.gather(downloader_sweeper, return_exceptions=True)
     logger.info("Shutting down")
 
 
@@ -122,6 +159,7 @@ from app.api.routes import (  # noqa: E402 — import after app creation
     auth_code,
     cleanup,
     dedupe,
+    downloader,
     emby_media_actions,
     extractor,
     files_115,
@@ -171,6 +209,7 @@ app.include_router(keywords.router)
 app.include_router(keywords.legacy_router)
 app.include_router(cleanup.router)
 app.include_router(dedupe.router)
+app.include_router(downloader.router)
 app.include_router(local_cleanup.router)
 app.include_router(local_organize.router)
 app.include_router(local_tree_export.router)

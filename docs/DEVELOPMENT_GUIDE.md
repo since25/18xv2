@@ -23,6 +23,10 @@
   - Cookie 扫码登录是独立功能，不能和 Open API 授权混用。
   - Open API 已改为扫码授权主流程。
   - 不再在启动时粗暴刷新 token，而是记录状态并按需处理。
+- RN 下载器集成：
+  - 通过下载器 Web API 同步资源包和任务进度，不共享下载器 SQLite。
+  - 白名单/别名只生成待确认候选，黑名单负责排除；人工确认后才创建精确下载批次。
+  - `DOWNLOADER_ENABLED` 未开启或地址为空时，不启动同步 sweeper。
 
 ---
 
@@ -85,6 +89,10 @@ npm run dev
 | 管理员账号 | `data/auth.json` | 首次启动自动创建 |
 | 会话文件 | `data/auth_sessions.json` | 登录态持久化 |
 | Cookie 文件 | `data/cookies/` | 供 Cookie 扫码/目录树导出使用 |
+
+RN 下载器相关配置只放在 `.env`：`DOWNLOADER_BASE_URL`、`DOWNLOADER_PASSWORD`、`DOWNLOADER_NODE_KEY`、`DOWNLOADER_TIMEOUT_SECONDS`、`DOWNLOADER_SYNC_INTERVAL_SECONDS`。密码不写入数据库、日志或前端响应。
+
+页面入口为 `/downloader`，后端控制面为 `/downloader/*`。现场验收时先用“同步资源包”检查连接，再人工选择一条候选提交；测试环境只使用 mock HTTP 客户端。
 
 ---
 

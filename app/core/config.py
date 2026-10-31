@@ -67,6 +67,14 @@ class Settings(BaseSettings):
     source_article_db_password: str | None = Field(default=None, alias="SOURCE_ARTICLE_DB_PASSWORD")
     source_article_search_limit: int = Field(default=20, alias="SOURCE_ARTICLE_SEARCH_LIMIT")
 
+    # RN Telegram 下载器 HTTP 控制面
+    downloader_enabled: bool = Field(default=False, alias="DOWNLOADER_ENABLED")
+    downloader_base_url: str | None = Field(default=None, alias="DOWNLOADER_BASE_URL")
+    downloader_password: str | None = Field(default=None, alias="DOWNLOADER_PASSWORD")
+    downloader_node_key: str = Field(default="rn", alias="DOWNLOADER_NODE_KEY")
+    downloader_timeout_seconds: float = Field(default=10.0, alias="DOWNLOADER_TIMEOUT_SECONDS")
+    downloader_sync_interval_seconds: int = Field(default=60, alias="DOWNLOADER_SYNC_INTERVAL_SECONDS")
+
     # 115 cookies（供 p115client.P115Client 使用，区别于 Open API token）
     cookies_path: str = Field(default="data/cookies/cookie.txt", alias="COOKIES_PATH")
 
