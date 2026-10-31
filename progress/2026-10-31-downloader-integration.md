@@ -150,3 +150,32 @@
 - Changed files: 本条部署记录。
 - Backup: `backups/deploy-20261031-220120-4f073bc1`（服务器目录内，包含部署前提交、`.env` 和 PostgreSQL dump）。
 - Rollback: 先停止 app，使用该目录恢复 PostgreSQL dump 和 `.env`，将 checkout 回退到 `6592638b`，再按 `docker/docker-compose.yml` 重建并启动；回退前保留失败部署现场。
+
+## RN downloader enablement — 2026-10-31 15:00 PDT
+
+### What was done
+
+- 使用本地 `.env.rndn` 临时配置启用生产 RN 集成：`DOWNLOADER_ENABLED=true`、RN 地址为 `https://tgdn.wyichuan.cc/`，密码只写入服务器 `.env`，未进入 Git、数据库或日志。
+- 18x 生产容器已重建，配置文件权限为 `0600`，同步 sweeper 已启动。
+- 现场联调发现并修复三个真实兼容性问题：Telegram `source_chat_id` 与资源包 `known_total_size` 改为 `BIGINT`；RN `/api/tasks` 的 JSON 数组响应被 18x 客户端正确接受。
+
+### Testing
+
+- 本地后端全量：`354 passed`。
+- RN 认证链：`POST /login`、`GET /api/csrf-token`、`GET /api/packages` 均返回 200。
+- 全量资源包同步：`packages completed`，写入 25,913 个资源包和 4,282 个候选。
+- 最终部署后：`/api/healthz` 返回 `status: ok`；容器内直接调用 `DownloaderClient.list_tasks()` 返回 200 个任务；Alembic 版本为 `20261031_0013`。
+
+### Notes
+
+Changed files:
+- `app/models/downloader.py`
+- `app/services/downloader/client.py`
+- `alembic/versions/20261031_0012_downloader_source_chat_bigint.py`
+- `alembic/versions/20261031_0013_downloader_size_bigint.py`
+- 对应下载器回归测试。
+
+Production commits: `b25415a4`, `599b8fb6`, `0bea3084`。
+Backups: `backups/downloader-config-20261031-222208`、`backups/downloader-bigint-20261031-222711-b25415a4`、`backups/downloader-size-20261031-223336-599b8fb6`、`backups/downloader-task-json-20261031-225130-0bea3084`。
+
+Rollback: 将 `DOWNLOADER_ENABLED` 设为 `false` 并重建 app；代码回退到 `110d5504`，数据库按对应备份恢复前先停止 app 并保留当前现场。
