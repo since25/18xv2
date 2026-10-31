@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import BigInteger, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -23,7 +23,8 @@ class DownloaderPackage(Base):
     library_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     title: Mapped[str] = mapped_column(Text, nullable=False, default="")
     channel_title: Mapped[str | None] = mapped_column(Text, nullable=True)
-    source_chat_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Telegram supergroup/channel IDs use the -100... range and exceed int32.
+    source_chat_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     published_at: Mapped[str | None] = mapped_column(String(64), nullable=True)
     boundary_status: Mapped[str] = mapped_column(String(32), nullable=False, default="unknown", index=True)
     media_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

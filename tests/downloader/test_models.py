@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy import BigInteger
 
 from app.models.downloader import DownloaderPackage, DownloaderPackageCandidate
+
+
+def test_downloader_source_chat_id_supports_telegram_supergroup_ids():
+    assert isinstance(DownloaderPackage.__table__.c.source_chat_id.type, BigInteger)
 
 
 def test_downloader_package_and_candidate_defaults(db_session, fake_client):
