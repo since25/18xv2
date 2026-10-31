@@ -28,7 +28,8 @@ class DownloaderPackage(Base):
     published_at: Mapped[str | None] = mapped_column(String(64), nullable=True)
     boundary_status: Mapped[str] = mapped_column(String(32), nullable=False, default="unknown", index=True)
     media_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    known_total_size: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # 资源包可能包含多 GB 媒体，累计大小超过 int32。
+    known_total_size: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     current_download_status: Mapped[str] = mapped_column(String(32), nullable=False, default="never", index=True)
     has_successful_attempt: Mapped[bool] = mapped_column(default=False, nullable=False)
     index_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
