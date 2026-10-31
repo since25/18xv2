@@ -15,6 +15,9 @@ class DownloaderRemoteError(RuntimeError):
         self.status_code = status_code
 
 
+JsonPayload = dict[str, Any] | list[Any]
+
+
 @dataclass(frozen=True)
 class DownloaderClient:
     """调用 RN 下载器 Web API 的短生命周期客户端。"""
@@ -45,13 +48,20 @@ class DownloaderClient:
         )
 
     @staticmethod
-    def _json(response: httpx.Response) -> dict[str, Any]:
+    def _json(response: httpx.Response) -> JsonPayload:
         try:
             payload = response.json()
         except ValueError as exc:
             raise DownloaderRemoteError("invalid_response", "下载器返回格式无效", status_code=response.status_code) from exc
-        if not isinstance(payload, dict):
+        if not isinstance(payload, (dict, list)):
             raise DownloaderRemoteError("invalid_response", "下载器返回格式无效", status_code=response.status_code)
+        return payload
+
+    @classmethod
+    def _json_object(cls, response: httpx.Response) -> dict[str, Any]:
+        payload = cls._json(response)
+        if not isinstance(payload, dict):
+            raise DownloaderRemoteError("invalid_response", "下载器返回对象格式无效", status_code=response.status_code)
         return payload
 
     def health(self) -> dict[str, Any]:
@@ -62,7 +72,7 @@ class DownloaderClient:
                 raise DownloaderRemoteError("unreachable", "下载器无法连接") from exc
         if response.status_code >= 400:
             raise DownloaderRemoteError("not_ready", "下载器尚未就绪", status_code=response.status_code)
-        return self._json(response)
+        return self._json_object(response)
 
     def _authenticated(self) -> tuple[httpx.Client, str]:
         client = self._client()
@@ -71,7 +81,7 @@ class DownloaderClient:
         except httpx.HTTPError as exc:
             client.close()
             raise DownloaderRemoteError("unreachable", "下载器无法连接") from exc
-        payload = self._json(response)
+        payload = self._json_object(response)
         if response.status_code >= 400 or str(payload.get("code")) != "1":
             client.close()
             raise DownloaderRemoteError("authentication_failed", "下载器认证失败", status_code=response.status_code)
@@ -80,7 +90,7 @@ class DownloaderClient:
         except httpx.HTTPError as exc:
             client.close()
             raise DownloaderRemoteError("unreachable", "下载器无法连接") from exc
-        csrf_payload = self._json(csrf_response)
+        csrf_payload = self._json_object(csrf_response)
         csrf = csrf_payload.get("csrf_token")
         if csrf_response.status_code >= 400 or not isinstance(csrf, str) or not csrf:
             client.close()
@@ -94,7 +104,8 @@ class DownloaderClient:
         *,
         params: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
-    ) -> dict[str, Any]:
+        allow_list: bool = False,
+    ) -> JsonPayload:
         client, csrf = self._authenticated()
         try:
             request_headers = {"X-CSRF-Token": csrf, **(headers or {})}
@@ -103,6 +114,8 @@ class DownloaderClient:
             except httpx.HTTPError as exc:
                 raise DownloaderRemoteError("unreachable", "下载器无法连接") from exc
             payload = self._json(response)
+            if not allow_list and not isinstance(payload, dict):
+                raise DownloaderRemoteError("invalid_response", "下载器返回对象格式无效", status_code=response.status_code)
             if response.status_code >= 400:
                 code = str(payload.get("error_code") or "remote_error")
                 message = str(payload.get("message") or "下载器拒绝了请求")
@@ -115,11 +128,14 @@ class DownloaderClient:
         params: dict[str, Any] = {"page_size": max(1, min(int(page_size), 200))}
         if cursor:
             params["cursor"] = cursor
-        return self._authenticated_request("GET", "/api/packages", params=params)
+        payload = self._authenticated_request("GET", "/api/packages", params=params)
+        if not isinstance(payload, dict):
+            raise DownloaderRemoteError("invalid_response", "下载器资源包列表格式无效")
+        return payload
 
     def list_tasks(self) -> list[dict[str, Any]]:
-        payload = self._authenticated_request("GET", "/api/tasks")
-        items = payload.get("items", payload)
+        payload = self._authenticated_request("GET", "/api/tasks", allow_list=True)
+        items = payload.get("items", payload) if isinstance(payload, dict) else payload
         if not isinstance(items, list):
             raise DownloaderRemoteError("invalid_response", "下载器任务列表格式无效")
         return [item for item in items if isinstance(item, dict)]

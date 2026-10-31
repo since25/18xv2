@@ -63,3 +63,17 @@ def test_client_maps_login_failure_without_exposing_password():
         client.get_dashboard()
     assert error.value.code == "authentication_failed"
     assert "secret" not in str(error.value)
+
+
+def test_client_accepts_rn_task_list_response_as_json_array():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST" and request.url.path == "/login":
+            return httpx.Response(200, json={"code": "1"})
+        if request.method == "GET" and request.url.path == "/api/csrf-token":
+            return httpx.Response(200, json={"csrf_token": "csrf-3"})
+        if request.method == "GET" and request.url.path == "/api/tasks":
+            return httpx.Response(200, json=[{"task_id": "task-1", "status": "completed"}])
+        raise AssertionError(f"unexpected {request.method} {request.url}")
+
+    client = DownloaderClient(Settings(), transport=httpx.MockTransport(handler))
+    assert client.list_tasks() == [{"task_id": "task-1", "status": "completed"}]
