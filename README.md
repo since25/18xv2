@@ -15,6 +15,7 @@ DOWNLOADER_PASSWORD=下载器 Web 登录密码
 DOWNLOADER_NODE_KEY=rn
 DOWNLOADER_TIMEOUT_SECONDS=10
 DOWNLOADER_SYNC_INTERVAL_SECONDS=60
+DOWNLOADER_TASK_SYNC_INTERVAL_SECONDS=15
 ```
 
 未启用或未配置地址时，后台不会连接 RN，也不会自动创建下载任务。启用后后台只同步资源包和任务状态；下载仍需在 18x 页面人工确认。旧 RN 客户端省略下载模式时仍使用完整下载模式，18x 集成使用 `mode=incremental`。

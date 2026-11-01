@@ -15,6 +15,12 @@ from app.services.downloader import sync_service
 
 
 class FakeClient:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        return None
+
     def list_packages(self, *, cursor=None, page_size=200):
         return {
             "items": [{"id": 9, "library_id": 1, "title": "Foo package", "boundary_status": "stable", "current_download_status": "never", "index_revision": 1}],

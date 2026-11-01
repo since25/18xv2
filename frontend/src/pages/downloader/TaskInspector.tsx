@@ -5,6 +5,7 @@ import { getTaskDetail, retryDownloaderTask, type TaskDetail, type TaskFile } fr
 import BytesText from '@/components/BytesText'
 import StatusTag from '@/components/StatusTag'
 import { formatDuration } from '@/utils/format'
+import { downloaderErrorText } from '@/utils/statusText'
 
 type TaskInspectorProps = {
   taskId: string | null
@@ -13,6 +14,8 @@ type TaskInspectorProps = {
 }
 
 type FileFilter = 'all' | 'failed' | 'success'
+
+const FAILED_FILE_STATUSES = new Set(['failed', 'download_failed', 'upload_failed'])
 
 function errorText(error: unknown) {
   return error instanceof Error ? error.message : '请求失败'
@@ -49,7 +52,7 @@ export default function TaskInspector({ taskId, onClose, onChanged }: TaskInspec
     const source = detail?.files ?? []
     const query = filename.trim().toLocaleLowerCase()
     return source.filter((file) => {
-      if (fileFilter === 'failed' && !['failed', 'download_failed', 'upload_failed'].includes(file.status ?? '')) return false
+      if (fileFilter === 'failed' && !FAILED_FILE_STATUSES.has(file.status ?? '')) return false
       if (fileFilter === 'success' && !['completed', 'downloaded'].includes(file.status ?? '')) return false
       return !query || (file.filename ?? '').toLocaleLowerCase().includes(query)
     })
@@ -69,7 +72,7 @@ export default function TaskInspector({ taskId, onClose, onChanged }: TaskInspec
     { title: '文件名', dataIndex: 'filename', key: 'filename', render: (value) => value || '-' },
     { title: '大小', dataIndex: 'total_size', key: 'total_size', render: (value) => <BytesText value={value} /> },
     { title: '状态', dataIndex: 'status', key: 'status', render: (value) => <StatusTag domain="file" value={value} /> },
-    { title: '错误原因', dataIndex: 'error', key: 'error', render: (value) => value || '-' },
+    { title: '错误原因', dataIndex: 'error', key: 'error', render: (value, file) => (FAILED_FILE_STATUSES.has(String(file.status)) ? downloaderErrorText(value) : value || '-') },
   ]
 
   const failedFiles = detail?.failed_files ?? []
@@ -95,7 +98,7 @@ export default function TaskInspector({ taskId, onClose, onChanged }: TaskInspec
           showIcon
           title={`${failedFiles.length} 个文件下载异常`}
           action={<Button type="primary" size="small" onClick={() => void retryFailed()}>重试全部失败文件</Button>}
-          description={<div className="task-failed-files">{failedFiles.map((file) => <div className="task-failed-file" key={file.message_id}><strong>{file.filename || '-'}</strong><BytesText value={file.total_size} /><span>{file.error || '未知错误'}</span></div>)}</div>}
+          description={<div className="task-failed-files">{failedFiles.map((file) => <div className="task-failed-file" key={file.message_id}><strong>{file.filename || `消息 #${file.message_id}`}</strong><BytesText value={file.total_size} /><span>{downloaderErrorText(file.error)}</span></div>)}</div>}
         /> : null}
         <div className="task-inspector-files">
           <Space className="task-inspector-file-toolbar" wrap>

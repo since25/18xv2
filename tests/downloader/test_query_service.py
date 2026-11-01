@@ -357,3 +357,33 @@ def test_list_inbox_query_count_does_not_grow_with_package_count(db_session):
     finally:
         event.remove(engine, "before_cursor_execute", count_statement)
     assert counts == {"candidates": 30, "ignored": 0}
+
+
+def test_ignore_channel_ignores_only_that_channels_inbox_packages_and_exposes_rn_errors(db_session):
+    add_keyword(db_session, "Foo", "whitelist")
+    base = {"boundary_status": "stable", "current_download_status": "never", "index_revision": 1}
+    remote = FakePackageRemote(
+        [
+            {**base, "id": 1, "title": "Foo a", "channel_title": "Dead channel", "current_download_status": "failed",
+             "last_download_error": "channel_unavailable", "channel_last_error": "channel_unavailable"},
+            {**base, "id": 2, "title": "Foo b", "channel_title": "Dead channel"},
+            {**base, "id": 3, "title": "Foo c", "channel_title": "Live channel"},
+        ]
+    )
+    DownloaderSyncService.sync_packages(db_session, remote)
+
+    items, _, _ = DownloaderQueryService.list_inbox(db_session, view="candidates")
+    dead = next(item for item in items if item["remote_package_id"] == 1)
+    assert dead["last_download_error"] == "channel_unavailable"
+    assert dead["channel_error"] == "channel_unavailable"
+
+    package_ids = DownloaderQueryService.ignore_channel(db_session, "Dead channel", reason="channel_dead")
+    assert len(package_ids) == 2
+    remaining, _, counts = DownloaderQueryService.list_inbox(db_session, view="candidates")
+    assert [item["channel_title"] for item in remaining] == ["Live channel"]
+    assert counts == {"candidates": 1, "ignored": 2}
+    assert DownloaderQueryService.ignore_channel(db_session, "Dead channel") == []
+
+    assert DownloaderQueryService.unignore_packages(db_session, package_ids) == 2
+    _, _, restored_counts = DownloaderQueryService.list_inbox(db_session, view="candidates")
+    assert restored_counts == {"candidates": 3, "ignored": 0}

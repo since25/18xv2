@@ -31,6 +31,24 @@ describe('TaskInspector', () => {
     expect(screen.getAllByText('Connection reset by peer').length).toBeGreaterThan(0)
   })
 
+  it('explains RN error codes and empty reasons for failed files', async () => {
+    api.getTaskDetail.mockResolvedValue({
+      ...detail,
+      files: [
+        { message_id: '4925', filename: '', status: 'failed', total_size: 0, downloaded_size: 0, error: 'channel_unavailable' },
+        { message_id: '4926', filename: '', status: 'failed', total_size: 0, downloaded_size: 0, error: '' },
+      ],
+      failed_files: [
+        { message_id: '4925', filename: '', status: 'failed', total_size: 0, downloaded_size: 0, error: 'channel_unavailable' },
+        { message_id: '4926', filename: '', status: 'failed', total_size: 0, downloaded_size: 0, error: '' },
+      ],
+    })
+    render(<TaskInspector taskId="task-1" onClose={vi.fn()} onChanged={vi.fn()} />)
+    expect((await screen.findAllByText('消息 #4925')).length).toBeGreaterThan(0)
+    expect(screen.getAllByText('频道不可访问（可能已被封禁或转为私有）').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('RN 未提供原因（可能消息已删除或频道不可访问）').length).toBeGreaterThan(0)
+  })
+
   it('retries all failed files and notifies the parent', async () => {
     const onChanged = vi.fn()
     render(<TaskInspector taskId="task-1" onClose={vi.fn()} onChanged={onChanged} />)

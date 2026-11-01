@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Button, Checkbox, Input, Select, Segmented, Space, Table, Typography, message, notification } from 'antd'
+import { Button, Checkbox, Input, Select, Segmented, Space, Table, Tag, Tooltip, Typography, message, notification } from 'antd'
 import type { InputRef } from 'antd/es/input'
 import type { ColumnsType } from 'antd/es/table'
 import { SearchOutlined } from '@ant-design/icons'
 import {
+  ignoreChannel,
   ignorePackages,
   listInbox,
   submitDownloaderBatches,
@@ -15,6 +16,7 @@ import StatusTag from '@/components/StatusTag'
 import TimeText from '@/components/TimeText'
 import DataToolbar from '@/layout/DataToolbar'
 import { formatBytes } from '@/utils/format'
+import { downloaderErrorText } from '@/utils/statusText'
 import FloatingActionBar from './FloatingActionBar'
 import { useUndoableIgnore } from './useUndoableIgnore'
 
@@ -180,6 +182,26 @@ export default function CandidatesInbox({ onCountsChange }: CandidatesInboxProps
     })
   }
 
+  async function ignoreWholeChannel(channelTitle: string) {
+    try {
+      const result = await ignoreChannel(channelTitle)
+      await load()
+      notification.open({
+        key: 'downloader-ignore-channel',
+        title: `已忽略频道「${channelTitle}」的 ${result.ignored} 个资源包`,
+        description: '可以在 5 秒内撤销，之后也能在「已忽略」里逐个恢复。',
+        btn: <Button size="small" onClick={() => {
+          notification.destroy('downloader-ignore-channel')
+          void unignorePackages(result.package_ids).then(() => load()).catch((error) => message.error(errorText(error)))
+        }}>撤销</Button>,
+        placement: 'bottomRight',
+        duration: 5,
+      })
+    } catch (error) {
+      message.error(errorText(error))
+    }
+  }
+
   async function restore(item: InboxItem) {
     try {
       await unignorePackages([item.package_id])
@@ -203,7 +225,9 @@ export default function CandidatesInbox({ onCountsChange }: CandidatesInboxProps
         <div className="downloader-package-cell">
           <Typography.Text strong ellipsis={{ tooltip: item.title }}>{item.title}</Typography.Text>
           <span className="downloader-secondary-line">
-            {item.channel_title || '未标注频道'} · #{item.remote_package_id}
+            {item.channel_title || '未标注频道'}
+            {item.channel_error ? <Tooltip title={downloaderErrorText(item.channel_error)}><Tag color="error" className="downloader-channel-error">频道不可访问</Tag></Tooltip> : null}
+            {' · '}#{item.remote_package_id}
             {item.keywords.map((keyword) => <span className="keyword-pill" key={`${item.package_id}-${keyword.keyword_entry_id}`}>{keyword.keyword}</span>)}
           </span>
         </div>
@@ -217,12 +241,17 @@ export default function CandidatesInbox({ onCountsChange }: CandidatesInboxProps
     {
       title: '版本与状态',
       key: 'status',
-      render: (_, item) => <Space orientation="vertical" size={2}><StatusTag domain="package" value={item.current_download_status} suffix={item.new_media_count ? `+${item.new_media_count}` : undefined} tooltip={item.new_media_count ? `本地已完成 r${item.completed_revision ?? '-'}，远端新版 r${item.index_revision}` : undefined} /><Typography.Text type="secondary">r{item.index_revision}</Typography.Text></Space>,
+      render: (_, item) => <Space orientation="vertical" size={2}><StatusTag domain="package" value={item.current_download_status} suffix={item.new_media_count ? `+${item.new_media_count}` : undefined} tooltip={item.new_media_count ? `本地已完成 r${item.completed_revision ?? '-'}，远端新版 r${item.index_revision}` : undefined} /><Typography.Text type="secondary">r{item.index_revision}</Typography.Text>{item.last_download_error && item.current_download_status !== 'completed' ? <Typography.Text type="danger" className="downloader-error-line">{downloaderErrorText(item.last_download_error)}</Typography.Text> : null}</Space>,
     },
     {
       title: '操作',
       key: 'actions',
-      render: (_, item) => view === 'ignored' ? <Button aria-label="恢复" className="downloader-row-action" size="small" onClick={() => void restore(item)}>恢复</Button> : <Button aria-label="忽略" className="downloader-row-action" size="small" onClick={() => ignoreOne(item)}>忽略</Button>,
+      render: (_, item) => view === 'ignored' ? <Button aria-label="恢复" className="downloader-row-action" size="small" onClick={() => void restore(item)}>恢复</Button> : (
+        <Space size={4} wrap>
+          <Button aria-label="忽略" className="downloader-row-action" size="small" onClick={() => ignoreOne(item)}>忽略</Button>
+          {item.channel_title ? <Button aria-label={`忽略频道 ${item.channel_title}`} className="downloader-row-action" size="small" type="link" danger={Boolean(item.channel_error)} onClick={() => void ignoreWholeChannel(item.channel_title as string)}>忽略频道</Button> : null}
+        </Space>
+      ),
     },
   ]
 

@@ -92,7 +92,9 @@ npm run dev
 | 会话文件 | `data/auth_sessions.json` | 登录态持久化 |
 | Cookie 文件 | `data/cookies/` | 供 Cookie 扫码/目录树导出使用 |
 
-RN 下载器相关配置只放在 `.env`：`DOWNLOADER_BASE_URL`、`DOWNLOADER_PASSWORD`、`DOWNLOADER_NODE_KEY`、`DOWNLOADER_TIMEOUT_SECONDS`、`DOWNLOADER_SYNC_INTERVAL_SECONDS`。密码不写入数据库、日志或前端响应。
+RN 下载器相关配置只放在 `.env`：`DOWNLOADER_BASE_URL`、`DOWNLOADER_PASSWORD`、`DOWNLOADER_NODE_KEY`、`DOWNLOADER_TIMEOUT_SECONDS`、`DOWNLOADER_SYNC_INTERVAL_SECONDS`（资源包同步间隔）、`DOWNLOADER_TASK_SYNC_INTERVAL_SECONDS`（任务进度同步间隔，默认 15 秒）。密码不写入数据库、日志或前端响应。
+
+后台同步分成两个独立循环：资源包同步和任务同步互不等待。每轮同步在一个已登录会话内完成（`with DownloaderClient(...)`），不再每个请求重新登录。任务同步对「已结束且 RN 更新时间未变」的任务不再拉详情；RN 任务载荷只带 `chat_id`，频道名按资源包的 `source_chat_id` 补齐。
 
 页面入口为 `/downloader`，后端控制面为 `/downloader/*`。下载器页面采用候选收件箱和任务看板双流模型：收件箱处理候选确认、忽略和 5 秒撤销，任务看板处理任务筛选与历史，点击任务后通过侧边检查抽屉查看文件详情。候选携带资源包版本号；确认新版本后由 RN 增量批次跳过旧版本完整成功的消息。现场验收时先用“同步资源包”检查连接，再人工选择一条候选提交；测试环境只使用 mock HTTP 客户端。
 
@@ -101,7 +103,8 @@ RN 下载器相关配置只放在 `.env`：`DOWNLOADER_BASE_URL`、`DOWNLOADER_P
 下载器控制面新增或调整以下接口：
 
 - `GET /downloader/packages?view=candidates|ignored`：收件箱候选/已忽略视图，支持下载状态、白名单词、标题搜索和分页参数。
-- `POST /downloader/packages/ignore`、`POST /downloader/packages/unignore`：按候选或资源包忽略、恢复候选。
+- `POST /downloader/packages/ignore`、`POST /downloader/packages/unignore`：按候选或资源包忽略、恢复候选。`ignore` 也可传 `channel_title`，忽略该频道当前在收件箱里的全部资源包，响应返回 `package_ids` 供撤销。
+- 收件箱条目带 `last_download_error`（本包最近一次下载失败原因码）和 `channel_error`（频道级错误码，如 `channel_unavailable`），来自 RN 资源包载荷；前端在 `utils/statusText.ts` 的 `downloaderErrorText` 中翻译为中文。
 - `GET /downloader/tasks`：支持 `status`、`since`、`until`、`channel`、`keyword_entry_id`、`search`、`page`、`page_size` 筛选；只显式传 `limit` 时保持旧任务列表格式和行为。
 - `GET /downloader/tasks/{id}/detail`：返回任务摘要、文件列表和失败文件信息。
 - `GET /downloader/summary`、`GET /downloader/channels`：返回任务统计和频道筛选项。

@@ -731,6 +731,16 @@ body {
   font-size: 12px;
 }
 
+.downloader-channel-error {
+  margin-inline-end: 0;
+  font-size: 11px;
+  line-height: 18px;
+}
+
+.downloader-error-line {
+  font-size: 12px;
+}
+
 .keyword-pill {
   display: inline-flex;
   align-items: center;

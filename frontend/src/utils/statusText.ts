@@ -107,3 +107,24 @@ export function statusMeta(domain: StatusDomain, value: string | null | undefine
   if (!value) return { label: '-', tone: 'neutral' }
   return STATUS_MAP[domain][value] ?? { label: value, tone: 'neutral' }
 }
+
+// RN 下载器返回的失败原因码 → 中文说明
+const DOWNLOADER_ERROR_TEXT: Record<string, string> = {
+  channel_unavailable: '频道不可访问（可能已被封禁或转为私有）',
+  not_found: '消息已不存在（可能已被删除）',
+  telegram_refetch_failed: '重新获取 Telegram 消息失败（多为网络问题，可重试）',
+  download_failed: '下载失败',
+  upload_failed: '上传失败',
+  unknown_package_size: '资源包大小未知，无法下载',
+  package_exceeds_disk_capacity: '磁盘空间不足',
+  cancelled: '已取消',
+  callback_failed: '下载器内部错误',
+  task_identity_conflict: '下载器内部错误（任务冲突）',
+}
+
+export const DOWNLOADER_UNKNOWN_ERROR_TEXT = 'RN 未提供原因（可能消息已删除或频道不可访问）'
+
+export function downloaderErrorText(code: string | null | undefined): string {
+  if (!code) return DOWNLOADER_UNKNOWN_ERROR_TEXT
+  return DOWNLOADER_ERROR_TEXT[code] ?? code
+}

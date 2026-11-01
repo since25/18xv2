@@ -72,9 +72,9 @@ def downloader_status(db: Session = Depends(get_db)) -> dict:
 
 @router.post("/sync")
 def sync_downloader(db: Session = Depends(get_db)) -> dict:
-    client = _client()
     try:
-        packages = DownloaderSyncService.sync_packages(db, client, node_key=get_settings().downloader_node_key)
+        with _client() as client:
+            packages = DownloaderSyncService.sync_packages(db, client, node_key=get_settings().downloader_node_key)
     except DownloaderRemoteError as error:
         raise _remote_error(error) from error
     return {
@@ -126,8 +126,11 @@ def list_downloader_candidates(
 
 @router.post("/packages/ignore")
 def ignore_downloader_packages(payload: DownloaderIgnoreRequest, db: Session = Depends(get_db)) -> dict:
+    if payload.channel_title:
+        package_ids = DownloaderQueryService.ignore_channel(db, payload.channel_title, reason=payload.reason)
+        return {"ignored": len(package_ids), "package_ids": package_ids}
     if not payload.candidate_ids and not payload.package_ids:
-        raise HTTPException(status_code=422, detail="candidate_ids 或 package_ids 至少提供一个")
+        raise HTTPException(status_code=422, detail="candidate_ids、package_ids 或 channel_title 至少提供一个")
     return {
         "ignored": DownloaderQueryService.ignore_packages(
             db,
@@ -246,7 +249,8 @@ def list_downloader_task_history(
 @router.post("/tasks/sync")
 def sync_downloader_tasks(db: Session = Depends(get_db)) -> dict:
     try:
-        result = DownloaderSyncService.sync_tasks(db, _client(), node_key=get_settings().downloader_node_key)
+        with _client() as client:
+            result = DownloaderSyncService.sync_tasks(db, client, node_key=get_settings().downloader_node_key)
     except DownloaderRemoteError as error:
         raise _remote_error(error) from error
     return {"tasks_seen": result.tasks_seen, "tasks_updated": result.tasks_updated}

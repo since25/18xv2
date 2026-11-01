@@ -6,6 +6,7 @@ import FloatingActionBar from './FloatingActionBar'
 
 const api = vi.hoisted(() => ({
   listInbox: vi.fn(),
+  ignoreChannel: vi.fn(),
   ignorePackages: vi.fn(),
   unignorePackages: vi.fn(),
   submitDownloaderBatches: vi.fn(),
@@ -31,7 +32,7 @@ const rows = [1, 2, 3].map((id) => ({
   ignored_reason: null,
 }))
 
-function inboxPayload(items = rows, page = 1) {
+function inboxPayload(items: Array<Record<string, unknown>> = rows, page = 1) {
   return { items, total: items.length, page, page_size: 50, counts: { candidates: items.length, ignored: 1 } }
 }
 
@@ -41,8 +42,26 @@ describe('CandidatesInbox', () => {
   beforeEach(() => {
     api.listInbox.mockResolvedValue(inboxPayload())
     api.ignorePackages.mockResolvedValue({ ignored: 1 })
+    api.ignoreChannel.mockResolvedValue({ ignored: 3, package_ids: [1, 2, 3] })
     api.unignorePackages.mockResolvedValue({ restored: 1 })
     api.submitDownloaderBatches.mockResolvedValue({ submitted: 2, skipped: 0, failed: 0 })
+  })
+
+  it('shows channel errors and ignores a whole channel with undo', async () => {
+    api.listInbox.mockResolvedValue(inboxPayload([
+      { ...rows[0], current_download_status: 'failed', last_download_error: 'channel_unavailable', channel_error: 'channel_unavailable' },
+    ]))
+    render(<CandidatesInbox onCountsChange={vi.fn()} />)
+
+    expect(await screen.findByText('频道不可访问')).toBeTruthy()
+    expect(screen.getByText('频道不可访问（可能已被封禁或转为私有）')).toBeTruthy()
+
+    await userEvent.click(screen.getByRole('button', { name: '忽略频道 频道 A' }))
+    await waitFor(() => expect(api.ignoreChannel).toHaveBeenCalledWith('频道 A'))
+    expect(await screen.findByText('已忽略频道「频道 A」的 3 个资源包')).toBeTruthy()
+
+    await userEvent.click(screen.getByRole('button', { name: /撤\s*销/ }))
+    await waitFor(() => expect(api.unignorePackages).toHaveBeenCalledWith([1, 2, 3]))
   })
 
   it('mounts the floating action bar outside the rendered page container', () => {

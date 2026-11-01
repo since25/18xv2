@@ -74,6 +74,7 @@ class Settings(BaseSettings):
     downloader_node_key: str = Field(default="rn", alias="DOWNLOADER_NODE_KEY")
     downloader_timeout_seconds: float = Field(default=10.0, alias="DOWNLOADER_TIMEOUT_SECONDS")
     downloader_sync_interval_seconds: int = Field(default=60, alias="DOWNLOADER_SYNC_INTERVAL_SECONDS")
+    downloader_task_sync_interval_seconds: int = Field(default=15, alias="DOWNLOADER_TASK_SYNC_INTERVAL_SECONDS")
 
     # 115 cookies（供 p115client.P115Client 使用，区别于 Open API token）
     cookies_path: str = Field(default="data/cookies/cookie.txt", alias="COOKIES_PATH")

@@ -40,6 +40,8 @@ export interface InboxItem {
   keywords: InboxKeyword[]
   ignored_at: string | null
   ignored_reason: string | null
+  last_download_error?: string | null
+  channel_error?: string | null
 }
 
 export interface InboxResponse {
@@ -173,6 +175,13 @@ export function ignorePackages(payload: { candidateIds?: number[]; packageIds?: 
   if (payload.packageIds) body.package_ids = payload.packageIds
   if (payload.reason) body.reason = payload.reason
   return api.post<{ ignored: number }>('/downloader/packages/ignore', body)
+}
+
+export function ignoreChannel(channelTitle: string) {
+  return api.post<{ ignored: number; package_ids: number[] }>('/downloader/packages/ignore', {
+    channel_title: channelTitle,
+    reason: 'channel',
+  })
 }
 
 export function unignorePackages(packageIds: number[]) {

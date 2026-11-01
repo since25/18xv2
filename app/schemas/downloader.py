@@ -32,6 +32,8 @@ class DownloaderTaskListResponse(BaseModel):
 class DownloaderIgnoreRequest(BaseModel):
     candidate_ids: list[int] | None = None
     package_ids: list[int] | None = None
+    # 按频道忽略：忽略该频道当前在收件箱里的全部资源包
+    channel_title: str | None = None
     reason: str | None = None
 
 

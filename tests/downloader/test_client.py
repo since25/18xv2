@@ -77,3 +77,35 @@ def test_client_accepts_rn_task_list_response_as_json_array():
 
     client = DownloaderClient(Settings(), transport=httpx.MockTransport(handler))
     assert client.list_tasks() == [{"task_id": "task-1", "status": "completed"}]
+
+
+def test_client_reuses_login_inside_with_block_and_relogs_after_error():
+    calls: list[str] = []
+    fail_next = {"value": False}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.path)
+        if request.method == "POST" and request.url.path == "/login":
+            return httpx.Response(200, json={"code": "1"})
+        if request.method == "GET" and request.url.path == "/api/csrf-token":
+            return httpx.Response(200, json={"csrf_token": "csrf-4"})
+        if request.method == "GET" and request.url.path == "/api/tasks":
+            if fail_next["value"]:
+                fail_next["value"] = False
+                return httpx.Response(500, json={"error_code": "boom"})
+            return httpx.Response(200, json=[])
+        raise AssertionError(f"unexpected {request.method} {request.url}")
+
+    with DownloaderClient(Settings(), transport=httpx.MockTransport(handler)) as client:
+        client.list_tasks()
+        client.list_tasks()
+        assert calls.count("/login") == 1
+        fail_next["value"] = True
+        with pytest.raises(DownloaderRemoteError):
+            client.list_tasks()
+        client.list_tasks()
+        assert calls.count("/login") == 2
+
+    # with 块外仍是每次独立登录
+    client.list_tasks()
+    assert calls.count("/login") == 3

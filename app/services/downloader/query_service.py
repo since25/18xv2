@@ -5,7 +5,7 @@ import json
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.downloader import (
@@ -129,6 +129,7 @@ class DownloaderQueryService:
         candidates: list[DownloaderPackageCandidate],
     ) -> dict[str, Any]:
         keywords = DownloaderQueryService._keyword_names(db, candidates)
+        raw = _json_object(package.raw_payload_json) or {}
         completed_media_count = package.completed_media_count
         new_media_count = None
         if (
@@ -163,6 +164,9 @@ class DownloaderQueryService:
             ],
             "ignored_at": _iso(_aware(package.ignored_at)),
             "ignored_reason": package.ignored_reason,
+            # RN 提供的失败原因码：本包最近一次下载失败原因、频道级错误（如频道不可访问）
+            "last_download_error": raw.get("last_download_error"),
+            "channel_error": raw.get("channel_last_error"),
         }
 
     @staticmethod
@@ -284,6 +288,27 @@ class DownloaderQueryService:
                 candidate.dismissed_reason = "ignored"
         db.commit()
         return ignored
+
+    @staticmethod
+    def ignore_channel(db: Session, channel_title: str, *, reason: str | None = None) -> list[int]:
+        """忽略某频道当前在收件箱里的全部资源包，返回被忽略的资源包 id 以便撤销。"""
+        package_ids = list(
+            db.scalars(
+                select(DownloaderPackage.id)
+                .join(DownloaderPackageCandidate, DownloaderPackageCandidate.package_id == DownloaderPackage.id)
+                .where(
+                    DownloaderPackage.channel_title == channel_title,
+                    DownloaderPackage.ignored_at.is_(None),
+                    DownloaderPackageCandidate.status.in_(["pending", "selected"]),
+                    DownloaderPackageCandidate.package_revision == func.coalesce(DownloaderPackage.index_revision, 0),
+                )
+                .distinct()
+                .order_by(DownloaderPackage.id)
+            ).all()
+        )
+        if package_ids:
+            DownloaderQueryService.ignore_packages(db, package_ids=package_ids, reason=reason)
+        return package_ids
 
     @staticmethod
     def unignore_packages(db: Session, package_ids: list[int]) -> int:

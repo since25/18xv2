@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Literal
 
 import httpx
@@ -24,6 +24,21 @@ class DownloaderClient:
 
     settings: Any
     transport: httpx.BaseTransport | httpx.AsyncBaseTransport | None = None
+    # with 块内复用同一个已登录会话，避免每个请求都重新登录；frozen 只能把状态放进可变容器
+    _state: dict[str, Any] = field(default_factory=dict, init=False, repr=False, compare=False)
+
+    def __enter__(self) -> "DownloaderClient":
+        self._state["reuse"] = True
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self._drop_session()
+        self._state["reuse"] = False
+
+    def _drop_session(self) -> None:
+        session = self._state.pop("session", None)
+        if session is not None:
+            session[0].close()
 
     @property
     def base_url(self) -> str:
@@ -107,7 +122,13 @@ class DownloaderClient:
         json_body: dict[str, Any] | None = None,
         allow_list: bool = False,
     ) -> JsonPayload:
-        client, csrf = self._authenticated()
+        reuse = bool(self._state.get("reuse"))
+        if reuse and "session" in self._state:
+            client, csrf = self._state["session"]
+        else:
+            client, csrf = self._authenticated()
+            if reuse:
+                self._state["session"] = (client, csrf)
         try:
             request_headers = {"X-CSRF-Token": csrf, **(headers or {})}
             try:
@@ -128,8 +149,14 @@ class DownloaderClient:
                 message = str(payload.get("message") or "下载器拒绝了请求")
                 raise DownloaderRemoteError(code, message, status_code=response.status_code)
             return payload
+        except Exception:
+            # 会话可能已失效，下次请求重新登录
+            if reuse:
+                self._drop_session()
+            raise
         finally:
-            client.close()
+            if not reuse:
+                client.close()
 
     def list_packages(self, *, cursor: str | None = None, page_size: int = 200) -> dict[str, Any]:
         params: dict[str, Any] = {"page_size": max(1, min(int(page_size), 200))}

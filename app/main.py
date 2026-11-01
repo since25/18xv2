@@ -25,28 +25,32 @@ def _downloader_integration_enabled(settings) -> bool:
     return bool(getattr(settings, "downloader_enabled", False) and getattr(settings, "downloader_base_url", None))
 
 
-def _sync_downloader_once(settings) -> None:
-    """执行一次只读同步；不创建新的下载批次。"""
+def _sync_downloader_once(settings, kind: str) -> None:
+    """执行一次只读同步；不创建新的下载批次。资源包和任务分开同步，互不等待。"""
     from app.db.session import SessionLocal
     from app.services.downloader.client import DownloaderClient
     from app.services.downloader.sync_service import DownloaderSyncService
 
-    with SessionLocal() as session:
-        client = DownloaderClient(settings)
-        DownloaderSyncService.sync_packages(session, client, node_key=settings.downloader_node_key)
-        DownloaderSyncService.sync_tasks(session, client, node_key=settings.downloader_node_key)
+    with SessionLocal() as session, DownloaderClient(settings) as client:
+        if kind == "packages":
+            DownloaderSyncService.sync_packages(session, client, node_key=settings.downloader_node_key)
+        else:
+            DownloaderSyncService.sync_tasks(session, client, node_key=settings.downloader_node_key)
 
 
-async def _downloader_sync_loop(settings) -> None:
-    interval = max(int(getattr(settings, "downloader_sync_interval_seconds", 60)), 10)
+async def _downloader_sync_loop(settings, kind: str) -> None:
+    if kind == "packages":
+        interval = max(int(getattr(settings, "downloader_sync_interval_seconds", 60)), 10)
+    else:
+        interval = max(int(getattr(settings, "downloader_task_sync_interval_seconds", 15)), 5)
     while True:
         await asyncio.sleep(interval)
         try:
-            await asyncio.to_thread(_sync_downloader_once, settings)
+            await asyncio.to_thread(_sync_downloader_once, settings, kind)
         except asyncio.CancelledError:
             raise
         except Exception:  # noqa: BLE001 - one remote outage must not stop the app
-            logger.exception("RN downloader sync failed")
+            logger.exception("RN downloader %s sync failed", kind)
 
 
 @asynccontextmanager
@@ -130,11 +134,15 @@ async def lifespan(app: FastAPI):
     app.state.dedupe_job_sweeper = asyncio.create_task(_sweep_dedupe_jobs())
     logger.info("文件去重 sweeper 已启动")
 
-    downloader_sweeper = None
+    downloader_sweepers: list[asyncio.Task] = []
     if _downloader_integration_enabled(settings):
-        downloader_sweeper = asyncio.create_task(_downloader_sync_loop(settings))
-        app.state.downloader_sweeper = downloader_sweeper
-        logger.info("RN 下载器同步 sweeper 已启动")
+        downloader_sweepers = [
+            asyncio.create_task(_downloader_sync_loop(settings, "packages")),
+            asyncio.create_task(_downloader_sync_loop(settings, "tasks")),
+        ]
+        app.state.downloader_sweeper = downloader_sweepers[0]
+        app.state.downloader_task_sweeper = downloader_sweepers[1]
+        logger.info("RN 下载器同步 sweeper 已启动（资源包与任务分开）")
 
     yield
 
@@ -144,9 +152,9 @@ async def lifespan(app: FastAPI):
     dedupe_sweeper = getattr(app.state, "dedupe_job_sweeper", None)
     if dedupe_sweeper is not None:
         dedupe_sweeper.cancel()
-    if downloader_sweeper is not None:
+    for downloader_sweeper in downloader_sweepers:
         downloader_sweeper.cancel()
-        await asyncio.gather(downloader_sweeper, return_exceptions=True)
+    await asyncio.gather(*downloader_sweepers, return_exceptions=True)
     logger.info("Shutting down")
 
 

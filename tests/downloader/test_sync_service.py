@@ -271,3 +271,38 @@ def test_submit_accepts_pending_candidate(db_session):
 
     result = DownloaderSyncService.submit_selected(db_session, client, [candidates[0]["candidate_id"]])
     assert result.submitted == 1
+
+
+def test_sync_tasks_skips_unchanged_finished_tasks_and_fills_channel_by_chat_id(db_session):
+    client = FakeDownloader()
+    client.packages = [
+        {**client.packages[0], "chat_id": -100777, "channel_title": "Demo channel"},
+    ]
+    DownloaderSyncService.sync_packages(db_session, client)
+    detail_calls: list[str] = []
+    summary = {"task_id": "task-9", "status": "completed", "chat_id": -100777, "updated_at": 1793531394.081}
+
+    class FinishedTaskDownloader(FakeDownloader):
+        def list_tasks(self):
+            return [dict(summary)]
+
+        def get_task(self, task_id: str):
+            detail_calls.append(task_id)
+            return {**summary, "title": "Finished", "files": []}
+
+    remote = FinishedTaskDownloader()
+    DownloaderSyncService.sync_tasks(db_session, remote)
+    snapshot = db_session.scalar(select(DownloaderTaskSnapshot).where(DownloaderTaskSnapshot.remote_task_id == "task-9"))
+    assert snapshot.channel_title == "Demo channel"
+    assert detail_calls == ["task-9"]
+
+    # 已结束且没有更新：不再拉详情；旧快照缺频道名时仍会补齐
+    snapshot.channel_title = None
+    db_session.commit()
+    DownloaderSyncService.sync_tasks(db_session, remote)
+    assert detail_calls == ["task-9"]
+    assert snapshot.channel_title == "Demo channel"
+
+    summary["updated_at"] = 1793531500.0
+    DownloaderSyncService.sync_tasks(db_session, remote)
+    assert detail_calls == ["task-9", "task-9"]

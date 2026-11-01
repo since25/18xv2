@@ -102,6 +102,29 @@ def _task_structured_fields(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _channel_titles_by_chat(db: Session) -> dict[int, str]:
+    """RN 任务载荷只带 chat_id，用已同步资源包的频道名补齐。"""
+    rows = db.execute(
+        select(DownloaderPackage.source_chat_id, DownloaderPackage.channel_title)
+        .where(DownloaderPackage.source_chat_id.is_not(None), DownloaderPackage.channel_title.is_not(None))
+        .distinct()
+    ).all()
+    return {int(chat_id): title for chat_id, title in rows if title}
+
+
+def _unchanged_terminal(snapshot: DownloaderTaskSnapshot, summary: dict[str, Any]) -> bool:
+    """已结束且 RN 侧没有再更新的任务，不必重新拉取详情。"""
+    if snapshot.status not in _TERMINAL_STATUSES or str(summary.get("status") or "") != snapshot.status:
+        return False
+    remote_updated = _timestamp(summary.get("updated_at"))
+    stored = snapshot.remote_updated_at
+    if remote_updated is None or stored is None:
+        return False
+    if stored.tzinfo is None:
+        stored = stored.replace(tzinfo=UTC)
+    return abs((remote_updated - stored).total_seconds()) < 0.001
+
+
 def _terms(entry: KeywordEntry) -> list[tuple[str, str]]:
     values: list[tuple[str, str]] = [(entry.canonical_name, normalize_keyword_text(entry.canonical_name))]
     for alias in entry.aliases:
@@ -508,22 +531,29 @@ class DownloaderSyncService:
     @staticmethod
     def sync_tasks(db: Session, client: Any, *, node_key: str = "rn") -> TaskSyncSummary:
         tasks = client.list_tasks()
+        channel_titles = _channel_titles_by_chat(db)
         updated = 0
         for summary in tasks:
             task_id = str(summary.get("task_id") or summary.get("id") or "")
             if not task_id:
                 continue
-            try:
-                payload = client.get_task(task_id)
-            except Exception:
-                payload = summary
-            current_file = payload.get("current_file")
             snapshot = db.scalar(
                 select(DownloaderTaskSnapshot).where(
                     DownloaderTaskSnapshot.node_key == node_key,
                     DownloaderTaskSnapshot.remote_task_id == task_id,
                 )
             )
+            if snapshot is not None and _unchanged_terminal(snapshot, summary):
+                # 只补齐旧快照缺失的频道名，不再逐个拉取详情
+                if not snapshot.channel_title:
+                    chat_id = summary.get("chat_id") or json.loads(snapshot.raw_payload_json or "{}").get("chat_id")
+                    snapshot.channel_title = channel_titles.get(_int(chat_id, 0))
+                continue
+            try:
+                payload = client.get_task(task_id)
+            except Exception:
+                payload = summary
+            current_file = payload.get("current_file")
             if snapshot is None:
                 snapshot = DownloaderTaskSnapshot(node_key=node_key, remote_task_id=task_id)
                 db.add(snapshot)
@@ -559,7 +589,11 @@ class DownloaderSyncService:
                 ),
                 None,
             )
-            snapshot.channel_title = package_channel or structured["channel_title"]
+            snapshot.channel_title = (
+                package_channel
+                or structured["channel_title"]
+                or channel_titles.get(_int(payload.get("chat_id"), 0))
+            )
             for submission in submissions:
                 status = snapshot.status
                 if status in {"completed", "completed_with_errors"}:
