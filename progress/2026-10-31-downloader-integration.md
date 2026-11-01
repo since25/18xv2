@@ -206,3 +206,23 @@ Changed files:
 - RN: `module/channel_library_store.py`, `module/channel_library_service.py`, `module/web.py`, related tests.
 
 Rollback: 18x 可执行 Alembic downgrade 到 `20261031_0013`；RN 的 `download_mode` 是追加列，回退代码后旧调用继续按 `full` 模式运行。生产环境尚未执行迁移或部署。
+
+## Production deployment — 2026-11-01
+
+### What was done
+
+- 18x_v2 提交并推送 `cbafaa61`，Unraid `/mnt/user/docker1/18xv2` 已快进并重建 Docker 应用。
+- 18x 启动时完成 Alembic `20261031_0013 -> 20261031_0014`，RN 下载器同步 sweeper 已启动。
+- RN 下载器提交并推送 `3fad1b5`，`rn:/root/telegram_media_downloader` 已切换到该版本并重启 `tg-downloader.service`。
+
+### Testing
+
+- RN SQLite 部署前备份完整性校验为 `ok`；服务状态为 `active`，本机 `/healthz` 返回 `{"status":"ok"}`，公网入口返回 `302`。
+- 18x PostgreSQL 备份已生成；容器状态正常，`/api/healthz` 返回 `status: ok`、`authorization_status: ok`、`client_115: true`。
+- 18x 容器迁移版本为 `20261031_0014 (head)`；启动日志显示 RN 下载器同步 sweeper 已启动。
+
+### Notes
+
+- Changed files: 本条部署记录。
+- Backups: RN `backups/channel_library-20261031-230907.sqlite3`；18x `backups/postgres-20261101-110944.sql` 与对应 `.env` 备份。
+- Rollback: RN 恢复 SQLite 备份后将 checkout 切回上一版本并重启 `tg-downloader.service`；18x 将 checkout 回退并重建容器，必要时使用 PostgreSQL 备份恢复。
