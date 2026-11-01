@@ -32,6 +32,7 @@ class DownloaderPackage(Base):
     known_total_size: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     current_download_status: Mapped[str] = mapped_column(String(32), nullable=False, default="never", index=True)
     has_successful_attempt: Mapped[bool] = mapped_column(default=False, nullable=False)
+    completed_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
     index_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
     raw_payload_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
     first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
@@ -51,13 +52,19 @@ class DownloaderPackageCandidate(Base):
 
     __tablename__ = "downloader_package_candidates"
     __table_args__ = (
-        UniqueConstraint("package_id", "keyword_entry_id", name="uq_downloader_candidate_package_keyword"),
+        UniqueConstraint(
+            "package_id",
+            "keyword_entry_id",
+            "package_revision",
+            name="uq_downloader_candidate_package_keyword_revision",
+        ),
         Index("ix_downloader_candidates_status", "status"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     package_id: Mapped[int] = mapped_column(ForeignKey("downloader_packages.id", ondelete="CASCADE"), nullable=False)
     keyword_entry_id: Mapped[int] = mapped_column(ForeignKey("keyword_entries.id", ondelete="CASCADE"), nullable=False)
+    package_revision: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0", index=True)
     matched_term: Mapped[str] = mapped_column(String(255), nullable=False)
     match_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending", index=True)
@@ -80,6 +87,8 @@ class DownloaderSubmission(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     package_id: Mapped[int] = mapped_column(ForeignKey("downloader_packages.id", ondelete="CASCADE"), nullable=False)
     candidate_id: Mapped[int | None] = mapped_column(ForeignKey("downloader_package_candidates.id", ondelete="SET NULL"), nullable=True)
+    package_revision: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    download_mode: Mapped[str] = mapped_column(String(32), nullable=False, default="full", server_default="full")
     idempotency_key: Mapped[str] = mapped_column(String(200), nullable=False)
     remote_batch_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     remote_task_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
@@ -113,6 +122,61 @@ class DownloaderTaskSnapshot(Base):
     raw_payload_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
     observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+
+class DownloaderTaskHistory(Base):
+    """任务详情发生变化时追加的不可变快照。"""
+
+    __tablename__ = "downloader_task_histories"
+    __table_args__ = (
+        Index("ix_downloader_task_histories_task_observed", "node_key", "remote_task_id", "observed_at"),
+        UniqueConstraint("node_key", "remote_task_id", "payload_hash", name="uq_downloader_task_history_payload"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    node_key: Mapped[str] = mapped_column(String(64), nullable=False, default="rn")
+    remote_task_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    payload_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    source: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    task_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(64), nullable=False, default="unknown")
+    total_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    success_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    failed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    current_file_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    raw_payload_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    files: Mapped[list["DownloaderTaskFileHistory"]] = relationship(
+        back_populates="history", cascade="all, delete-orphan", order_by="DownloaderTaskFileHistory.message_id"
+    )
+
+
+class DownloaderTaskFileHistory(Base):
+    """任务历史快照中的文件级状态。"""
+
+    __tablename__ = "downloader_task_file_histories"
+    __table_args__ = (
+        UniqueConstraint("history_id", "message_id", name="uq_downloader_task_file_history_message"),
+        Index("ix_downloader_task_file_histories_status", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    history_id: Mapped[int] = mapped_column(ForeignKey("downloader_task_histories.id", ondelete="CASCADE"), nullable=False)
+    message_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    status: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    filename: Mapped[str | None] = mapped_column(Text, nullable=True)
+    total_size: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    downloaded_size: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    download_speed: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    save_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    uploaded_size: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    upload_speed: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    raw_payload_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+
+    history: Mapped[DownloaderTaskHistory] = relationship(back_populates="files")
 
 
 class DownloaderSyncRun(Base):

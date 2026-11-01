@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
+import hashlib
 import json
 from typing import Any
 
@@ -13,6 +14,8 @@ from app.models.downloader import (
     DownloaderPackageCandidate,
     DownloaderSubmission,
     DownloaderSyncRun,
+    DownloaderTaskFileHistory,
+    DownloaderTaskHistory,
     DownloaderTaskSnapshot,
 )
 from app.models.keywords import KeywordEntry
@@ -70,11 +73,72 @@ def _package_values(payload: dict[str, Any], *, node_key: str, now: datetime) ->
         "known_total_size": _int(payload.get("known_total_size")),
         "current_download_status": str(payload.get("current_download_status") or payload.get("download_status") or "never"),
         "has_successful_attempt": bool(payload.get("has_successful_attempt", False)),
+        "completed_revision": _int(payload.get("completed_revision"), 0) or None,
         "index_revision": _int(payload.get("index_revision"), 0) or None,
         "raw_payload_json": json.dumps(payload, ensure_ascii=False, sort_keys=True),
         "last_seen_at": now,
         "updated_at": now,
     }
+
+
+def _record_task_history(db: Session, payload: dict[str, Any], *, node_key: str, task_id: str) -> None:
+    raw_payload = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    payload_hash = hashlib.sha256(raw_payload.encode("utf-8")).hexdigest()
+    exists = db.scalar(
+        select(DownloaderTaskHistory).where(
+            DownloaderTaskHistory.node_key == node_key,
+            DownloaderTaskHistory.remote_task_id == task_id,
+            DownloaderTaskHistory.payload_hash == payload_hash,
+        )
+    )
+    if exists is not None:
+        return
+    current_file = payload.get("current_file")
+    history = DownloaderTaskHistory(
+        node_key=node_key,
+        remote_task_id=task_id,
+        payload_hash=payload_hash,
+        source=payload.get("source"),
+        task_type=payload.get("task_type"),
+        title=payload.get("title"),
+        status=str(payload.get("status") or "unknown"),
+        total_count=_int(payload.get("total_count")),
+        success_count=_int(payload.get("success_count")),
+        failed_count=_int(payload.get("failed_count")),
+        current_file_json=json.dumps(current_file, ensure_ascii=False) if current_file is not None else None,
+        raw_payload_json=raw_payload,
+        observed_at=datetime.now(UTC),
+    )
+    db.add(history)
+    db.flush()
+    files = payload.get("files")
+    if not isinstance(files, list):
+        return
+    for index, file_payload in enumerate(files):
+        if not isinstance(file_payload, dict):
+            continue
+        message_id = str(
+            file_payload.get("message_id")
+            or file_payload.get("id")
+            or file_payload.get("source_message_id")
+            or index
+        )
+        db.add(
+            DownloaderTaskFileHistory(
+                history_id=history.id,
+                message_id=message_id,
+                status=file_payload.get("status"),
+                filename=file_payload.get("filename") or file_payload.get("file_name"),
+                total_size=_int(file_payload.get("total_size")),
+                downloaded_size=_int(file_payload.get("downloaded_size")),
+                download_speed=_int(file_payload.get("download_speed")),
+                save_path=file_payload.get("save_path"),
+                error=file_payload.get("error"),
+                uploaded_size=_int(file_payload.get("uploaded_size")),
+                upload_speed=_int(file_payload.get("upload_speed")),
+                raw_payload_json=json.dumps(file_payload, ensure_ascii=False, sort_keys=True),
+            )
+        )
 
 
 class DownloaderSyncService:
@@ -132,7 +196,14 @@ class DownloaderSyncService:
                     normalized_title = normalize_keyword_text(package.title).casefold()
                     blocked = any(term in normalized_title for _, term in blacklist_terms)
                     matched_entries: list[tuple[KeywordEntry, str]] = []
-                    if package.boundary_status == "stable" and not package.has_successful_attempt and not blocked:
+                    package_revision = package.index_revision or 0
+                    completed_revision = package.completed_revision
+                    revision_needs_download = (
+                        not package.has_successful_attempt
+                        or completed_revision is None
+                        or package_revision > completed_revision
+                    )
+                    if package.boundary_status == "stable" and revision_needs_download and not blocked:
                         for entry, terms in whitelist_terms:
                             for display, term in terms:
                                 if term in normalized_title:
@@ -147,17 +218,30 @@ class DownloaderSyncService:
                     )
                     matched_ids = {entry.id for entry, _ in matched_entries}
                     for candidate in existing_candidates:
-                        if candidate.keyword_entry_id not in matched_ids and candidate.status in {"pending", "selected"}:
+                        if candidate.package_revision != package_revision and candidate.status in {"pending", "selected"}:
+                            candidate.status = "dismissed"
+                            candidate.dismissed_reason = "资源包新版本已生成候选"
+                            dismissed += 1
+                        elif candidate.package_revision == package_revision and candidate.keyword_entry_id not in matched_ids and candidate.status in {"pending", "selected"}:
                             candidate.status = "dismissed"
                             candidate.dismissed_reason = "资源包状态或黑名单规则已排除"
                             dismissed += 1
                     for entry, display in matched_entries:
-                        existing = next((item for item in existing_candidates if item.keyword_entry_id == entry.id), None)
+                        existing = next(
+                            (
+                                item
+                                for item in existing_candidates
+                                if item.keyword_entry_id == entry.id
+                                and item.package_revision == package_revision
+                            ),
+                            None,
+                        )
                         if existing is None:
                             db.add(
                                 DownloaderPackageCandidate(
                                     package_id=package.id,
                                     keyword_entry_id=entry.id,
+                                    package_revision=package_revision,
                                     matched_term=display,
                                     match_reason=f"标题命中白名单：{display}",
                                 )
@@ -226,6 +310,8 @@ class DownloaderSyncService:
                     "media_count": package.media_count,
                     "known_total_size": package.known_total_size,
                     "current_download_status": package.current_download_status,
+                    "completed_revision": package.completed_revision,
+                    "package_revision": candidate.package_revision,
                     "keyword_entry_id": keyword.id,
                     "keyword": keyword.canonical_name,
                     "matched_term": candidate.matched_term,
@@ -268,7 +354,10 @@ class DownloaderSyncService:
             if package is None or package.boundary_status != "stable":
                 raise ValueError(f"candidate {candidate_id} 对应资源包已不可下载")
             revision = package.index_revision or 0
-            key = f"18x:{node_key}:package:{package.remote_package_id}:r{revision}"
+            if candidate.package_revision != revision:
+                raise ValueError(f"candidate {candidate_id} 对应的资源包版本已更新，请重新同步")
+            mode = "incremental"
+            key = f"18x:{node_key}:package:{package.remote_package_id}:r{revision}:{mode}"
             existing = db.scalar(select(DownloaderSubmission).where(DownloaderSubmission.idempotency_key == key))
             if existing is not None and existing.status == "submitted":
                 candidate.status = "submitted"
@@ -276,12 +365,27 @@ class DownloaderSyncService:
                 items.append({"candidate_id": candidate.id, "submission_id": existing.id, "remote_task_id": existing.remote_task_id, "status": existing.status})
                 continue
             try:
-                payload = client.submit_package(package.remote_package_id, key)
+                payload = client.submit_package(package.remote_package_id, key, mode=mode)
                 batch = payload.get("batch") if isinstance(payload, dict) else {}
                 batch = batch if isinstance(batch, dict) else {}
                 if existing is None:
-                    existing = DownloaderSubmission(package_id=package.id, candidate_id=candidate.id, idempotency_key=key)
+                    existing = DownloaderSubmission(
+                        package_id=package.id,
+                        candidate_id=candidate.id,
+                        package_revision=revision,
+                        download_mode=mode,
+                        idempotency_key=key,
+                    )
                     db.add(existing)
+                if not batch:
+                    existing.status = "no_new_items"
+                    existing.remote_batch_id = None
+                    existing.remote_task_id = None
+                    existing.error_message = None
+                    candidate.status = "no_new_items"
+                    skipped += 1
+                    items.append({"candidate_id": candidate.id, "submission_id": existing.id, "status": existing.status})
+                    continue
                 existing.remote_batch_id = _int(batch.get("id"), 0) or None
                 existing.remote_task_id = str(batch.get("task_id")) if batch.get("task_id") else None
                 existing.status = "submitted"
@@ -291,7 +395,13 @@ class DownloaderSyncService:
                 items.append({"candidate_id": candidate.id, "submission_id": existing.id, "remote_task_id": existing.remote_task_id, "status": existing.status})
             except DownloaderRemoteError as exc:
                 if existing is None:
-                    existing = DownloaderSubmission(package_id=package.id, candidate_id=candidate.id, idempotency_key=key)
+                    existing = DownloaderSubmission(
+                        package_id=package.id,
+                        candidate_id=candidate.id,
+                        package_revision=revision,
+                        download_mode=mode,
+                        idempotency_key=key,
+                    )
                     db.add(existing)
                 existing.status = "failed"
                 existing.error_message = str(exc)
@@ -299,7 +409,13 @@ class DownloaderSyncService:
                 raise
             except Exception as exc:
                 if existing is None:
-                    existing = DownloaderSubmission(package_id=package.id, candidate_id=candidate.id, idempotency_key=key)
+                    existing = DownloaderSubmission(
+                        package_id=package.id,
+                        candidate_id=candidate.id,
+                        package_revision=revision,
+                        download_mode=mode,
+                        idempotency_key=key,
+                    )
                     db.add(existing)
                 existing.status = "failed"
                 existing.error_message = str(exc)
@@ -340,20 +456,57 @@ class DownloaderSyncService:
             snapshot.current_file_json = json.dumps(current_file, ensure_ascii=False) if current_file is not None else None
             snapshot.raw_payload_json = json.dumps(payload, ensure_ascii=False, sort_keys=True)
             snapshot.observed_at = datetime.now(UTC)
+            _record_task_history(db, payload, node_key=node_key, task_id=task_id)
             updated += 1
             submissions = list(db.scalars(select(DownloaderSubmission).where(DownloaderSubmission.remote_task_id == task_id)).all())
             for submission in submissions:
                 status = snapshot.status
                 if status in {"completed", "completed_with_errors"}:
-                    submission.status = "completed" if status == "completed" else "failed"
+                    submission.status = status
                 elif status in {"failed", "cancelled"}:
                     submission.status = status
                 candidate = db.get(DownloaderPackageCandidate, submission.candidate_id) if submission.candidate_id else None
-                if candidate is not None and candidate.status == "submitted" and submission.status in {"completed", "failed", "cancelled"}:
-                    candidate.status = "completed" if submission.status == "completed" else "failed"
+                if candidate is not None and candidate.status != "no_new_items" and submission.status in {"completed", "completed_with_errors", "failed", "cancelled"}:
+                    candidate.status = submission.status
         db.commit()
         return TaskSyncSummary(len(tasks), updated)
 
+    @staticmethod
+    def list_task_history(
+        db: Session,
+        task_id: str,
+        *,
+        node_key: str = "rn",
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        rows = list(
+            db.scalars(
+                select(DownloaderTaskHistory)
+                .where(
+                    DownloaderTaskHistory.node_key == node_key,
+                    DownloaderTaskHistory.remote_task_id == str(task_id),
+                )
+                .options(selectinload(DownloaderTaskHistory.files))
+                .order_by(DownloaderTaskHistory.observed_at.desc(), DownloaderTaskHistory.id.desc())
+                .limit(min(max(limit, 1), 500))
+            ).all()
+        )
+        result = []
+        for row in rows:
+            result.append(
+                {
+                    "id": row.id,
+                    "remote_task_id": row.remote_task_id,
+                    "status": row.status,
+                    "total_count": row.total_count,
+                    "success_count": row.success_count,
+                    "failed_count": row.failed_count,
+                    "current_file": json.loads(row.current_file_json) if row.current_file_json else None,
+                    "observed_at": row.observed_at.isoformat() if row.observed_at else None,
+                    "files": [json.loads(file.raw_payload_json) for file in row.files],
+                }
+            )
+        return result
     @staticmethod
     def list_tasks(db: Session, *, node_key: str = "rn", limit: int = 100) -> tuple[list[dict[str, Any]], int]:
         rows = list(

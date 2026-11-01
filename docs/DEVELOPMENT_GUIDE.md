@@ -25,6 +25,8 @@
   - 不再在启动时粗暴刷新 token，而是记录状态并按需处理。
 - RN 下载器集成：
   - 通过下载器 Web API 同步资源包和任务进度，不共享下载器 SQLite。
+  - 资源包按 `index_revision` 生成版本化候选；新版本提交使用 RN 的 `mode=incremental`，只下载此前完整成功版本中没有的媒体。
+  - 18x 的任务同步会追加任务和文件历史快照，可通过 `/api/downloader/tasks/{task_id}/history` 查询。
   - 白名单/别名只生成待确认候选，黑名单负责排除；人工确认后才创建精确下载批次。
   - `DOWNLOADER_ENABLED` 未开启或地址为空时，不启动同步 sweeper。
 
@@ -92,7 +94,7 @@ npm run dev
 
 RN 下载器相关配置只放在 `.env`：`DOWNLOADER_BASE_URL`、`DOWNLOADER_PASSWORD`、`DOWNLOADER_NODE_KEY`、`DOWNLOADER_TIMEOUT_SECONDS`、`DOWNLOADER_SYNC_INTERVAL_SECONDS`。密码不写入数据库、日志或前端响应。
 
-页面入口为 `/downloader`，后端控制面为 `/downloader/*`。现场验收时先用“同步资源包”检查连接，再人工选择一条候选提交；测试环境只使用 mock HTTP 客户端。
+页面入口为 `/downloader`，后端控制面为 `/downloader/*`。候选携带资源包版本号；确认新版本后由 RN 增量批次跳过旧版本完整成功的消息。任务表展开行可查看历史快照。现场验收时先用“同步资源包”检查连接，再人工选择一条候选提交；测试环境只使用 mock HTTP 客户端。
 
 ---
 

@@ -21,6 +21,8 @@ export interface DownloaderCandidate {
   media_count: number
   known_total_size: number
   current_download_status: string
+  package_revision: number
+  completed_revision: number | null
   keyword_entry_id: number
   keyword: string
   matched_term: string
@@ -50,6 +52,18 @@ export interface DownloaderTask {
   observed_at: string | null
 }
 
+export interface DownloaderTaskHistory {
+  id: number
+  remote_task_id: string
+  status: string
+  total_count: number
+  success_count: number
+  failed_count: number
+  current_file: Record<string, unknown> | null
+  observed_at: string | null
+  files: Array<Record<string, unknown>>
+}
+
 export function getDownloaderStatus() {
   return api.get<DownloaderStatus>('/downloader/status')
 }
@@ -77,6 +91,12 @@ export function submitDownloaderBatches(candidateIds: number[]) {
 
 export function listDownloaderTasks() {
   return api.get<{ items: DownloaderTask[]; total: number }>('/downloader/tasks?limit=100')
+}
+
+export function listDownloaderTaskHistory(taskId: string) {
+  return api.get<{ task_id: string; items: DownloaderTaskHistory[] }>(
+    `/downloader/tasks/${encodeURIComponent(taskId)}/history?limit=100`,
+  )
 }
 
 export function syncDownloaderTasks() {

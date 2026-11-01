@@ -11,20 +11,20 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.alter_column(
-        "downloader_packages",
-        "source_chat_id",
-        existing_type=sa.Integer(),
-        type_=sa.BigInteger(),
-        existing_nullable=True,
-    )
+    with op.batch_alter_table("downloader_packages") as batch:
+        batch.alter_column(
+            "source_chat_id",
+            existing_type=sa.Integer(),
+            type_=sa.BigInteger(),
+            existing_nullable=True,
+        )
 
 
 def downgrade() -> None:
-    op.alter_column(
-        "downloader_packages",
-        "source_chat_id",
-        existing_type=sa.BigInteger(),
-        type_=sa.Integer(),
-        existing_nullable=True,
-    )
+    with op.batch_alter_table("downloader_packages") as batch:
+        batch.alter_column(
+            "source_chat_id",
+            existing_type=sa.BigInteger(),
+            type_=sa.Integer(),
+            existing_nullable=True,
+        )

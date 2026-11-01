@@ -179,3 +179,30 @@ Production commits: `b25415a4`, `599b8fb6`, `0bea3084`。
 Backups: `backups/downloader-config-20261031-222208`、`backups/downloader-bigint-20261031-222711-b25415a4`、`backups/downloader-size-20261031-223336-599b8fb6`、`backups/downloader-task-json-20261031-225130-0bea3084`。
 
 Rollback: 将 `DOWNLOADER_ENABLED` 设为 `false` 并重建 app；代码回退到 `110d5504`，数据库按对应备份恢复前先停止 app 并保留当前现场。
+
+## Incremental revisions and download history — 2026-10-31
+
+### What was done
+
+- 18x 候选改为按 RN `index_revision` 保存；资源包新版本会生成新的白名单候选，旧版本候选和提交记录保留。
+- 18x 提交使用带资源包版本的增量幂等键，并向 RN 发送 `mode=incremental`。
+- RN 增加增量批次模式：排除同一资源包历史完整成功批次中的消息，只提交新媒体；没有新增媒体时不创建空批次并返回 `no_new_items`。
+- 18x 增加任务变化历史和文件级历史查询，重复的任务详情不会产生重复历史行；下载器页面可展开任务查看历史快照。
+- 为 18x 增加 `20261031_0014` 迁移；为 RN channel-library SQLite schema 增加 `download_mode`（schema version 9）。
+
+### Testing
+
+- 18x：`.venv/bin/pytest tests -q` — 359 passed。
+- 18x 下载器定向：`.venv/bin/pytest tests/downloader tests/api/test_downloader_routes.py -q` — 17 passed（含版本候选、任务历史和 no-new-items）。
+- 18x 前端：`npm test -- --run` — 8 files / 21 tests passed；`npm run build` — passed；新下载器文件 ESLint — 0 errors。
+- 18x 迁移：SQLite `alembic upgrade head` 通过至 `20261031_0014`；`alembic downgrade 20261031_0013` 通过。
+- RN：`.venv/bin/pytest -q` — 848 passed, 1 skipped；资源包/Web 定向 — 176 passed；Python compileall — passed。
+- 两个项目 `git diff --check` — passed；未连接生产服务。
+
+### Notes
+
+Changed files:
+- 18x: `app/models/downloader.py`, `app/services/downloader/client.py`, `app/services/downloader/sync_service.py`, `app/api/routes/downloader.py`, `frontend/src/api/downloader.ts`, `frontend/src/pages/DownloaderPage.tsx`, `alembic/versions/20261031_0014_downloader_incremental_history.py`, related tests/docs.
+- RN: `module/channel_library_store.py`, `module/channel_library_service.py`, `module/web.py`, related tests.
+
+Rollback: 18x 可执行 Alembic downgrade 到 `20261031_0013`；RN 的 `download_mode` 是追加列，回退代码后旧调用继续按 `full` 模式运行。生产环境尚未执行迁移或部署。

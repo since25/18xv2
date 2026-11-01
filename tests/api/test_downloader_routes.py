@@ -8,6 +8,7 @@ from app.api.deps import get_db
 from app.core.config import get_settings
 from app.main import app
 from app.models.keywords import KeywordEntry
+from app.models.downloader import DownloaderTaskHistory
 from app.services.downloader import sync_service
 
 
@@ -18,7 +19,7 @@ class FakeClient:
             "next_cursor": None,
         }
 
-    def submit_package(self, package_id, idempotency_key):
+    def submit_package(self, package_id, idempotency_key, *, mode="incremental"):
         return {"batch": {"id": 3, "task_id": "task-3"}, "created": True}
 
     def health(self):
@@ -79,3 +80,24 @@ def test_status_reports_disabled_without_remote_call(db_session, monkeypatch):
     finally:
         app.dependency_overrides.clear()
         get_settings.cache_clear()
+
+
+def test_task_history_route_reads_persisted_snapshots(client, db_session):
+    db_session.add(
+        DownloaderTaskHistory(
+            node_key="rn",
+            remote_task_id="task-history",
+            payload_hash="hash-route",
+            status="completed_with_errors",
+            total_count=20,
+            success_count=18,
+            failed_count=2,
+            raw_payload_json="{}",
+        )
+    )
+    db_session.commit()
+
+    response = client.get("/downloader/tasks/task-history/history")
+
+    assert response.status_code == 200
+    assert response.json()["items"][0]["status"] == "completed_with_errors"

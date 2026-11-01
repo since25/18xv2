@@ -8,6 +8,7 @@ import {
   controlDownloader,
   getDownloaderStatus,
   listDownloaderCandidates,
+  listDownloaderTaskHistory,
   listDownloaderTasks,
   retryDownloaderTask,
   selectDownloaderCandidate,
@@ -17,6 +18,7 @@ import {
   type DownloaderCandidate,
   type DownloaderStatus,
   type DownloaderTask,
+  type DownloaderTaskHistory,
 } from '@/api/downloader'
 
 function errorText(error: unknown) {
@@ -27,6 +29,7 @@ export default function DownloaderPage() {
   const [status, setStatus] = useState<DownloaderStatus | null>(null)
   const [candidates, setCandidates] = useState<DownloaderCandidate[]>([])
   const [tasks, setTasks] = useState<DownloaderTask[]>([])
+  const [taskHistory, setTaskHistory] = useState<Record<string, DownloaderTaskHistory[]>>({})
   const [selected, setSelected] = useState<number[]>([])
   const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(false)
@@ -103,6 +106,7 @@ export default function DownloaderPage() {
     { title: '资源包', dataIndex: 'title', key: 'title', render: (value, row) => <Space direction="vertical" size={0}><Typography.Text strong>{value}</Typography.Text><Typography.Text type="secondary">{row.channel_title || '未标注频道'} · #{row.remote_package_id}</Typography.Text></Space> },
     { title: '白名单命中', dataIndex: 'keyword', key: 'keyword', render: (value, row) => <Space><Tag color="blue">{value}</Tag><Typography.Text type="secondary">{row.matched_term}</Typography.Text></Space> },
     { title: '资源包状态', key: 'package', render: (_, row) => <Space><Tag color={row.boundary_status === 'stable' ? 'green' : 'orange'}>{row.boundary_status}</Tag><Tag>{row.current_download_status}</Tag></Space> },
+    { title: '版本', key: 'revision', render: (_, row) => <Tag color={row.package_revision > (row.completed_revision ?? 0) ? 'gold' : undefined}>r{row.package_revision}</Tag> },
     { title: '媒体', key: 'media', render: (_, row) => `${row.media_count} 个 / ${row.known_total_size || 0} bytes` },
   ], [])
 
@@ -112,6 +116,22 @@ export default function DownloaderPage() {
     { title: '进度', key: 'progress', render: (_, row) => <Space direction="vertical" size={0} style={{ minWidth: 180 }}><Progress percent={row.total_count ? Math.round((row.success_count / row.total_count) * 100) : 0} size="small" /><Typography.Text type="secondary">{row.success_count}/{row.total_count} 成功，失败 {row.failed_count}</Typography.Text></Space> },
     { title: '操作', key: 'actions', render: (_, row) => <Space><Button size="small" onClick={() => void cancelDownloaderTask(row.remote_task_id).then(load).catch((error) => message.error(errorText(error)))}>取消</Button><Button size="small" onClick={() => void retryDownloaderTask(row.remote_task_id).then(load).catch((error) => message.error(errorText(error)))}>重试</Button></Space> },
   // eslint-disable-next-line react-hooks/exhaustive-deps
+  ], [])
+
+  const loadTaskHistory = async (taskId: string) => {
+    try {
+      const result = await listDownloaderTaskHistory(taskId)
+      setTaskHistory((current) => ({ ...current, [taskId]: result.items ?? [] }))
+    } catch (error) {
+      message.error(errorText(error))
+    }
+  }
+
+  const historyColumns: ColumnsType<DownloaderTaskHistory> = useMemo(() => [
+    { title: '观察时间', dataIndex: 'observed_at', key: 'observed_at' },
+    { title: '状态', dataIndex: 'status', key: 'status', render: (value) => <Tag>{value}</Tag> },
+    { title: '进度', key: 'progress', render: (_, row) => `${row.success_count}/${row.total_count} 成功，失败 ${row.failed_count}` },
+    { title: '文件快照', key: 'files', render: (_, row) => `${row.files.length} 个文件` },
   ], [])
 
   return (
@@ -127,7 +147,30 @@ export default function DownloaderPage() {
         <Table rowKey="candidate_id" loading={loading} columns={candidateColumns} dataSource={candidates} rowSelection={{ selectedRowKeys: selected, onChange: (keys) => void handleSelectionChange(keys.filter((key): key is string | number => typeof key === 'string' || typeof key === 'number')) }} pagination={false} locale={{ emptyText: '暂无待确认候选；请先同步资源包' }} />
       </Card>
       <Card title="下载任务进度" style={{ marginTop: 16 }} extra={<Button icon={<ReloadOutlined />} onClick={() => void load()}>刷新任务</Button>}>
-        <Table rowKey="remote_task_id" loading={loading} columns={taskColumns} dataSource={tasks} pagination={{ pageSize: 10 }} locale={{ emptyText: '暂无已同步的下载任务' }} />
+        <Table
+          rowKey="remote_task_id"
+          loading={loading}
+          columns={taskColumns}
+          dataSource={tasks}
+          pagination={{ pageSize: 10 }}
+          expandable={{
+            onExpand: (expanded, row) => {
+              if (expanded && !taskHistory[row.remote_task_id]) void loadTaskHistory(row.remote_task_id)
+            },
+            expandedRowRender: (row) => (
+              <Table
+                rowKey="id"
+                size="small"
+                pagination={false}
+                loading={!taskHistory[row.remote_task_id]}
+                columns={historyColumns}
+                dataSource={taskHistory[row.remote_task_id] ?? []}
+                locale={{ emptyText: '暂无状态变化历史' }}
+              />
+            ),
+          }}
+          locale={{ emptyText: '暂无已同步的下载任务' }}
+        />
       </Card>
     </PageScaffold>
   )

@@ -104,13 +104,20 @@ class DownloaderClient:
         *,
         params: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
+        json_body: dict[str, Any] | None = None,
         allow_list: bool = False,
     ) -> JsonPayload:
         client, csrf = self._authenticated()
         try:
             request_headers = {"X-CSRF-Token": csrf, **(headers or {})}
             try:
-                response = client.request(method, path, params=params, headers=request_headers)
+                response = client.request(
+                    method,
+                    path,
+                    params=params,
+                    headers=request_headers,
+                    json=json_body,
+                )
             except httpx.HTTPError as exc:
                 raise DownloaderRemoteError("unreachable", "下载器无法连接") from exc
             payload = self._json(response)
@@ -146,13 +153,22 @@ class DownloaderClient:
     def get_dashboard(self) -> dict[str, Any]:
         return self._authenticated_request("GET", "/api/task-dashboard")
 
-    def submit_package(self, package_id: int, idempotency_key: str) -> dict[str, Any]:
+    def submit_package(
+        self,
+        package_id: int,
+        idempotency_key: str,
+        *,
+        mode: Literal["full", "incremental"] = "incremental",
+    ) -> dict[str, Any]:
         if not idempotency_key:
             raise ValueError("idempotency_key is required")
+        if mode not in {"full", "incremental"}:
+            raise ValueError("mode must be full or incremental")
         return self._authenticated_request(
             "POST",
             f"/api/packages/{int(package_id)}/download-batch",
             headers={"Idempotency-Key": idempotency_key},
+            json_body={"mode": mode},
         )
 
     def set_download_state(self, state: Literal["pause", "resume"]) -> dict[str, Any]:

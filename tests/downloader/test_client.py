@@ -37,7 +37,7 @@ def test_client_logs_in_gets_csrf_and_reads_packages_with_cursor():
     assert [path for _, path, _ in calls] == ["/login", "/api/csrf-token", "/api/packages"]
 
 
-def test_client_submits_exact_package_with_idempotency_and_csrf():
+def test_client_submits_incremental_package_with_idempotency_and_csrf():
     def handler(request: httpx.Request) -> httpx.Response:
         if request.method == "POST" and request.url.path == "/login":
             return httpx.Response(200, json={"code": "1"})
@@ -45,13 +45,13 @@ def test_client_submits_exact_package_with_idempotency_and_csrf():
             return httpx.Response(200, json={"csrf_token": "csrf-2"})
         if request.method == "POST" and request.url.path == "/api/packages/123/download-batch":
             assert request.headers["X-CSRF-Token"] == "csrf-2"
-            assert request.headers["Idempotency-Key"] == "18x:123"
-            assert request.content == b""
+            assert request.headers["Idempotency-Key"] == "18x:123:r4:incremental"
+            assert json.loads(request.content) == {"mode": "incremental"}
             return httpx.Response(202, json={"batch": {"id": 5, "task_id": "task-5"}, "created": True})
         raise AssertionError(f"unexpected {request.method} {request.url}")
 
     client = DownloaderClient(Settings(), transport=httpx.MockTransport(handler))
-    assert client.submit_package(123, "18x:123")["batch"]["task_id"] == "task-5"
+    assert client.submit_package(123, "18x:123:r4:incremental", mode="incremental")["batch"]["task_id"] == "task-5"
 
 
 def test_client_maps_login_failure_without_exposing_password():

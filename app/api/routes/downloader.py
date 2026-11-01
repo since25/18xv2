@@ -142,6 +142,23 @@ def list_downloader_tasks(
     return DownloaderTaskListResponse(items=items, total=total)
 
 
+@router.get("/tasks/{task_id}/history")
+def list_downloader_task_history(
+    task_id: str,
+    limit: int = Query(default=100, ge=1, le=500),
+    db: Session = Depends(get_db),
+) -> dict:
+    return {
+        "task_id": task_id,
+        "items": DownloaderSyncService.list_task_history(
+            db,
+            task_id,
+            node_key=get_settings().downloader_node_key,
+            limit=limit,
+        ),
+    }
+
+
 @router.post("/tasks/sync")
 def sync_downloader_tasks(db: Session = Depends(get_db)) -> dict:
     try:

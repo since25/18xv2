@@ -11,22 +11,22 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.alter_column(
-        "downloader_packages",
-        "known_total_size",
-        existing_type=sa.Integer(),
-        type_=sa.BigInteger(),
-        existing_nullable=False,
-        existing_server_default=sa.text("0"),
-    )
+    with op.batch_alter_table("downloader_packages") as batch:
+        batch.alter_column(
+            "known_total_size",
+            existing_type=sa.Integer(),
+            type_=sa.BigInteger(),
+            existing_nullable=False,
+            existing_server_default=sa.text("0"),
+        )
 
 
 def downgrade() -> None:
-    op.alter_column(
-        "downloader_packages",
-        "known_total_size",
-        existing_type=sa.BigInteger(),
-        type_=sa.Integer(),
-        existing_nullable=False,
-        existing_server_default=sa.text("0"),
-    )
+    with op.batch_alter_table("downloader_packages") as batch:
+        batch.alter_column(
+            "known_total_size",
+            existing_type=sa.BigInteger(),
+            type_=sa.Integer(),
+            existing_nullable=False,
+            existing_server_default=sa.text("0"),
+        )
