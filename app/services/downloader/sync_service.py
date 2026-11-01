@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 import hashlib
 import json
+import math
 from typing import Any
 
 from sqlalchemy import func, select
@@ -45,11 +46,60 @@ class TaskSyncSummary:
     tasks_updated: int
 
 
+_TERMINAL_STATUSES = {"completed", "completed_with_errors", "failed", "cancelled"}
+
+
 def _int(value: Any, default: int = 0) -> int:
     try:
         return int(value or default)
     except (TypeError, ValueError):
         return default
+
+
+def _bytes(value: Any, default: int = 0) -> int:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return default
+    try:
+        return max(int(value), 0)
+    except (TypeError, ValueError, OverflowError):
+        return default
+
+
+def _timestamp(value: Any) -> datetime | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number):
+        return None
+    try:
+        return datetime.fromtimestamp(number, tz=UTC)
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def _task_structured_fields(payload: dict[str, Any]) -> dict[str, Any]:
+    """把 RN 任务载荷的时间和字节字段转换为可查询的结构化值。"""
+    files = payload.get("files")
+    total_bytes = downloaded_bytes = 0
+    if isinstance(files, list):
+        for file_payload in files:
+            if not isinstance(file_payload, dict):
+                continue
+            total_bytes += _bytes(file_payload.get("total_size_bytes"))
+            downloaded_bytes += _bytes(file_payload.get("downloaded_size_bytes"))
+    return {
+        "remote_created_at": _timestamp(payload.get("created_at")),
+        "remote_updated_at": _timestamp(payload.get("updated_at")),
+        "finished_at": _timestamp(payload.get("updated_at"))
+        if str(payload.get("status") or "") in _TERMINAL_STATUSES
+        else None,
+        "total_bytes": total_bytes,
+        "downloaded_bytes": downloaded_bytes,
+        "channel_title": payload.get("chat_title") or None,
+    }
 
 
 def _terms(entry: KeywordEntry) -> list[tuple[str, str]]:
@@ -79,6 +129,99 @@ def _package_values(payload: dict[str, Any], *, node_key: str, now: datetime) ->
         "last_seen_at": now,
         "updated_at": now,
     }
+
+
+def _load_terms(db: Session) -> tuple[list[tuple[KeywordEntry, list[tuple[str, str]]]], list[tuple[str, str]]]:
+    """加载当前有效的白名单和黑名单词。"""
+    entries = list(
+        db.scalars(
+            select(KeywordEntry)
+            .where(KeywordEntry.status == "active", KeywordEntry.keyword_type.in_(["whitelist", "blacklist"]))
+            .options(selectinload(KeywordEntry.aliases))
+        ).all()
+    )
+    whitelist = [(entry, _terms(entry)) for entry in entries if entry.keyword_type == "whitelist"]
+    blacklist = [term for entry in entries if entry.keyword_type == "blacklist" for term in _terms(entry)]
+    return whitelist, blacklist
+
+
+def _match_package(
+    db: Session,
+    package: DownloaderPackage,
+    whitelist_terms: list[tuple[KeywordEntry, list[tuple[str, str]]]],
+    blacklist_terms: list[tuple[str, str]],
+) -> tuple[int, int]:
+    """按当前规则匹配一个资源包，返回新建和作废候选数。"""
+    normalized_title = normalize_keyword_text(package.title).casefold()
+    package_revision = package.index_revision or 0
+    matched_entries: list[tuple[KeywordEntry, str]] = []
+    blocked = any(term in normalized_title for _, term in blacklist_terms)
+    revision_needs_download = (
+        not package.has_successful_attempt
+        or package.completed_revision is None
+        or package_revision > package.completed_revision
+    )
+    if package.ignored_at is None and package.boundary_status == "stable" and revision_needs_download and not blocked:
+        for entry, terms in whitelist_terms:
+            for display, term in terms:
+                if term in normalized_title:
+                    matched_entries.append((entry, display))
+                    break
+
+    existing_candidates = list(
+        db.scalars(
+            select(DownloaderPackageCandidate).where(DownloaderPackageCandidate.package_id == package.id)
+        ).all()
+    )
+    matched_ids = {entry.id for entry, _ in matched_entries}
+    created = dismissed = 0
+    for candidate in existing_candidates:
+        if package.ignored_at is not None:
+            if candidate.status in {"pending", "selected"}:
+                candidate.status = "dismissed"
+                candidate.dismissed_reason = "ignored"
+                dismissed += 1
+            continue
+        if candidate.package_revision != package_revision and candidate.status in {"pending", "selected"}:
+            candidate.status = "dismissed"
+            candidate.dismissed_reason = "资源包新版本已生成候选"
+            dismissed += 1
+        elif (
+            candidate.package_revision == package_revision
+            and candidate.keyword_entry_id not in matched_ids
+            and candidate.status in {"pending", "selected"}
+        ):
+            candidate.status = "dismissed"
+            candidate.dismissed_reason = "资源包状态或黑名单规则已排除"
+            dismissed += 1
+    for entry, display in matched_entries:
+        existing = next(
+            (
+                item
+                for item in existing_candidates
+                if item.keyword_entry_id == entry.id and item.package_revision == package_revision
+            ),
+            None,
+        )
+        if existing is None:
+            db.add(
+                DownloaderPackageCandidate(
+                    package_id=package.id,
+                    keyword_entry_id=entry.id,
+                    package_revision=package_revision,
+                    matched_term=display,
+                    match_reason=f"标题命中白名单：{display}",
+                )
+            )
+            created += 1
+        elif existing.status == "dismissed" and existing.dismissed_reason in {
+            "资源包状态或黑名单规则已排除",
+            "ignored",
+        }:
+            existing.status = "pending"
+            existing.dismissed_reason = None
+            existing.matched_term = display
+    return created, dismissed
 
 
 def _record_task_history(db: Session, payload: dict[str, Any], *, node_key: str, task_id: str) -> None:
@@ -129,9 +272,13 @@ def _record_task_history(db: Session, payload: dict[str, Any], *, node_key: str,
                 message_id=message_id,
                 status=file_payload.get("status"),
                 filename=file_payload.get("filename") or file_payload.get("file_name"),
-                total_size=_int(file_payload.get("total_size")),
-                downloaded_size=_int(file_payload.get("downloaded_size")),
-                download_speed=_int(file_payload.get("download_speed")),
+                total_size=_bytes(file_payload.get("total_size_bytes"), _int(file_payload.get("total_size"))),
+                downloaded_size=_bytes(
+                    file_payload.get("downloaded_size_bytes"), _int(file_payload.get("downloaded_size"))
+                ),
+                download_speed=_bytes(
+                    file_payload.get("download_speed_bytes"), _int(file_payload.get("download_speed"))
+                ),
                 save_path=file_payload.get("save_path"),
                 error=file_payload.get("error"),
                 uploaded_size=_int(file_payload.get("uploaded_size")),
@@ -150,22 +297,7 @@ class DownloaderSyncService:
         db.add(run)
         db.flush()
         now = datetime.now(UTC)
-        whitelist = list(
-            db.scalars(
-                select(KeywordEntry)
-                .where(KeywordEntry.keyword_type == "whitelist", KeywordEntry.status == "active")
-                .options(selectinload(KeywordEntry.aliases))
-            ).all()
-        )
-        blacklist = list(
-            db.scalars(
-                select(KeywordEntry)
-                .where(KeywordEntry.keyword_type == "blacklist", KeywordEntry.status == "active")
-                .options(selectinload(KeywordEntry.aliases))
-            ).all()
-        )
-        whitelist_terms = [(entry, _terms(entry)) for entry in whitelist]
-        blacklist_terms = [term for entry in blacklist for term in _terms(entry)]
+        whitelist_terms, blacklist_terms = _load_terms(db)
         cursor: str | None = None
         seen = updated = created = dismissed = 0
         try:
@@ -193,64 +325,13 @@ class DownloaderSyncService:
                         for key, value in values.items():
                             setattr(package, key, value)
                     updated += 1
-                    normalized_title = normalize_keyword_text(package.title).casefold()
-                    blocked = any(term in normalized_title for _, term in blacklist_terms)
-                    matched_entries: list[tuple[KeywordEntry, str]] = []
-                    package_revision = package.index_revision or 0
-                    completed_revision = package.completed_revision
-                    revision_needs_download = (
-                        not package.has_successful_attempt
-                        or completed_revision is None
-                        or package_revision > completed_revision
+                    if str(payload.get("current_download_status") or payload.get("download_status") or "") == "completed":
+                        package.completed_media_count = package.media_count
+                    created_now, dismissed_now = _match_package(
+                        db, package, whitelist_terms, blacklist_terms
                     )
-                    if package.boundary_status == "stable" and revision_needs_download and not blocked:
-                        for entry, terms in whitelist_terms:
-                            for display, term in terms:
-                                if term in normalized_title:
-                                    matched_entries.append((entry, display))
-                                    break
-                    existing_candidates = list(
-                        db.scalars(
-                            select(DownloaderPackageCandidate).where(
-                                DownloaderPackageCandidate.package_id == package.id
-                            )
-                        ).all()
-                    )
-                    matched_ids = {entry.id for entry, _ in matched_entries}
-                    for candidate in existing_candidates:
-                        if candidate.package_revision != package_revision and candidate.status in {"pending", "selected"}:
-                            candidate.status = "dismissed"
-                            candidate.dismissed_reason = "资源包新版本已生成候选"
-                            dismissed += 1
-                        elif candidate.package_revision == package_revision and candidate.keyword_entry_id not in matched_ids and candidate.status in {"pending", "selected"}:
-                            candidate.status = "dismissed"
-                            candidate.dismissed_reason = "资源包状态或黑名单规则已排除"
-                            dismissed += 1
-                    for entry, display in matched_entries:
-                        existing = next(
-                            (
-                                item
-                                for item in existing_candidates
-                                if item.keyword_entry_id == entry.id
-                                and item.package_revision == package_revision
-                            ),
-                            None,
-                        )
-                        if existing is None:
-                            db.add(
-                                DownloaderPackageCandidate(
-                                    package_id=package.id,
-                                    keyword_entry_id=entry.id,
-                                    package_revision=package_revision,
-                                    matched_term=display,
-                                    match_reason=f"标题命中白名单：{display}",
-                                )
-                            )
-                            created += 1
-                        elif existing.status == "dismissed" and existing.dismissed_reason == "资源包状态或黑名单规则已排除":
-                            existing.status = "pending"
-                            existing.dismissed_reason = None
-                            existing.matched_term = display
+                    created += created_now
+                    dismissed += dismissed_now
                 cursor = page.get("next_cursor")
                 if not cursor:
                     break
@@ -348,8 +429,8 @@ class DownloaderSyncService:
             )
             if candidate is None:
                 raise LookupError(f"candidate {candidate_id} not found")
-            if candidate.status not in {"selected", "submitted"}:
-                raise ValueError(f"candidate {candidate_id} 不是已选择状态")
+            if candidate.status not in {"pending", "selected", "submitted"}:
+                raise ValueError(f"candidate {candidate_id} 不是待确认或已选择状态")
             package = db.get(DownloaderPackage, candidate.package_id)
             if package is None or package.boundary_status != "stable":
                 raise ValueError(f"candidate {candidate_id} 对应资源包已不可下载")
@@ -446,6 +527,8 @@ class DownloaderSyncService:
             if snapshot is None:
                 snapshot = DownloaderTaskSnapshot(node_key=node_key, remote_task_id=task_id)
                 db.add(snapshot)
+            previous_status = snapshot.status
+            structured = _task_structured_fields(payload)
             snapshot.source = payload.get("source")
             snapshot.task_type = payload.get("task_type")
             snapshot.title = payload.get("title")
@@ -453,12 +536,30 @@ class DownloaderSyncService:
             snapshot.total_count = _int(payload.get("total_count"))
             snapshot.success_count = _int(payload.get("success_count"))
             snapshot.failed_count = _int(payload.get("failed_count"))
+            snapshot.remote_created_at = structured["remote_created_at"]
+            snapshot.remote_updated_at = structured["remote_updated_at"]
+            snapshot.total_bytes = structured["total_bytes"]
+            snapshot.downloaded_bytes = structured["downloaded_bytes"]
             snapshot.current_file_json = json.dumps(current_file, ensure_ascii=False) if current_file is not None else None
             snapshot.raw_payload_json = json.dumps(payload, ensure_ascii=False, sort_keys=True)
             snapshot.observed_at = datetime.now(UTC)
+            if snapshot.status in _TERMINAL_STATUSES:
+                if previous_status not in _TERMINAL_STATUSES:
+                    snapshot.finished_at = structured["finished_at"]
+            else:
+                snapshot.finished_at = None
             _record_task_history(db, payload, node_key=node_key, task_id=task_id)
             updated += 1
             submissions = list(db.scalars(select(DownloaderSubmission).where(DownloaderSubmission.remote_task_id == task_id)).all())
+            package_channel = next(
+                (
+                    submission.package.channel_title
+                    for submission in submissions
+                    if submission.package is not None and submission.package.channel_title
+                ),
+                None,
+            )
+            snapshot.channel_title = package_channel or structured["channel_title"]
             for submission in submissions:
                 status = snapshot.status
                 if status in {"completed", "completed_with_errors"}:

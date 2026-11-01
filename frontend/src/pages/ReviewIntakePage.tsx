@@ -28,6 +28,8 @@ import {
 
 import DataToolbar from '@/layout/DataToolbar'
 import PageScaffold from '@/layout/PageScaffold'
+import StatusTag from '@/components/StatusTag'
+import { statusMeta } from '@/utils/statusText'
 import {
   batchApproveReviewIntakeItems,
   batchDeleteReviewIntakeItems,
@@ -57,14 +59,6 @@ const STATUS_OPTIONS: Array<{ label: string; value: ReviewStatus | '' }> = [
   { label: '已忽略', value: 'dismissed' },
   { label: '全部', value: '' },
 ]
-
-const MATCH_COLORS: Record<string, string> = {
-  new: 'blue',
-  similar: 'gold',
-  existing: 'green',
-  conflict: 'red',
-  ignored: 'default',
-}
 
 // 面板顶部的颜色图例，省得记
 const MATCH_LEGEND: Array<{ status: string; label: string }> = [
@@ -520,11 +514,12 @@ export default function ReviewIntakePage() {
 
         const renderTag = (candidate: ReviewKeywordCandidate, index: number) => {
           const canIgnore = IGNORABLE_STATUSES.includes(candidate.match_status)
+          const meta = statusMeta('keyword', candidate.match_status)
           return (
-            <Tag
+            <span
               key={`${candidate.keyword}-${candidate.match_status}-${index}`}
-              className="review-candidate-tag review-candidate-tag--pickable"
-              color={MATCH_COLORS[candidate.match_status] ?? 'default'}
+              className={`status-tag status-tag--${meta.tone} review-candidate-tag review-candidate-tag--pickable`}
+              title={meta.label}
               onClick={(event) => pickCandidate(item.id, candidate.keyword, event.shiftKey)}
             >
               <span className="review-candidate-text">{candidate.keyword}</span>
@@ -543,7 +538,7 @@ export default function ReviewIntakePage() {
                   </span>
                 </Popconfirm>
               ) : null}
-            </Tag>
+            </span>
           )
         }
 
@@ -594,9 +589,7 @@ export default function ReviewIntakePage() {
       dataIndex: 'status',
       width: 90,
       render: (value: ReviewStatus) => {
-        const color = value === 'pending' ? 'blue' : value === 'approved' ? 'green' : 'default'
-        const label = value === 'pending' ? '待审' : value === 'approved' ? '已批准' : '已忽略'
-        return <Tag color={color}>{label}</Tag>
+        return <StatusTag domain="review" value={value} />
       },
     },
     {
@@ -764,7 +757,7 @@ export default function ReviewIntakePage() {
         <Card className="soft-card review-intake-card">
           <div className="review-legend">
             {MATCH_LEGEND.map((entry) => (
-              <Tag key={entry.status} color={MATCH_COLORS[entry.status]}>{entry.label}</Tag>
+              <StatusTag key={entry.status} domain="keyword" value={entry.status} />
             ))}
           </div>
           <Tabs

@@ -7,14 +7,18 @@ export type ThemePalette = {
   brand: string
   bgLayout: string
   bgContainer: string
-  bgElevated: string
+  surfaceElevated: string
   bgMuted: string
   border: string
+  borderStrong: string
   text: string
   textSecondary: string
-  sidebarBg: string
-  sidebarText: string
-  sidebarMuted: string
-  headerBg: string
+  brandSubtle: string
+  success: string
+  successBg: string
+  warning: string
+  warningBg: string
+  danger: string
+  dangerBg: string
   focus: string
 }

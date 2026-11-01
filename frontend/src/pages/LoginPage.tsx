@@ -1,5 +1,6 @@
 import { Alert, Button, Card, Form, Input, Typography } from 'antd'
 import { LockOutlined, UserOutlined } from '@ant-design/icons'
+import PageScaffold from '@/layout/PageScaffold'
 
 type LoginPageProps = {
   defaultUsername: string
@@ -10,9 +11,10 @@ type LoginPageProps = {
 
 export default function LoginPage({ defaultUsername, loading, error, onSubmit }: LoginPageProps) {
   return (
-    <div className="login-shell">
+    <PageScaffold title="登录" description="登录后进入 18x 整理台。">
+      <div className="login-shell">
       <div className="login-hero">
-        <Typography.Text className="login-eyebrow">18x Organizer</Typography.Text>
+        <Typography.Text type="secondary">18x 整理台</Typography.Text>
         <Typography.Title level={1} className="login-title">
           域名访问先登录，再进入管理台
         </Typography.Title>
@@ -46,6 +48,7 @@ export default function LoginPage({ defaultUsername, loading, error, onSubmit }:
           </Button>
         </Form>
       </Card>
-    </div>
+      </div>
+    </PageScaffold>
   )
 }

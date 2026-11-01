@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import {
   Button, Card, Empty, Input, Pagination, Popconfirm, Progress,
-  Select, Space, Statistic, Table, Tag, Typography, message,
+  Select, Space, Statistic, Table, Typography, message,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import {
@@ -13,13 +13,15 @@ import type {
   ImportListResponse, KeywordEntry, KeywordEntryListResponse,
 } from '../api/types'
 import DataToolbar from '@/layout/DataToolbar'
+import PageScaffold from '@/layout/PageScaffold'
+import StatusTag from '@/components/StatusTag'
 import {
   bulkDismissCandidates, dismissCandidate, getActiveJobs, listCandidates, restoreCandidate,
   startScanJob, startSubmitJob, subscribeJobProgress,
   type JobFrame, type WhitelistCandidate,
 } from '../api/whitelistBatch'
 
-const { Title, Text } = Typography
+const { Text } = Typography
 
 const LIFECYCLE_OPTIONS = [
   { label: '全部 lifecycle', value: '' },
@@ -243,16 +245,13 @@ export default function WhitelistBatchPage() {
     {
       title: 'duplicate', dataIndex: 'duplicate_status', width: 130,
       render: (s: string, row) => {
-        const color = s === 'clear' ? 'green' : s === 'duplicate_found' ? 'orange' : 'red'
-        return <Tag color={color} title={row.duplicate_reason ?? undefined}>{s}</Tag>
+        return <StatusTag domain="workflow" value={s} tooltip={row.duplicate_reason ?? undefined} />
       },
     },
     {
       title: 'lifecycle', dataIndex: 'lifecycle_status', width: 120,
       render: (s: string) => {
-        const color = s === 'pending' ? 'blue' : s === 'submitted' ? 'green' :
-                       s === 'dismissed' ? 'default' : 'red'
-        return <Tag color={color}>{s}</Tag>
+        return <StatusTag domain="workflow" value={s} />
       },
     },
     { title: 'score', dataIndex: 'match_score', width: 80, render: (v: number) => v.toFixed(2) },
@@ -289,8 +288,7 @@ export default function WhitelistBatchPage() {
   const submitRunning = !!submitJob && !submitJob.done
 
   return (
-    <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-      <Title level={3}>白名单批处理</Title>
+    <PageScaffold title="白名单批处理" description="扫描白名单候选，批量提交或丢弃资源。">
 
       <Card title="扫描控制台" className="soft-card">
         <Space direction="vertical" size="small" style={{ width: '100%' }}>
@@ -460,6 +458,6 @@ export default function WhitelistBatchPage() {
           )}
         </Card>
       )}
-    </Space>
+    </PageScaffold>
   )
 }

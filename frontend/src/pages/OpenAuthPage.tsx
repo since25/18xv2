@@ -1,30 +1,14 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Alert, Button, Card, Col, Row, Space, Tag, Typography, message } from 'antd'
+import { Alert, Button, Card, Col, Row, Space, Typography, message } from 'antd'
 import { QrcodeOutlined, ReloadOutlined } from '@ant-design/icons'
 import { api } from '@/api/client'
 import type { OpenAuthRecord, OpenAuthRecordsResponse, OpenAuthSession } from '@/api/types'
 import PageScaffold from '@/layout/PageScaffold'
-import { formatDateTime } from '@/utils/format'
+import TimeText from '@/components/TimeText'
+import StatusTag from '@/components/StatusTag'
+import DataToolbar from '@/layout/DataToolbar'
 
 const { Text } = Typography
-
-const STATUS_LABEL: Record<number, string> = {
-  0: '等待扫码',
-  1: '已扫码，待确认',
-  2: '授权完成',
-  [-1]: '二维码过期',
-  [-2]: '已取消',
-  [-3]: '结果错误',
-}
-
-const STATUS_COLOR: Record<number, string> = {
-  0: 'default',
-  1: 'gold',
-  2: 'green',
-  [-1]: 'red',
-  [-2]: 'orange',
-  [-3]: 'red',
-}
 
 export default function OpenAuthPage() {
   const [records, setRecords] = useState<OpenAuthRecord[]>([])
@@ -108,9 +92,9 @@ export default function OpenAuthPage() {
         <Col xs={24} lg={9}>
           <Card className="soft-card" title="创建授权会话">
             <Space direction="vertical" style={{ width: '100%' }} size={12}>
-              <Button type="primary" icon={<QrcodeOutlined />} onClick={() => void createSession()} loading={creatingSession}>
+              <DataToolbar left={<Button type="primary" icon={<QrcodeOutlined />} onClick={() => void createSession()} loading={creatingSession}>
                 生成授权二维码
-              </Button>
+              </Button>} />
               <Alert
                 type="info"
                 showIcon
@@ -131,16 +115,14 @@ export default function OpenAuthPage() {
                 </div>
                 <div className="qr-meta">
                   <div className="meta-tags">
-                    <Tag color={STATUS_COLOR[session.status] ?? 'default'}>
-                      {STATUS_LABEL[session.status] ?? session.message}
-                    </Tag>
-                    <Tag>{isPolling ? '轮询中' : '已停止'}</Tag>
+                    <StatusTag domain="auth" value={String(session.status)} tooltip={session.message} />
+                    <StatusTag domain="auth" value={isPolling ? 'polling' : 'stopped'} />
                   </div>
                   <div className="ellipsis-stack">
                     <div>{`UID: ${session.uid}`}</div>
                     <div>{`会话: ${session.session_id}`}</div>
-                    <div>{`创建时间: ${formatDateTime(session.created_at)}`}</div>
-                    <div>{`更新时间: ${formatDateTime(session.updated_at)}`}</div>
+                    <div>创建时间: <TimeText value={session.created_at} /></div>
+                    <div>更新时间: <TimeText value={session.updated_at} /></div>
                     {session.error && <div>{`错误: ${session.error}`}</div>}
                   </div>
                 </div>
@@ -163,10 +145,10 @@ export default function OpenAuthPage() {
         <div className="card-stack">
           {records.map((record, index) => (
             <Card key={`${record.created_at}-${index}`} size="small">
-              <Text strong>{formatDateTime(record.created_at)}</Text>
+              <Text strong><TimeText value={record.created_at} /></Text>
               <div className="ellipsis-stack">
-                <div>{`授权时间: ${formatDateTime(record.created_at)}`}</div>
-                <div>{`Token 到期: ${record.token_expires_at ? formatDateTime(record.token_expires_at) : '未记录'}`}</div>
+                <div>授权时间: <TimeText value={record.created_at} /></div>
+                <div>Token 到期: {record.token_expires_at ? <TimeText value={record.token_expires_at} /> : '未记录'}</div>
               </div>
             </Card>
           ))}

@@ -1,21 +1,14 @@
 import { useEffect, useState } from 'react'
-import { Alert, Button, Card, Descriptions, Space, Spin, Table, Tag, Typography } from 'antd'
+import { Alert, Button, Card, Descriptions, Space, Spin, Table, Typography } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { ReloadOutlined } from '@ant-design/icons'
 import { api } from '@/api/client'
 import type { CookieStatusItem, SystemStatusResponse } from '@/api/types'
 import PageScaffold from '@/layout/PageScaffold'
-import { formatDateTime } from '@/utils/format'
+import TimeText from '@/components/TimeText'
+import StatusTag from '@/components/StatusTag'
 
 const { Text } = Typography
-
-const TOKEN_STATUS_META: Record<string, { color: string; label: string }> = {
-  ok: { color: 'green', label: '可用' },
-  error: { color: 'red', label: '异常' },
-  cooldown: { color: 'gold', label: '冷却中' },
-  reauth_required: { color: 'orange', label: '需要重新扫码授权' },
-  missing: { color: 'default', label: '未配置' },
-}
 
 export default function SettingsPage() {
   const [status, setStatus] = useState<SystemStatusResponse | null>(null)
@@ -82,7 +75,7 @@ export default function SettingsPage() {
       width: 100,
       render: (val: string, rec) => (
         <div>
-          <Tag color={val === 'ok' ? 'green' : 'red'}>{val === 'ok' ? '可用' : '失效'}</Tag>
+          <StatusTag domain="auth" value={val} />
           {rec.error && (
             <div style={{ marginTop: 4 }}>
               <Text type="danger" style={{ fontSize: 12 }}>{rec.error}</Text>
@@ -108,13 +101,11 @@ export default function SettingsPage() {
           <Card className="soft-card" title="Open API Token" style={{ marginBottom: 16 }}>
             <Descriptions column={1} size="small">
               <Descriptions.Item label="状态">
-                <Tag color={TOKEN_STATUS_META[status.token_status]?.color ?? 'red'}>
-                  {TOKEN_STATUS_META[status.token_status]?.label ?? status.token_status}
-                </Tag>
+                <StatusTag domain="auth" value={status.token_status} />
               </Descriptions.Item>
               {status.token_expires_at && (
                 <Descriptions.Item label="Token 到期时间">
-                  <span style={{ fontSize: 12 }}>{formatDateTime(status.token_expires_at)}</span>
+                  <TimeText value={status.token_expires_at} />
                 </Descriptions.Item>
               )}
               {status.token_error && (
@@ -124,7 +115,7 @@ export default function SettingsPage() {
               )}
               {status.token_error_at && (
                 <Descriptions.Item label="错误时间">
-                  <span style={{ fontSize: 12 }}>{formatDateTime(status.token_error_at)}</span>
+                  <TimeText value={status.token_error_at} />
                 </Descriptions.Item>
               )}
             </Descriptions>

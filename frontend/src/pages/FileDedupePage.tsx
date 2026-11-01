@@ -33,6 +33,7 @@ import { api } from '../api/client'
 import type { ImportListResponse, TreeImport } from '../api/types'
 import DataToolbar from '@/layout/DataToolbar'
 import PageScaffold from '@/layout/PageScaffold'
+import StatusTag from '@/components/StatusTag'
 import {
   createDedupeDeletePlan,
   getDedupeActiveJobs,
@@ -96,8 +97,7 @@ function confidenceTag(value: string) {
 }
 
 function statusTag(value: string) {
-  const color = value === 'confirmed' ? 'green' : value === 'dismissed' ? 'default' : value === 'planned' ? 'purple' : 'blue'
-  return <Tag color={color}>{value}</Tag>
+  return <StatusTag domain="workflow" value={value} />
 }
 
 function actionColor(value: string) {

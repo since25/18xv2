@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+from typing import Literal
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -10,11 +13,16 @@ from app.models.downloader import DownloaderSyncRun
 from app.schemas.downloader import (
     DownloaderCandidateListResponse,
     DownloaderControlRequest,
+    DownloaderIgnoreRequest,
+    DownloaderInboxResponse,
+    DownloaderRetryRequest,
     DownloaderSelectRequest,
     DownloaderSubmitRequest,
     DownloaderTaskListResponse,
+    DownloaderUnignoreRequest,
 )
 from app.services.downloader.client import DownloaderClient, DownloaderRemoteError
+from app.services.downloader.query_service import DownloaderQueryService
 from app.services.downloader.sync_service import DownloaderSyncService
 
 router = APIRouter(prefix="/downloader", tags=["downloader"])
@@ -77,8 +85,10 @@ def sync_downloader(db: Session = Depends(get_db)) -> dict:
     }
 
 
-@router.get("/packages", response_model=DownloaderCandidateListResponse)
+@router.get("/packages", response_model=None)
 def list_downloader_candidates(
+    view: Literal["candidates", "ignored"] | None = Query(default=None),
+    download_status: str | None = Query(default=None),
     candidate_status: str | None = Query(default="pending"),
     keyword_entry_id: int | None = Query(default=None),
     search: str | None = Query(default=None),
@@ -86,6 +96,23 @@ def list_downloader_candidates(
     page_size: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
 ) -> DownloaderCandidateListResponse:
+    if view is not None:
+        items, total, counts = DownloaderQueryService.list_inbox(
+            db,
+            view=view,
+            download_status=download_status,
+            keyword_entry_id=keyword_entry_id,
+            search=search,
+            page=page,
+            page_size=page_size,
+        )
+        return DownloaderInboxResponse(
+            items=items,
+            total=total,
+            page=page,
+            page_size=page_size,
+            counts=counts,
+        )
     items, total = DownloaderSyncService.list_candidates(
         db,
         candidate_status=candidate_status,
@@ -95,6 +122,28 @@ def list_downloader_candidates(
         page_size=page_size,
     )
     return DownloaderCandidateListResponse(items=items, total=total, page=page, page_size=page_size)
+
+
+@router.post("/packages/ignore")
+def ignore_downloader_packages(payload: DownloaderIgnoreRequest, db: Session = Depends(get_db)) -> dict:
+    if not payload.candidate_ids and not payload.package_ids:
+        raise HTTPException(status_code=422, detail="candidate_ids 或 package_ids 至少提供一个")
+    return {
+        "ignored": DownloaderQueryService.ignore_packages(
+            db,
+            candidate_ids=payload.candidate_ids,
+            package_ids=payload.package_ids,
+            reason=payload.reason,
+        )
+    }
+
+
+@router.post("/packages/unignore")
+def unignore_downloader_packages(
+    payload: DownloaderUnignoreRequest,
+    db: Session = Depends(get_db),
+) -> dict:
+    return {"restored": DownloaderQueryService.unignore_packages(db, payload.package_ids)}
 
 
 @router.post("/packages/{candidate_id}/select")
@@ -135,11 +184,46 @@ def submit_downloader_batches(
 
 @router.get("/tasks", response_model=DownloaderTaskListResponse)
 def list_downloader_tasks(
-    limit: int = Query(default=100, ge=1, le=500),
+    limit: int | None = Query(default=None, ge=1, le=500),
+    status: str | None = Query(default=None),
+    since: datetime | None = Query(default=None),
+    until: datetime | None = Query(default=None),
+    channel: str | None = Query(default=None),
+    keyword_entry_id: int | None = Query(default=None),
+    search: str | None = Query(default=None),
+    page: int | None = Query(default=None, ge=1),
+    page_size: int | None = Query(default=None, ge=1, le=200),
     db: Session = Depends(get_db),
 ) -> DownloaderTaskListResponse:
-    items, total = DownloaderSyncService.list_tasks(db, node_key=get_settings().downloader_node_key, limit=limit)
+    if (
+        not any(value is not None for value in (status, since, until, channel, keyword_entry_id, search))
+        and page is None
+        and page_size is None
+        and limit is not None
+    ):
+        items, total = DownloaderSyncService.list_tasks(db, node_key=get_settings().downloader_node_key, limit=limit)
+        return DownloaderTaskListResponse(items=items, total=total)
+    items, total = DownloaderQueryService.list_tasks(
+        db,
+        node_key=get_settings().downloader_node_key,
+        status=[value for value in (status or "").split(",") if value],
+        since=since,
+        until=until,
+        channel=channel,
+        keyword_entry_id=keyword_entry_id,
+        search=search,
+        page=page or 1,
+        page_size=page_size or 20,
+    )
     return DownloaderTaskListResponse(items=items, total=total)
+
+
+@router.get("/tasks/{task_id}/detail")
+def downloader_task_detail(task_id: str, db: Session = Depends(get_db)) -> dict:
+    detail = DownloaderQueryService.task_detail(db, task_id, node_key=get_settings().downloader_node_key)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="下载任务不存在")
+    return detail
 
 
 @router.get("/tasks/{task_id}/history")
@@ -185,8 +269,22 @@ def cancel_downloader_task(task_id: str) -> dict:
 
 
 @router.post("/tasks/{task_id}/retry")
-def retry_downloader_task(task_id: str) -> dict:
+def retry_downloader_task(task_id: str, payload: DownloaderRetryRequest | None = None) -> dict:
     try:
         return _client().retry_task(task_id)
     except DownloaderRemoteError as error:
         raise _remote_error(error) from error
+
+
+@router.get("/summary")
+def downloader_summary(db: Session = Depends(get_db)) -> dict:
+    return DownloaderQueryService.summary(
+        db,
+        node_key=get_settings().downloader_node_key,
+        now=datetime.now(UTC),
+    )
+
+
+@router.get("/channels")
+def downloader_channels(db: Session = Depends(get_db)) -> dict:
+    return {"items": DownloaderQueryService.list_channels(db)}

@@ -12,8 +12,11 @@ import type {
   KeywordHitRebuildResponse,
   TreeHitSummaryItem, TreeHitSummaryResponse,
 } from '@/api/types'
+import PageScaffold from '@/layout/PageScaffold'
+import DataToolbar from '@/layout/DataToolbar'
+import StatusTag from '@/components/StatusTag'
 
-const { Title, Text } = Typography
+const { Text } = Typography
 
 export default function HitsPage() {
   const [imports, setImports]         = useState<TreeImport[]>([])
@@ -119,7 +122,7 @@ export default function HitsPage() {
     },
     {
       title: '状态', dataIndex: 'status', width: 80,
-      render: (v: string) => <Tag color={v === 'active' ? 'green' : 'default'}>{v}</Tag>,
+      render: (v: string) => <StatusTag domain="keyword" value={v} />,
     },
     { title: '命中数', dataIndex: 'hit_count', width: 80 },
     {
@@ -141,8 +144,7 @@ export default function HitsPage() {
   ]
 
   return (
-    <div>
-      <Title level={4} style={{ marginBottom: 16 }}>命中重建</Title>
+    <PageScaffold title="命中重建" description="重建并检查目录树中的关键词命中记录。">
 
       {/* 批次选择 */}
       <Card style={{ marginBottom: 16 }}>
@@ -166,10 +168,11 @@ export default function HitsPage() {
         <>
           {/* 命中重建 */}
           <Card
-            title={<Space><FireOutlined style={{ color: '#fa8c16' }} /><span>关键词命中重建</span></Space>}
+            title={<Space><FireOutlined style={{ color: 'var(--app-warning)' }} /><span>关键词命中重建</span></Space>}
             style={{ marginBottom: 16 }}
           >
-            <Space wrap style={{ marginBottom: 12 }}>
+            <DataToolbar left={(
+              <Space wrap>
               <Space>
                 <span>扫描目录：</span>
                 <Switch checked={inclFolders} onChange={setInclFolders} checkedChildren="是" unCheckedChildren="否" />
@@ -185,7 +188,8 @@ export default function HitsPage() {
               <Button type="primary" icon={<FireOutlined />} loading={rebuilding} onClick={rebuildHits}>
                 开始重建
               </Button>
-            </Space>
+              </Space>
+            )} />
 
             {rebuildResult && (
               <Descriptions bordered size="small" column={3}>
@@ -200,7 +204,8 @@ export default function HitsPage() {
 
           {/* tree-hit-summary */}
           <Card title="关键词命中排行">
-            <Space wrap style={{ marginBottom: 12 }}>
+            <DataToolbar left={(
+              <Space wrap>
               <Input
                 placeholder="路径前缀过滤（如 /根目录/待整理）"
                 style={{ width: 280 }}
@@ -228,7 +233,8 @@ export default function HitsPage() {
               />
               <Button onClick={loadSummary} loading={summaryLoading}>刷新</Button>
               <Text type="secondary" style={{ fontSize: 13 }}>共 {summaryTotal} 个关键词命中</Text>
-            </Space>
+              </Space>
+            )} />
             <Divider style={{ margin: '0 0 12px' }} />
             <Table
               rowKey="keyword_entry_id"
@@ -263,6 +269,6 @@ export default function HitsPage() {
           </Card>
         </>
       )}
-    </div>
+    </PageScaffold>
   )
 }

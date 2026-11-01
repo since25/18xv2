@@ -20,6 +20,8 @@ import { CloudDownloadOutlined, DeleteOutlined, ReloadOutlined, SearchOutlined }
 import { Link } from 'react-router-dom'
 import { api } from '@/api/client'
 import PageScaffold from '@/layout/PageScaffold'
+import DataToolbar from '@/layout/DataToolbar'
+import StatusTag from '@/components/StatusTag'
 import type {
   ImportListResponse,
   MagnetArticleCandidate,
@@ -33,22 +35,9 @@ import type {
   RemoteFetchRequest,
   TreeImport,
 } from '@/api/types'
-import { formatDateTime } from '@/utils/format'
+import TimeText from '@/components/TimeText'
 
 const { Text } = Typography
-
-const DUPLICATE_COLOR: Record<string, string> = {
-  clear: 'green',
-  duplicate_found: 'red',
-  task_exists: 'orange',
-}
-
-const TASK_STATUS_COLOR: Record<string, string> = {
-  pending: 'default',
-  submitted: 'green',
-  duplicate_skipped: 'orange',
-  failed: 'red',
-}
 
 const DEFAULT_TARGET_CID = '3412729136586281899'
 
@@ -259,9 +248,7 @@ export default function MagnetTasksPage() {
               <Tag>{`score ${record.match_score}`}</Tag>
               {record.matched_keyword && <Tag color="blue">{record.matched_keyword}</Tag>}
               {record.matched_alias && <Tag>{`别名 ${record.matched_alias}`}</Tag>}
-              <Tag color={DUPLICATE_COLOR[duplicate?.duplicate_status ?? 'default'] ?? 'default'}>
-                {duplicate?.duplicate_status ?? '未检查'}
-              </Tag>
+              <StatusTag domain="workflow" value={duplicate?.duplicate_status ?? '未检查'} />
             </div>
             <div className="ellipsis-stack">
               {record.source_detail_url && <div>{record.source_detail_url}</div>}
@@ -302,8 +289,8 @@ export default function MagnetTasksPage() {
           <div className="meta-tags">
             <Tag>{`#${record.id}`}</Tag>
             <Tag>{`tid ${record.source_tid}`}</Tag>
-            <Tag color={TASK_STATUS_COLOR[record.status] ?? 'default'}>{record.status}</Tag>
-            <Tag color={DUPLICATE_COLOR[record.duplicate_status] ?? 'default'}>{record.duplicate_status}</Tag>
+            <StatusTag domain="workflow" value={record.status} />
+            <StatusTag domain="workflow" value={record.duplicate_status} />
           </div>
           <div className="ellipsis-stack">
             {record.failure_reason && <div>{record.failure_reason}</div>}
@@ -316,7 +303,7 @@ export default function MagnetTasksPage() {
       title: '提交时间',
       dataIndex: 'submitted_to_115_at',
       width: 180,
-      render: (value: string | null) => formatDateTime(value),
+      render: (value: string | null) => <TimeText value={value} />,
     },
   ]
 
@@ -327,7 +314,8 @@ export default function MagnetTasksPage() {
       description="支持两种模式：手动搜词精细提交，或按白名单批量检索并自动落到 /已整理/关键词/磁力名称。"
     >
       <Card className="soft-card" style={{ marginBottom: 16 }}>
-        <Space wrap>
+        <DataToolbar left={(
+          <Space wrap>
           <Input
             style={{ width: 220 }}
             placeholder="搜索词"
@@ -359,7 +347,8 @@ export default function MagnetTasksPage() {
           <Button icon={<ReloadOutlined />} onClick={() => void loadTaskBatches()} loading={loadingTasks}>
             刷新最近任务
           </Button>
-        </Space>
+          </Space>
+        )} />
       </Card>
 
       <Collapse
@@ -478,7 +467,7 @@ export default function MagnetTasksPage() {
               label: (
                 <Space wrap>
                   <Text strong>{batch.batch_id}</Text>
-                  <Tag>{formatDateTime(batch.created_at)}</Tag>
+                  <Tag><TimeText value={batch.created_at} /></Tag>
                   <Tag color="blue">{`提交 ${batch.submitted_count}/${batch.total_count}`}</Tag>
                   {batch.duplicate_skipped_count ? <Tag color="orange">{`跳过 ${batch.duplicate_skipped_count}`}</Tag> : null}
                   {batch.failed_count ? <Tag color="red">{`失败 ${batch.failed_count}`}</Tag> : null}

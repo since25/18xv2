@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { DeleteOutlined, ReloadOutlined } from '@ant-design/icons'
-import { Button, Card, Checkbox, Descriptions, Input, Popconfirm, Select, Space, Table, Tabs, Tag, Typography, message } from 'antd'
+import { Button, Card, Checkbox, Descriptions, Input, Popconfirm, Select, Space, Table, Tabs, Typography, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import {
   applyEmbyMetadataCandidate,
@@ -19,7 +19,9 @@ import {
   type EmbyMetadataTargetList,
 } from '@/api/embyMediaActions'
 import PageScaffold from '@/layout/PageScaffold'
-import { formatDateTime } from '@/utils/format'
+import DataToolbar from '@/layout/DataToolbar'
+import StatusTag from '@/components/StatusTag'
+import TimeText from '@/components/TimeText'
 
 const { Text } = Typography
 const DELETE_SCOPE_OPTIONS: Array<{ label: string; value: EmbyDeleteScope }> = [
@@ -43,14 +45,6 @@ function parseId(value: string) {
 
 function candidateTargetLabel(value: string) {
   return value === 'emby_whitelist' ? '白名单' : '黑名单'
-}
-
-function statusColor(value: string) {
-  if (value === 'draft' || value === 'pending') return 'blue'
-  if (value === 'applied' || value === 'completed' || value === 'deleted') return 'green'
-  if (value === 'blocked' || value === 'failed') return 'red'
-  if (value === 'running') return 'gold'
-  return 'default'
 }
 
 export default function EmbyMediaActionsPage() {
@@ -88,7 +82,7 @@ export default function EmbyMediaActionsPage() {
       title: '状态',
       dataIndex: 'status',
       width: 120,
-      render: (value: string) => <Tag color={statusColor(value)}>{value}</Tag>,
+      render: (value: string) => <StatusTag domain="workflow" value={value} />,
     },
     { title: '路径', dataIndex: 'target_path', ellipsis: true },
     { title: '115 ID', dataIndex: 'remote_file_id', width: 140, ellipsis: true },
@@ -102,7 +96,7 @@ export default function EmbyMediaActionsPage() {
       title: '状态',
       dataIndex: 'status',
       width: 96,
-      render: (value: string) => <Tag color={statusColor(value)}>{value}</Tag>,
+      render: (value: string) => <StatusTag domain="workflow" value={value} />,
     },
     { title: '范围', dataIndex: 'scope', width: 88 },
     { title: '条目', dataIndex: 'total_items', width: 80 },
@@ -143,14 +137,14 @@ export default function EmbyMediaActionsPage() {
       title: '状态',
       dataIndex: 'status',
       width: 96,
-      render: (value: string) => <Tag color={statusColor(value)}>{value}</Tag>,
+      render: (value: string) => <StatusTag domain="workflow" value={value} />,
     },
     { title: 'Item ID', dataIndex: 'emby_item_id', width: 130, ellipsis: true },
     {
       title: '提交时间',
       dataIndex: 'created_at',
       width: 160,
-      render: (value: string) => formatDateTime(value),
+      render: (value: string) => <TimeText value={value} />,
     },
     {
       title: '操作',
@@ -360,13 +354,13 @@ export default function EmbyMediaActionsPage() {
       {holder}
       <div className="emby-media-actions-grid">
         <Card title="删除计划" className="soft-card">
-          <Space.Compact>
+          <DataToolbar left={<Space.Compact>
             <Input placeholder="Plan ID" value={planId} onChange={(event) => setPlanId(event.target.value)} />
             <Button onClick={loadPlan} loading={planLoading}>加载</Button>
             <Button icon={<ReloadOutlined />} onClick={() => void loadRecentPlans()} loading={recentLoading}>
               刷新最近
             </Button>
-          </Space.Compact>
+          </Space.Compact>} />
           <Table
             rowKey="id"
             size="small"
@@ -434,10 +428,10 @@ export default function EmbyMediaActionsPage() {
             </Button>
           }
         >
-          <Space.Compact>
+          <DataToolbar left={<Space.Compact>
             <Input placeholder="Candidate ID" value={candidateId} onChange={(event) => setCandidateId(event.target.value)} />
             <Button onClick={loadCandidate} loading={candidateLoading}>加载</Button>
-          </Space.Compact>
+          </Space.Compact>} />
           <Tabs
             className="emby-media-actions-section"
             items={METADATA_TARGET_TABS.map((item) => ({
@@ -461,7 +455,7 @@ export default function EmbyMediaActionsPage() {
               <Descriptions size="small" column={1}>
                 <Descriptions.Item label="标题">{candidate.snapshot_title || '-'}</Descriptions.Item>
                 <Descriptions.Item label="目标名单">{candidateTargetLabel(candidate.target_list)}</Descriptions.Item>
-                <Descriptions.Item label="状态"><Tag color={statusColor(candidate.status)}>{candidate.status}</Tag></Descriptions.Item>
+                <Descriptions.Item label="状态"><StatusTag domain="workflow" value={candidate.status} /></Descriptions.Item>
                 <Descriptions.Item label="Item ID">{candidate.emby_item_id}</Descriptions.Item>
                 <Descriptions.Item label="NFO">{candidate.snapshot_nfo_path || '-'}</Descriptions.Item>
               </Descriptions>

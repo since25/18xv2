@@ -4,6 +4,8 @@ import { MergeOutlined, SearchOutlined } from '@ant-design/icons'
 import { api } from '@/api/client'
 import type { KeywordDuplicatePair, KeywordDuplicateScanResponse } from '@/api/types'
 import PageScaffold from '@/layout/PageScaffold'
+import DataToolbar from '@/layout/DataToolbar'
+import StatusTag from '@/components/StatusTag'
 
 const { Text } = Typography
 
@@ -70,7 +72,8 @@ export default function KeywordDuplicatesPage() {
     >
 
       <Card className="soft-card" style={{ marginBottom: 16 }}>
-        <Space wrap size={12}>
+        <DataToolbar left={(
+          <Space wrap size={12}>
           <Select
             value={keywordType}
             style={{ width: 160 }}
@@ -87,8 +90,9 @@ export default function KeywordDuplicatesPage() {
           <Button type="primary" icon={<SearchOutlined />} onClick={loadPairs} loading={loading}>
             开始扫描
           </Button>
-          <Text type="secondary">阈值越高，结果越保守。</Text>
-        </Space>
+            <Text type="secondary">阈值越高，结果越保守。</Text>
+          </Space>
+        )} />
       </Card>
 
       {!pairs.length && !loading && (
@@ -117,7 +121,7 @@ export default function KeywordDuplicatesPage() {
                     <Text strong>{`#${pair.keyword_1.id} · ${pair.keyword_1.canonical_name}`}</Text>
                     <div className="meta-tags">
                       <Tag>{pair.keyword_1.keyword_type}</Tag>
-                      <Tag>{pair.keyword_1.status}</Tag>
+                      <StatusTag domain="keyword" value={pair.keyword_1.status} />
                       <Tag>{`别名 ${pair.keyword_1.aliases.length}`}</Tag>
                       <Tag color={pair.keyword_1_reference_count > 0 ? 'blue' : undefined}>
                         {`候选引用 ${pair.keyword_1_reference_count}`}
@@ -134,7 +138,7 @@ export default function KeywordDuplicatesPage() {
                     <Text strong>{`#${pair.keyword_2.id} · ${pair.keyword_2.canonical_name}`}</Text>
                     <div className="meta-tags">
                       <Tag>{pair.keyword_2.keyword_type}</Tag>
-                      <Tag>{pair.keyword_2.status}</Tag>
+                      <StatusTag domain="keyword" value={pair.keyword_2.status} />
                       <Tag>{`别名 ${pair.keyword_2.aliases.length}`}</Tag>
                       <Tag color={pair.keyword_2_reference_count > 0 ? 'blue' : undefined}>
                         {`候选引用 ${pair.keyword_2_reference_count}`}

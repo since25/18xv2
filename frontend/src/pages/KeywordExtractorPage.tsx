@@ -35,18 +35,15 @@ import type {
   SimilarKeywordPreviewResponse,
   TreeImport,
 } from '@/api/types'
-import { formatDateTime, splitTextareaLines } from '@/utils/format'
+import { splitTextareaLines } from '@/utils/format'
+import TimeText from '@/components/TimeText'
+import PageScaffold from '@/layout/PageScaffold'
+import DataToolbar from '@/layout/DataToolbar'
+import StatusTag from '@/components/StatusTag'
 
-const { Paragraph, Text, Title } = Typography
+const { Text } = Typography
 
 type KeywordListType = 'whitelist' | 'ignore' | 'blacklist'
-
-const MATCH_STATUS_COLOR: Record<string, string> = {
-  new: 'blue',
-  similar: 'gold',
-  existing: 'green',
-  ignored: 'default',
-}
 
 export default function KeywordExtractorPage() {
   const [searchParams] = useSearchParams()
@@ -442,9 +439,7 @@ export default function KeywordExtractorPage() {
         <div>
           <Text strong>{value}</Text>
           <div className="meta-tags">
-            <Tag color={MATCH_STATUS_COLOR[record.match_status] ?? 'default'}>
-              {record.match_status}
-            </Tag>
+            <StatusTag domain="keyword" value={record.match_status} />
             <Tag>{`命中 ${record.count}`}</Tag>
             <Tag>{record.source}</Tag>
             {record.matched_canonical_name && <Tag color="gold">{`近似 ${record.matched_canonical_name}`}</Tag>}
@@ -491,9 +486,7 @@ export default function KeywordExtractorPage() {
         <div>
           <Text strong>{value}</Text>
           <div className="meta-tags">
-            <Tag color={MATCH_STATUS_COLOR[record.match_status] ?? 'default'}>
-              {record.match_status}
-            </Tag>
+            <StatusTag domain="keyword" value={record.match_status} />
             {record.matched_canonical_name && <Tag color="gold">{`近似 ${record.matched_canonical_name}`}</Tag>}
           </div>
         </div>
@@ -513,7 +506,7 @@ export default function KeywordExtractorPage() {
           <Text strong>{value}</Text>
           <div className="meta-tags">
             <Tag>{record.keyword_type}</Tag>
-            <Tag>{record.status}</Tag>
+            <StatusTag domain="keyword" value={record.status} />
             <Tag>{`别名 ${record.aliases.length}`}</Tag>
           </div>
         </div>
@@ -534,20 +527,12 @@ export default function KeywordExtractorPage() {
       title: '更新时间',
       dataIndex: 'updated_at',
       width: 180,
-      render: (value: string | null) => formatDateTime(value),
+      render: (value: string | null) => <TimeText value={value} />,
     },
   ]
 
   return (
-    <div className="page-shell">
-      <div className="page-header">
-        <div>
-          <Title level={4} style={{ margin: 0 }}>关键词提取器</Title>
-          <Paragraph type="secondary" style={{ margin: '6px 0 0' }}>
-            从目录树批量提取、筛选并入库关键词，恢复旧版从导入到治理的起始链路。
-          </Paragraph>
-        </div>
-      </div>
+    <PageScaffold title="关键词提取器" description="从目录树批量提取、筛选并入库关键词，恢复旧版从导入到治理的起始链路。">
 
       <Row gutter={[16, 16]}>
         <Col xs={24} xl={8}>
@@ -675,7 +660,8 @@ export default function KeywordExtractorPage() {
                   <Col xs={12} md={6}><Statistic title="已入库过滤" value={summary.total_existing_keywords} /></Col>
                   <Col xs={12} md={6}><Statistic title="相似待确认" value={summary.total_similar_keywords} /></Col>
                 </Row>
-                <Space wrap style={{ marginBottom: 12 }}>
+                <DataToolbar left={(
+                  <Space wrap>
                   <Input
                     allowClear
                     style={{ width: 260 }}
@@ -704,7 +690,8 @@ export default function KeywordExtractorPage() {
                   >
                     批量存黑名单
                   </Button>
-                </Space>
+                  </Space>
+                )} />
                 <Table
                   rowKey="keyword"
                   columns={keywordColumns}
@@ -797,6 +784,6 @@ export default function KeywordExtractorPage() {
           </Row>
         </Col>
       </Row>
-    </div>
+    </PageScaffold>
   )
 }

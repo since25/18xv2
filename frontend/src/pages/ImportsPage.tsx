@@ -1,13 +1,14 @@
 import { useEffect, useState } from 'react'
-import { Table, Button, Upload, message, Tag, Space, Typography, Card, Popconfirm } from 'antd'
+import { Table, Button, Upload, message, Space, Card, Popconfirm } from 'antd'
 import { UploadOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import { useNavigate } from 'react-router-dom'
 import { api } from '@/api/client'
 import type { DeleteResponse, TreeImport, ImportListResponse } from '@/api/types'
-import { formatDateTime } from '@/utils/format'
-
-const { Title } = Typography
+import TimeText from '@/components/TimeText'
+import PageScaffold from '@/layout/PageScaffold'
+import DataToolbar from '@/layout/DataToolbar'
+import StatusTag from '@/components/StatusTag'
 
 export default function ImportsPage() {
   const navigate = useNavigate()
@@ -68,14 +69,14 @@ export default function ImportsPage() {
       title: '状态',
       dataIndex: 'status',
       width: 100,
-      render: (v: string) => <Tag color={v === 'done' ? 'green' : 'blue'}>{v}</Tag>,
+      render: (v: string) => <StatusTag domain="import" value={v} />,
     },
     { title: '备注', dataIndex: 'note', ellipsis: true },
     {
       title: '导入时间',
       dataIndex: 'imported_at',
       width: 180,
-      render: (v: string) => formatDateTime(v),
+      render: (v: string) => <TimeText value={v} />,
     },
     {
       title: '操作',
@@ -100,17 +101,19 @@ export default function ImportsPage() {
   ]
 
   return (
-    <div>
-      <Space style={{ marginBottom: 16 }} align="center">
-        <Title level={4} style={{ margin: 0 }}>导入批次</Title>
+    <PageScaffold title="导入批次" description="管理目录树导入批次和后续处理入口。">
+      <DataToolbar left={(
+        <Space wrap>
         <Upload beforeUpload={handleUpload} showUploadList={false} accept=".txt,.json">
           <Button icon={<UploadOutlined />} loading={uploading}>上传目录树</Button>
         </Upload>
         <Button onClick={() => navigate('/nodes')}>查看目录内容</Button>
         <Button onClick={() => navigate('/extractor')}>打开提取器</Button>
         <Button onClick={() => navigate('/keywords')}>打开关键词台</Button>
+        </Space>
+      )} right={(
         <Button onClick={load} loading={loading}>刷新</Button>
-      </Space>
+      )} />
       <Card>
         <Table
           rowKey="id"
@@ -121,6 +124,6 @@ export default function ImportsPage() {
           pagination={{ pageSize: 20, showTotal: (t) => `共 ${t} 条` }}
         />
       </Card>
-    </div>
+    </PageScaffold>
   )
 }

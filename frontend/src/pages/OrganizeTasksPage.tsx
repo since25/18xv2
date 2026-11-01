@@ -14,12 +14,13 @@ import type {
   FileInfoItem, FileInfoResponse,
   DuplicateResolveResponse,
 } from '@/api/types'
+import PageScaffold from '@/layout/PageScaffold'
+import DataToolbar from '@/layout/DataToolbar'
+import StatusTag from '@/components/StatusTag'
+import BytesText from '@/components/BytesText'
+import TimeText from '@/components/TimeText'
 
-const { Title, Text } = Typography
-
-const STATUS_COLOR: Record<string, string> = {
-  pending: 'blue', completed: 'green', failed: 'red', skipped: 'default',
-}
+const { Text } = Typography
 
 export default function OrganizeTasksPage() {
   const [imports, setImports]           = useState<TreeImport[]>([])
@@ -273,7 +274,7 @@ export default function OrganizeTasksPage() {
     { title: '关键词', dataIndex: 'matched_canonical_name', width: 130, ellipsis: true },
     {
       title: '状态', dataIndex: 'status', width: 85,
-      render: (v: string) => <Tag color={STATUS_COLOR[v] ?? 'default'}>{v}</Tag>,
+      render: (v: string) => <StatusTag domain="workflow" value={v} />,
     },
     { title: '来源路径', dataIndex: 'source_path', ellipsis: true },
     { title: '目标路径', dataIndex: 'target_path', ellipsis: true },
@@ -297,10 +298,10 @@ export default function OrganizeTasksPage() {
   }, {})
 
   return (
-    <div>
+    <PageScaffold title="整理任务" description="管理目录整理任务、冲突裁决和计划生成。">
       {/* 顶部工具栏 */}
-      <Space style={{ marginBottom: 16 }} wrap>
-        <Title level={4} style={{ margin: 0 }}>整理任务</Title>
+      <DataToolbar left={(
+        <Space wrap>
         <Select
           placeholder="选择批次" style={{ width: 240 }} allowClear
           options={imports.map((i) => ({ value: i.id, label: `#${i.id} · ${i.source_filename}` }))}
@@ -321,7 +322,8 @@ export default function OrganizeTasksPage() {
         <Button type="primary" ghost onClick={generatePlan} disabled={!selectedIds.length}>
           从勾选任务生成计划 ({selectedIds.length})
         </Button>
-      </Space>
+        </Space>
+      )} />
 
       {!importId && <Alert message="请先选择导入批次。" type="info" showIcon style={{ marginBottom: 16 }} />}
 
@@ -335,7 +337,7 @@ export default function OrganizeTasksPage() {
             extra={<Button size="small" onClick={loadAmbigConflicts} loading={ambigLoading}>加载歧义冲突</Button>}
           >
             {!ambigConflicts && <Text type="secondary" style={{ fontSize: 13 }}>点击右上角「加载歧义冲突」查看。</Text>}
-            {ambigConflicts && ambigConflicts.conflict_count === 0 && <span style={{ color: '#52c41a' }}>✓ 当前批次无歧义冲突。</span>}
+            {ambigConflicts && ambigConflicts.conflict_count === 0 && <span style={{ color: 'var(--app-success)' }}>当前批次无歧义冲突。</span>}
             {ambigConflicts && ambigConflicts.conflict_count > 0 && (
               <>
                 <Text type="secondary" style={{ display: 'block', marginBottom: 8, fontSize: 13 }}>
@@ -378,7 +380,7 @@ export default function OrganizeTasksPage() {
             extra={<Button size="small" onClick={loadDupConflicts} loading={dupLoading}>检查冲突</Button>}
           >
             {!dupConflicts && <Text type="secondary" style={{ fontSize: 13 }}>点击右上角「检查冲突」查看。</Text>}
-            {dupConflicts && dupConflicts.conflict_count === 0 && <span style={{ color: '#52c41a' }}>✓ 当前批次无重复目标冲突。</span>}
+            {dupConflicts && dupConflicts.conflict_count === 0 && <span style={{ color: 'var(--app-success)' }}>当前批次无重复目标冲突。</span>}
             {dupConflicts && dupConflicts.conflict_count > 0 && (
               <>
                 <Collapse size="small" style={{ marginTop: 8 }}
@@ -419,7 +421,7 @@ export default function OrganizeTasksPage() {
                                     )}
                                     {detail?.cid && fi && !fi.error && (
                                       <Text type="secondary" style={{ fontSize: 12 }}>
-                                        大小: {fi.size != null ? `${(fi.size / 1024 / 1024).toFixed(1)} MB` : '未知'} · 修改时间: {fi.modified_at ?? '未知'}
+                                        大小: <BytesText value={fi.size} /> · 修改时间: <TimeText value={fi.modified_at} />
                                       </Text>
                                     )}
                                     {fi?.error && <Text type="danger" style={{ fontSize: 12 }}>{fi.error}</Text>}
@@ -542,6 +544,6 @@ export default function OrganizeTasksPage() {
           </Form.Item>
         </Form>
       </Modal>
-    </div>
+    </PageScaffold>
   )
 }

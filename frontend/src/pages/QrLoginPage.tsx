@@ -22,27 +22,11 @@ import type {
   QrLoginRecordsResponse,
   QrLoginSession,
 } from '@/api/types'
-import { formatDateTime } from '@/utils/format'
+import TimeText from '@/components/TimeText'
+import StatusTag from '@/components/StatusTag'
+import DataToolbar from '@/layout/DataToolbar'
 
 const { Text } = Typography
-
-const STATUS_LABEL: Record<number, string> = {
-  0: '等待扫码',
-  1: '已扫码，待确认',
-  2: '已登录',
-  [-1]: '二维码过期',
-  [-2]: '已取消',
-  [-3]: '结果错误',
-}
-
-const STATUS_COLOR: Record<number, string> = {
-  0: 'default',
-  1: 'gold',
-  2: 'green',
-  [-1]: 'red',
-  [-2]: 'orange',
-  [-3]: 'red',
-}
 
 export default function QrLoginPage() {
   const [clients, setClients] = useState<QrLoginClientOption[]>([])
@@ -153,26 +137,26 @@ export default function QrLoginPage() {
         <Col xs={24} lg={9}>
           <Card className="soft-card" title="创建扫码会话">
             <Space direction="vertical" style={{ width: '100%' }} size={12}>
-              <Select
-                placeholder="目标客户端"
-                value={selectedApp}
-                options={clients.map((item) => ({ value: item.app, label: `${item.label} (${item.app})` }))}
-                loading={loadingClients}
-                onChange={setSelectedApp}
-              />
-              <Input
-                value={fileName}
-                onChange={(event) => setFileName(event.target.value)}
-                placeholder="保存文件名"
-              />
-              <Space wrap>
+              <DataToolbar left={<Space wrap>
+                <Select
+                  placeholder="目标客户端"
+                  value={selectedApp}
+                  options={clients.map((item) => ({ value: item.app, label: `${item.label} (${item.app})` }))}
+                  loading={loadingClients}
+                  onChange={setSelectedApp}
+                />
+                <Input
+                  value={fileName}
+                  onChange={(event) => setFileName(event.target.value)}
+                  placeholder="保存文件名"
+                />
                 <Button icon={<ReloadOutlined />} onClick={() => void loadClients()} loading={loadingClients}>
                   刷新客户端
                 </Button>
                 <Button type="primary" icon={<QrcodeOutlined />} onClick={() => void createSession()} loading={creatingSession}>
                   生成二维码
                 </Button>
-              </Space>
+              </Space>} />
               <Alert
                 type="info"
                 showIcon
@@ -195,17 +179,15 @@ export default function QrLoginPage() {
                 </div>
                 <div className="qr-meta">
                   <div className="meta-tags">
-                    <Tag color={STATUS_COLOR[session.status] ?? 'default'}>
-                      {STATUS_LABEL[session.status] ?? session.message}
-                    </Tag>
+                    <StatusTag domain="auth" value={String(session.status)} tooltip={session.message} />
                     <Tag>{session.app}</Tag>
-                    <Tag>{isPolling ? '轮询中' : '已停止'}</Tag>
+                    <StatusTag domain="auth" value={isPolling ? 'polling' : 'stopped'} />
                   </div>
                   <div className="ellipsis-stack">
                     <div>{`UID: ${session.uid}`}</div>
                     <div>{`会话: ${session.session_id}`}</div>
-                    <div>{`创建时间: ${formatDateTime(session.created_at)}`}</div>
-                    <div>{`更新时间: ${formatDateTime(session.updated_at)}`}</div>
+                    <div>创建时间: <TimeText value={session.created_at} /></div>
+                    <div>更新时间: <TimeText value={session.updated_at} /></div>
                     {session.saved_path && <div>{`保存路径: ${session.saved_path}`}</div>}
                     {session.error && <div>{`错误: ${session.error}`}</div>}
                   </div>
@@ -244,7 +226,7 @@ export default function QrLoginPage() {
               </div>
               <div className="ellipsis-stack">
                 <div>{record.saved_path || '未保存路径'}</div>
-                <div>{formatDateTime(record.updated_at)}</div>
+                <div><TimeText value={record.updated_at} /></div>
               </div>
             </Card>
           ))}

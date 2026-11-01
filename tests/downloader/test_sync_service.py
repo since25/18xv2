@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
+from sqlalchemy import select
+
 from app.models.keywords import KeywordAlias, KeywordEntry
-from app.models.downloader import DownloaderPackageCandidate
+from app.models.downloader import DownloaderPackage, DownloaderPackageCandidate, DownloaderTaskFileHistory, DownloaderTaskSnapshot
 from app.services.downloader.sync_service import DownloaderSyncService
 
 
@@ -162,3 +166,108 @@ def test_incremental_submission_records_no_new_items_without_remote_batch(db_ses
     assert result.submitted == 0
     assert result.skipped == 1
     assert result.items[0]["status"] == "no_new_items"
+
+
+def test_sync_tasks_records_times_bytes_and_finished_once(db_session):
+    client = FakeDownloader()
+    client.task_payload = {
+        **client.task_payload,
+        "status": "completed",
+        "created_at": 1761890000.0,
+        "updated_at": 1761890600.0,
+        "files": [
+            {"message_id": "1", "total_size_bytes": 100, "downloaded_size_bytes": 100},
+            {"message_id": "2", "total_size_bytes": 50, "downloaded_size_bytes": 20},
+        ],
+    }
+
+    DownloaderSyncService.sync_tasks(db_session, client)
+    snapshot = db_session.scalar(select(DownloaderTaskSnapshot))
+    assert snapshot is not None
+    finished_at = snapshot.finished_at
+    assert snapshot.remote_created_at.replace(tzinfo=UTC) == datetime.fromtimestamp(1761890000, UTC)
+    assert snapshot.remote_updated_at.replace(tzinfo=UTC) == datetime.fromtimestamp(1761890600, UTC)
+    assert snapshot.total_bytes == 150
+    assert snapshot.downloaded_bytes == 120
+    assert finished_at.replace(tzinfo=UTC) == datetime.fromtimestamp(1761890600, UTC)
+
+    client.task_payload["updated_at"] = 1761891200.0
+    DownloaderSyncService.sync_tasks(db_session, client)
+    db_session.refresh(snapshot)
+    assert snapshot.finished_at == finished_at
+
+
+def test_sync_tasks_clears_finished_when_task_restarts(db_session):
+    client = FakeDownloader()
+    client.task_payload = {**client.task_payload, "status": "completed", "updated_at": 1761890600.0}
+    DownloaderSyncService.sync_tasks(db_session, client)
+    client.task_payload = {**client.task_payload, "status": "downloading", "updated_at": 1761891200.0}
+    DownloaderSyncService.sync_tasks(db_session, client)
+
+    snapshot = db_session.scalar(select(DownloaderTaskSnapshot))
+    assert snapshot is not None
+    assert snapshot.finished_at is None
+
+
+def test_ignored_package_creates_no_candidate_and_dismisses_pending(db_session):
+    add_keyword(db_session, "Foo", "whitelist")
+    client = FakeDownloader()
+    DownloaderSyncService.sync_packages(db_session, client)
+    package = db_session.scalar(select(DownloaderPackage).where(DownloaderPackage.remote_package_id == 1))
+    assert package is not None
+    package.ignored_at = datetime.now(UTC)
+    db_session.commit()
+
+    summary = DownloaderSyncService.sync_packages(db_session, client)
+    candidate = db_session.scalar(select(DownloaderPackageCandidate).where(DownloaderPackageCandidate.package_id == package.id))
+    assert candidate is not None
+    assert candidate.status == "dismissed"
+    assert candidate.dismissed_reason == "ignored"
+    assert summary.candidates_created == 0
+
+
+def test_completed_package_records_completed_media_count(db_session):
+    add_keyword(db_session, "Foo", "whitelist")
+    client = FakeDownloader()
+    client.packages[0] = {**client.packages[0], "current_download_status": "completed", "media_count": 7}
+    DownloaderSyncService.sync_packages(db_session, client)
+
+    package = db_session.scalar(select(DownloaderPackage).where(DownloaderPackage.remote_package_id == 1))
+    assert package is not None
+    assert package.completed_media_count == 7
+
+
+def test_file_history_reads_byte_fields(db_session):
+    client = FakeDownloader()
+    client.task_payload = {
+        **client.task_payload,
+        "files": [
+            {
+                "message_id": "1",
+                "status": "downloading",
+                "filename": "a.mp4",
+                "total_size": "12.3 MB",
+                "downloaded_size": "1 MB",
+                "download_speed": "2 MB/s",
+                "total_size_bytes": 12948331,
+                "downloaded_size_bytes": 100,
+                "download_speed_bytes": 200,
+            }
+        ],
+    }
+    DownloaderSyncService.sync_tasks(db_session, client)
+    file_row = db_session.scalar(select(DownloaderTaskFileHistory))
+    assert file_row is not None
+    assert file_row.total_size == 12948331
+    assert file_row.downloaded_size == 100
+    assert file_row.download_speed == 200
+
+
+def test_submit_accepts_pending_candidate(db_session):
+    add_keyword(db_session, "Foo", "whitelist")
+    client = FakeDownloader()
+    DownloaderSyncService.sync_packages(db_session, client)
+    candidates, _ = DownloaderSyncService.list_candidates(db_session)
+
+    result = DownloaderSyncService.submit_selected(db_session, client, [candidates[0]["candidate_id"]])
+    assert result.submitted == 1

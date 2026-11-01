@@ -28,9 +28,12 @@ import type {
   SimilarKeywordPreviewResponse,
 } from '@/api/types'
 import DataToolbar from '@/layout/DataToolbar'
-import { formatDateTime, splitTextareaLines } from '@/utils/format'
+import PageScaffold from '@/layout/PageScaffold'
+import StatusTag from '@/components/StatusTag'
+import { splitTextareaLines } from '@/utils/format'
+import TimeText from '@/components/TimeText'
 
-const { Paragraph, Text, Title } = Typography
+const { Text } = Typography
 
 const TYPE_COLOR: Record<string, string> = {
   whitelist: 'green',
@@ -329,7 +332,7 @@ export default function KeywordsPage() {
             <Text strong>{value}</Text>
             <div className="meta-tags">
               <Tag color={TYPE_COLOR[record.keyword_type] ?? 'default'}>{TYPE_LABEL[record.keyword_type] ?? record.keyword_type}</Tag>
-              <Tag color={record.status === 'active' ? 'green' : 'default'}>{record.status}</Tag>
+              <StatusTag domain="keyword" value={record.status} />
               <Tag color={mergePolicy === 'fallback_only' ? 'gold' : 'default'}>
                 {MERGE_POLICY_LABEL[mergePolicy]}
               </Tag>
@@ -355,7 +358,7 @@ export default function KeywordsPage() {
       title: '更新时间',
       dataIndex: 'updated_at',
       width: 180,
-      render: (value: string | null) => formatDateTime(value),
+      render: (value: string | null) => <TimeText value={value} />,
     },
     {
       title: '操作',
@@ -397,14 +400,10 @@ export default function KeywordsPage() {
   ]
 
   return (
-    <div className="page-shell">
-      <div className="page-header">
-        <div>
-          <Title level={4} style={{ margin: 0 }}>关键词管理台</Title>
-          <Paragraph type="secondary" style={{ margin: '6px 0 0' }}>
-            恢复手动新增、别名维护、合并、命中重建、相似词提示和命中回查，回到旧版治理节奏。
-          </Paragraph>
-        </div>
+    <PageScaffold
+      title="关键词管理台"
+      description="恢复手动新增、别名维护、合并、命中重建、相似词提示和命中回查，回到旧版治理节奏。"
+      actions={(
         <Space wrap>
           <Link to="/hits">
             <Button>命中中心</Button>
@@ -413,7 +412,8 @@ export default function KeywordsPage() {
             <Button icon={<MergeOutlined />}>重复词扫描</Button>
           </a>
         </Space>
-      </div>
+      )}
+    >
 
       <Row gutter={[16, 16]}>
         <Col xs={24} xl={8}>
@@ -582,7 +582,7 @@ export default function KeywordsPage() {
                   <div className="meta-tags">
                     {log.keyword_entry_id && <Tag>{`主词 #${log.keyword_entry_id}`}</Tag>}
                     {log.related_keyword_entry_id && <Tag>{`相关 #${log.related_keyword_entry_id}`}</Tag>}
-                    <Tag>{formatDateTime(log.created_at)}</Tag>
+                    <Tag><TimeText value={log.created_at} /></Tag>
                   </div>
                   <Text type="secondary">{log.detail || '无补充信息'}</Text>
                 </Card>
@@ -635,6 +635,6 @@ export default function KeywordsPage() {
           </Form.Item>
         </Form>
       </Modal>
-    </div>
+    </PageScaffold>
   )
 }

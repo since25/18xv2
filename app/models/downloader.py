@@ -34,6 +34,9 @@ class DownloaderPackage(Base):
     has_successful_attempt: Mapped[bool] = mapped_column(default=False, nullable=False)
     completed_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
     index_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    ignored_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ignored_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    completed_media_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     raw_payload_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
     first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
@@ -106,6 +109,8 @@ class DownloaderTaskSnapshot(Base):
     __tablename__ = "downloader_task_snapshots"
     __table_args__ = (
         UniqueConstraint("node_key", "remote_task_id", name="uq_downloader_task_node_remote"),
+        Index("ix_downloader_tasks_node_created", "node_key", "remote_created_at"),
+        Index("ix_downloader_tasks_node_status", "node_key", "status"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -118,6 +123,12 @@ class DownloaderTaskSnapshot(Base):
     total_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     success_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     failed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    remote_created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    remote_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    total_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default="0")
+    downloaded_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default="0")
+    channel_title: Mapped[str | None] = mapped_column(Text, nullable=True)
     current_file_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     raw_payload_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
     observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)

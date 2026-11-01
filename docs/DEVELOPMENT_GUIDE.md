@@ -94,7 +94,41 @@ npm run dev
 
 RN 下载器相关配置只放在 `.env`：`DOWNLOADER_BASE_URL`、`DOWNLOADER_PASSWORD`、`DOWNLOADER_NODE_KEY`、`DOWNLOADER_TIMEOUT_SECONDS`、`DOWNLOADER_SYNC_INTERVAL_SECONDS`。密码不写入数据库、日志或前端响应。
 
-页面入口为 `/downloader`，后端控制面为 `/downloader/*`。候选携带资源包版本号；确认新版本后由 RN 增量批次跳过旧版本完整成功的消息。任务表展开行可查看历史快照。现场验收时先用“同步资源包”检查连接，再人工选择一条候选提交；测试环境只使用 mock HTTP 客户端。
+页面入口为 `/downloader`，后端控制面为 `/downloader/*`。下载器页面采用候选收件箱和任务看板双流模型：收件箱处理候选确认、忽略和 5 秒撤销，任务看板处理任务筛选与历史，点击任务后通过侧边检查抽屉查看文件详情。候选携带资源包版本号；确认新版本后由 RN 增量批次跳过旧版本完整成功的消息。现场验收时先用“同步资源包”检查连接，再人工选择一条候选提交；测试环境只使用 mock HTTP 客户端。
+
+### 4.1 下载器接口与页面参数
+
+下载器控制面新增或调整以下接口：
+
+- `GET /downloader/packages?view=candidates|ignored`：收件箱候选/已忽略视图，支持下载状态、白名单词、标题搜索和分页参数。
+- `POST /downloader/packages/ignore`、`POST /downloader/packages/unignore`：按候选或资源包忽略、恢复候选。
+- `GET /downloader/tasks`：支持 `status`、`since`、`until`、`channel`、`keyword_entry_id`、`search`、`page`、`page_size` 筛选；只显式传 `limit` 时保持旧任务列表格式和行为。
+- `GET /downloader/tasks/{id}/detail`：返回任务摘要、文件列表和失败文件信息。
+- `GET /downloader/summary`、`GET /downloader/channels`：返回任务统计和频道筛选项。
+- `POST /downloader/tasks/{id}/retry`：请求体可带 `only_failed`；RN 当前按任务重试且本来只重试失败文件，参数为兼容保留，对 RN 行为没有额外影响。
+
+数据库迁移 `20261101_0015` 为资源包增加 `ignored_at`、`ignored_reason`、`completed_media_count`；为任务快照增加 `remote_created_at`、`remote_updated_at`、`finished_at`、`total_bytes`、`downloaded_bytes`、`channel_title`，并增加按节点和远端创建时间、按节点和状态的索引。需要回滚时执行 `alembic downgrade 20261031_0014`。
+
+前端支持以下 URL 参数：`/downloader?view=inbox|tasks` 切换双流视图；任务看板可用 `task=<id>` 直接打开检查抽屉；任务筛选使用 `status`、`range`、`channel`、`kw`、`q`、`page`。
+
+与规范的偏差：
+
+1. 单文件重试不可行：RN 只有按任务重试接口，因此抽屉提供“重试全部失败文件”，不提供单项重试。
+2. “有更新 +N”依赖 `completed_media_count`；历史上没有该字段的已完成资源包只能显示“有更新”，不能计算 N。
+3. 提交接受 `pending` 候选；新页面的勾选是前端状态，保留 `/select` 以兼容旧调用。
+4. 文件历史读取 `total_size_bytes`、`downloaded_size_bytes`、`download_speed_bytes`，修复把格式化字符串误当整数导致字节数为 0 的问题。
+
+### 4.2 远程测试（Spark）
+
+使用 `scripts/remote-test.sh` 在远程测试机运行检查：
+
+```bash
+scripts/remote-test.sh backend
+scripts/remote-test.sh frontend
+scripts/remote-test.sh all
+```
+
+可通过 `REMOTE_TEST_HOST` 指定 SSH 主机别名（默认 `spark`），通过 `REMOTE_TEST_ROOT` 指定远程根目录（默认 `~/ci/18x_v2`）。脚本不同步 `.git`、`.venv`、`node_modules`、前端构建产物、`.env`、数据目录、cookies 文件及测试缓存；每个 worktree 使用远程独立子目录。后端环境复刻本机 venv：由 micromamba 提供相同 Python 小版本，按本机 `pip freeze` 冻结清单安装依赖，并从本机复制 `p115client` 包，避免间接依赖漂移。后端默认运行 `pytest tests -q -n 16`，前端测试使用 `--maxWorkers=6`，随后执行 build 和 lint。完整日志保存在远程检出目录的 `.remote-test-logs/`，本机只显示摘要和日志路径。
 
 ---
 

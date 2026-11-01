@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
@@ -8,7 +10,7 @@ from app.api.deps import get_db
 from app.core.config import get_settings
 from app.main import app
 from app.models.keywords import KeywordEntry
-from app.models.downloader import DownloaderTaskHistory
+from app.models.downloader import DownloaderTaskHistory, DownloaderTaskSnapshot
 from app.services.downloader import sync_service
 
 
@@ -101,3 +103,82 @@ def test_task_history_route_reads_persisted_snapshots(client, db_session):
 
     assert response.status_code == 200
     assert response.json()["items"][0]["status"] == "completed_with_errors"
+
+
+def test_packages_view_candidates_returns_counts(client, db_session):
+    db_session.add(
+        KeywordEntry(
+            canonical_name="Foo",
+            canonical_name_normalized="foo",
+            keyword_type="whitelist",
+            status="active",
+        )
+    )
+    db_session.commit()
+    assert client.post("/downloader/sync").status_code == 200
+
+    response = client.get("/downloader/packages?view=candidates")
+
+    assert response.status_code == 200
+    assert response.json()["counts"] == {"candidates": 1, "ignored": 0}
+    assert response.json()["total"] == 1
+
+
+def test_ignore_requires_candidate_or_package_ids(client):
+    response = client.post("/downloader/packages/ignore", json={})
+
+    assert response.status_code == 422
+
+
+def test_tasks_default_returns_structured_ui_fields(client, db_session):
+    db_session.add(
+        DownloaderTaskSnapshot(
+            node_key="rn",
+            remote_task_id="task-default",
+            status="downloading",
+            title="默认任务",
+            total_bytes=1000,
+            downloaded_bytes=400,
+            remote_created_at=datetime(2026, 11, 1, 0, 0, tzinfo=UTC),
+            channel_title="频道 A",
+        )
+    )
+    db_session.commit()
+
+    response = client.get("/downloader/tasks?page=1&page_size=20")
+
+    assert response.status_code == 200
+    row = next(item for item in response.json()["items"] if item["remote_task_id"] == "task-default")
+    assert row["total_bytes"] == 1000
+    assert row["downloaded_bytes"] == 400
+    assert row["remote_created_at"] is not None
+    assert row["channel_title"] == "频道 A"
+    assert "duration_seconds" in row
+    assert "download_speed_bytes" in row
+
+
+def test_tasks_limit_keeps_legacy_response_shape(client):
+    response = client.get("/downloader/tasks?limit=5")
+
+    assert response.status_code == 200
+    assert set(response.json()) == {"items", "total"}
+
+
+def test_missing_task_detail_returns_404(client):
+    response = client.get("/downloader/tasks/missing/detail")
+
+    assert response.status_code == 404
+
+
+def test_summary_route_returns_six_keys(client):
+    response = client.get("/downloader/summary")
+
+    assert response.status_code == 200
+    assert set(response.json()) == {
+        "today_count",
+        "today_bytes",
+        "week_count",
+        "week_bytes",
+        "active_count",
+        "week_failed_files",
+    }

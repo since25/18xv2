@@ -5,7 +5,9 @@ import type { SystemStatusResponse } from '@/api/types'
 import PageScaffold from '@/layout/PageScaffold'
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { formatDateTime } from '@/utils/format'
+import TimeText from '@/components/TimeText'
+import StatusTag from '@/components/StatusTag'
+import DataToolbar from '@/layout/DataToolbar'
 
 const { Paragraph, Text } = Typography
 
@@ -34,22 +36,22 @@ export default function AuthCenterPage() {
       <Card className="soft-card">
         <Descriptions column={1} bordered size="small">
           <Descriptions.Item label="服务状态">
-            ok
+            <StatusTag domain="auth" value="ok" />
           </Descriptions.Item>
           <Descriptions.Item label="授权模式">
             open_api_token
           </Descriptions.Item>
           <Descriptions.Item label="OpenAPI Token 状态">
-            {status?.token_status ?? '未知'}
+            <StatusTag domain="auth" value={status?.token_status ?? 'unknown'} />
           </Descriptions.Item>
           <Descriptions.Item label="最近错误">
             {status?.token_error || '无'}
           </Descriptions.Item>
           <Descriptions.Item label="错误时间">
-            {status?.token_error_at ? formatDateTime(status.token_error_at) : '—'}
+            {status?.token_error_at ? <TimeText value={status.token_error_at} /> : '—'}
           </Descriptions.Item>
           <Descriptions.Item label="Token 到期">
-            {status?.token_expires_at ? formatDateTime(status.token_expires_at) : '未记录'}
+            {status?.token_expires_at ? <TimeText value={status.token_expires_at} /> : '未记录'}
           </Descriptions.Item>
         </Descriptions>
       </Card>
@@ -62,9 +64,7 @@ export default function AuthCenterPage() {
           <Paragraph>
             主系统走的是 <Text code>access token / refresh token</Text> 模式。现在推荐直接使用扫码授权来初始化或重新授权 Open API token。
           </Paragraph>
-          <Link to="/auth-center/open-api-qr">
-            <Button type="primary">打开 Open API 扫码授权</Button>
-          </Link>
+          <DataToolbar left={<Link to="/auth-center/open-api-qr"><Button type="primary">打开 Open API 扫码授权</Button></Link>} />
         </Card>
 
         <Card
@@ -74,14 +74,14 @@ export default function AuthCenterPage() {
           <Paragraph>
             这条链路当前保存的是 Cookie 文件，主要服务于目录导出等 Cookie 场景，不会直接回写 Open API token。
           </Paragraph>
-          <Space wrap>
+          <DataToolbar left={<Space wrap>
             <Link to="/auth-center/qr-login">
               <Button type="primary">在前端中打开扫码登录</Button>
             </Link>
             <a href="/api/tools/qr-login" target="_blank" rel="noreferrer">
               <Button icon={<LinkOutlined />}>打开旧版扫码页</Button>
             </a>
-          </Space>
+          </Space>} />
         </Card>
 
         <Alert

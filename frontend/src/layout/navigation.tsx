@@ -27,7 +27,7 @@ export type NavGroup = {
 
 export const NAV_GROUPS: NavGroup[] = [
   {
-    label: 'Data',
+    label: '数据',
     items: [
       { key: '/imports', label: '导入批次', icon: <InboxOutlined /> },
       { key: '/nodes', label: '目录内容', icon: <ApartmentOutlined /> },
@@ -38,7 +38,7 @@ export const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
-    label: 'Workflow',
+    label: '流程',
     items: [
       { key: '/organize-tasks', label: '整理任务', icon: <ApartmentOutlined /> },
       { key: '/plans', label: '整理计划', icon: <OrderedListOutlined /> },
@@ -48,11 +48,11 @@ export const NAV_GROUPS: NavGroup[] = [
       { key: '/emby-media-actions', label: 'Emby 动作', icon: <PlaySquareOutlined /> },
       { key: '/dedupe', label: '文件去重', icon: <SafetyCertificateOutlined /> },
       { key: '/magnet-tasks', label: '磁力下载', icon: <CloudDownloadOutlined /> },
-      { key: '/downloader', label: '下载器资源包', icon: <CloudDownloadOutlined /> },
+      { key: '/downloader', label: '下载器', icon: <CloudDownloadOutlined /> },
     ],
   },
   {
-    label: 'System',
+    label: '系统',
     items: [
       { key: '/auth-center', label: '授权中心', icon: <SafetyCertificateOutlined /> },
       { key: '/settings', label: '系统状态', icon: <SettingOutlined /> },
@@ -68,4 +68,12 @@ export function getSelectedNavKey(pathname: string) {
       (item) => pathname === item.key || pathname.startsWith(`${item.key}/`),
     )?.key ?? ''
   )
+}
+
+export function getNavTrail(pathname: string): { group: string; page: string } | null {
+  const key = getSelectedNavKey(pathname)
+  if (!key) return null
+  const group = NAV_GROUPS.find((item) => item.items.some((navItem) => navItem.key === key))
+  const page = NAV_ITEMS.find((item) => item.key === key)
+  return group && page ? { group: group.label, page: page.label } : null
 }

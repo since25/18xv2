@@ -1,18 +1,12 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { Table, Tag, Button, Space, Typography, Card, Input, message } from 'antd'
+import { Table, Tag, Button, Space, Card, Input, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { api } from '@/api/client'
 import type { PlanDetail, PlanItem } from '@/api/types'
-
-const { Title } = Typography
-
-const CONFLICT_COLOR: Record<string, string> = {
-  none: 'green',
-  noop: 'default',
-  duplicate_target: 'red',
-  invalid_target: 'red',
-}
+import PageScaffold from '@/layout/PageScaffold'
+import DataToolbar from '@/layout/DataToolbar'
+import StatusTag from '@/components/StatusTag'
 
 export default function PlanDetailPage() {
   const { id } = useParams<{ id: string }>()
@@ -44,7 +38,7 @@ export default function PlanDetailPage() {
       title: '冲突',
       dataIndex: 'conflict_status',
       width: 130,
-      render: (v) => <Tag color={CONFLICT_COLOR[v] ?? 'orange'}>{v}</Tag>,
+      render: (v) => <StatusTag domain="workflow" value={v} />,
     },
     { title: '动作', dataIndex: 'action_type', width: 70 },
     { title: '来源路径', dataIndex: 'source_path', ellipsis: true },
@@ -53,16 +47,16 @@ export default function PlanDetailPage() {
     { title: '置信度', dataIndex: 'confidence', width: 80, render: (v) => v?.toFixed(2) },
   ]
 
-  if (!plan && !loading) return <div>计划不存在。</div>
+  if (!plan && !loading) return <PageScaffold title={`计划 #${id} 详情`}><div>计划不存在。</div></PageScaffold>
 
   return (
-    <div>
-      <Space style={{ marginBottom: 16 }} align="center">
+    <PageScaffold title={`计划 #${id} 详情`} description="查看计划项、冲突和目标路径。" actions={(
+      <Space align="center">
         <Button onClick={() => navigate('/plans')}>← 返回</Button>
-        <Title level={4} style={{ margin: 0 }}>计划 #{id} 详情</Title>
         {plan && <Tag>{plan.strategy_version}</Tag>}
         {plan && <Tag color={plan.dry_run ? 'gold' : 'green'}>{plan.dry_run ? 'dry' : 'real'}</Tag>}
       </Space>
+    )}>
       {plan && (
         <Card style={{ marginBottom: 12 }}>
           <Space wrap>
@@ -74,12 +68,7 @@ export default function PlanDetailPage() {
         </Card>
       )}
       <Card>
-        <Input
-          placeholder="搜索路径"
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          style={{ marginBottom: 12, width: 300 }}
-        />
+        <DataToolbar left={<Input placeholder="搜索路径" value={q} onChange={(e) => setQ(e.target.value)} style={{ width: 300 }} />} />
         <Table
           rowKey="id"
           dataSource={items}
@@ -90,7 +79,6 @@ export default function PlanDetailPage() {
           rowClassName={(r) => (r.conflict_status !== 'none' && r.conflict_status !== 'noop') ? 'row-conflict' : ''}
         />
       </Card>
-      <style>{`.row-conflict td { background: #fff1f0 !important; }`}</style>
-    </div>
+    </PageScaffold>
   )
 }

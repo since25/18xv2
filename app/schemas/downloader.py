@@ -27,3 +27,25 @@ class DownloaderCandidateListResponse(BaseModel):
 class DownloaderTaskListResponse(BaseModel):
     items: list[dict[str, Any]]
     total: int
+
+
+class DownloaderIgnoreRequest(BaseModel):
+    candidate_ids: list[int] | None = None
+    package_ids: list[int] | None = None
+    reason: str | None = None
+
+
+class DownloaderUnignoreRequest(BaseModel):
+    package_ids: list[int] = Field(min_length=1)
+
+
+class DownloaderRetryRequest(BaseModel):
+    only_failed: bool = False
+
+
+class DownloaderInboxResponse(BaseModel):
+    items: list[dict[str, Any]]
+    total: int
+    page: int
+    page_size: int
+    counts: dict[str, int]

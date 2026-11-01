@@ -13,16 +13,12 @@ import type {
   BatchPlanOperationResponse,
   JobDetail,
 } from '@/api/types'
-import { formatDateTime } from '@/utils/format'
+import TimeText from '@/components/TimeText'
+import PageScaffold from '@/layout/PageScaffold'
+import DataToolbar from '@/layout/DataToolbar'
+import StatusTag from '@/components/StatusTag'
 
-const { Title, Text } = Typography
-
-const JOB_COLOR: Record<string, string> = {
-  completed: 'green',
-  blocked: 'orange',
-  failed: 'red',
-  none: 'default',
-}
+const { Text } = Typography
 
 const JOB_STATUS_OPTIONS = [
   { value: 'none', label: '未执行 (none)' },
@@ -170,14 +166,14 @@ export default function PlansPage() {
       width: 100,
       render: (v: string | null) => {
         const normalized = v ?? 'none'
-        return <Tag color={JOB_COLOR[normalized] ?? 'default'}>{normalized}</Tag>
+        return <StatusTag domain="workflow" value={normalized} />
       },
     },
     {
       title: '创建时间',
       dataIndex: 'created_at',
       width: 165,
-      render: (v: string) => formatDateTime(v),
+      render: (v: string) => <TimeText value={v} />,
     },
     {
       title: '操作',
@@ -199,10 +195,10 @@ export default function PlansPage() {
   ]
 
   return (
-    <div>
+    <PageScaffold title="整理计划" description="筛选、执行和批量管理整理计划。">
       {/* 筛选和批量操作 */}
-      <Space style={{ marginBottom: 16 }} wrap>
-        <Title level={4} style={{ margin: 0 }}>整理计划</Title>
+      <DataToolbar left={(
+        <Space wrap>
         <Select
           placeholder="最近执行结果" style={{ width: 180 }} allowClear
           options={JOB_STATUS_OPTIONS}
@@ -219,7 +215,8 @@ export default function PlansPage() {
         <Input placeholder="最多项数" style={{ width: 90 }} value={maxItems} onChange={(e) => setMaxItems(e.target.value)} />
         <Checkbox checked={showCompleted} onChange={(e) => setShowCompleted(e.target.checked)}>显示已完成</Checkbox>
         <Button onClick={() => load()}>刷新</Button>
-      </Space>
+        </Space>
+      )} />
 
       {/* 执行选项 */}
       <Card size="small" style={{ marginBottom: 12 }}>
@@ -289,7 +286,7 @@ export default function PlansPage() {
                 <Space>
                   <Tag>{log.action}</Tag>
                   <span>#{log.id}</span>
-                  <Text type="secondary" style={{ fontSize: 12 }}>{formatDateTime(log.created_at)}</Text>
+                  <Text type="secondary" style={{ fontSize: 12 }}><TimeText value={log.created_at} /></Text>
                   <span>请求 {log.requested_count} / 完成 {log.processed_count}</span>
                   {log.errors?.length > 0 && <Tag color="red">失败 {log.errors.length}</Tag>}
                 </Space>
@@ -317,6 +314,6 @@ export default function PlansPage() {
           />
         </Card>
       )}
-    </div>
+    </PageScaffold>
   )
 }

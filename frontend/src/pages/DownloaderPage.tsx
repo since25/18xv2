@@ -1,177 +1,109 @@
-import { useEffect, useMemo, useState } from 'react'
-import { Alert, Button, Card, Input, Progress, Space, Table, Tag, Typography, message } from 'antd'
-import type { ColumnsType } from 'antd/es/table'
-import { PauseCircleOutlined, ReloadOutlined, SyncOutlined } from '@ant-design/icons'
-import PageScaffold from '@/layout/PageScaffold'
+import { useCallback, useEffect, useState } from 'react'
+import { Alert, Segmented, message } from 'antd'
+import { useSearchParams } from 'react-router-dom'
 import {
-  cancelDownloaderTask,
-  controlDownloader,
   getDownloaderStatus,
-  listDownloaderCandidates,
-  listDownloaderTaskHistory,
-  listDownloaderTasks,
-  retryDownloaderTask,
-  selectDownloaderCandidate,
-  submitDownloaderBatches,
-  syncDownloaderPackages,
-  syncDownloaderTasks,
-  type DownloaderCandidate,
+  getDownloaderSummary,
+  listInbox,
   type DownloaderStatus,
-  type DownloaderTask,
-  type DownloaderTaskHistory,
 } from '@/api/downloader'
+import PageScaffold from '@/layout/PageScaffold'
+import CandidatesInbox from './downloader/CandidatesInbox'
+import DownloaderHeader from './downloader/DownloaderHeader'
+import TasksBoard from './downloader/TasksBoard'
+import TaskInspector from './downloader/TaskInspector'
+
+type DownloaderView = 'inbox' | 'tasks'
+
+function parseView(value: string | null): DownloaderView {
+  return value === 'tasks' ? 'tasks' : 'inbox'
+}
 
 function errorText(error: unknown) {
   return error instanceof Error ? error.message : '请求失败'
 }
 
 export default function DownloaderPage() {
+  const [searchParams, setSearchParams] = useSearchParams()
   const [status, setStatus] = useState<DownloaderStatus | null>(null)
-  const [candidates, setCandidates] = useState<DownloaderCandidate[]>([])
-  const [tasks, setTasks] = useState<DownloaderTask[]>([])
-  const [taskHistory, setTaskHistory] = useState<Record<string, DownloaderTaskHistory[]>>({})
-  const [selected, setSelected] = useState<number[]>([])
-  const [search, setSearch] = useState('')
-  const [loading, setLoading] = useState(false)
+  const [counts, setCounts] = useState({ candidates: 0, ignored: 0 })
+  const [activeCount, setActiveCount] = useState(0)
+  const [loading, setLoading] = useState(true)
+  const taskId = searchParams.get('task')
+  const view = taskId ? 'tasks' : parseView(searchParams.get('view'))
 
-  const load = async () => {
+  const loadOverview = useCallback(async () => {
     setLoading(true)
     try {
-      const [statusPayload, candidatePayload, taskPayload] = await Promise.all([
+      const [statusPayload, inboxPayload, summaryPayload] = await Promise.all([
         getDownloaderStatus(),
-        listDownloaderCandidates({ search: search.trim() || undefined }),
-        listDownloaderTasks(),
+        listInbox({ view: 'candidates' }),
+        getDownloaderSummary(),
       ])
       setStatus(statusPayload)
-      setCandidates(candidatePayload.items ?? [])
-      setTasks(taskPayload.items ?? [])
+      setCounts(inboxPayload.counts ?? { candidates: inboxPayload.total, ignored: 0 })
+      setActiveCount(summaryPayload.active_count ?? 0)
     } catch (error) {
       message.error(errorText(error))
     } finally {
       setLoading(false)
     }
-  }
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => void load(), 0)
-    return () => window.clearTimeout(timer)
-    // 页面首次挂载只需读取一次；后续刷新由按钮和操作主动触发。
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const handleSelectionChange = async (keys: Array<string | number>) => {
-    const next = keys.map(Number)
-    const changed = [...new Set([...selected, ...next])].filter((id) => selected.includes(id) !== next.includes(id))
-    try {
-      await Promise.all(changed.map((id) => selectDownloaderCandidate(id, next.includes(id))))
-      setSelected(next)
-    } catch (error) {
-      message.error(errorText(error))
-    }
+  useEffect(() => {
+    const timer = window.setTimeout(() => { void loadOverview() }, 0)
+    return () => window.clearTimeout(timer)
+  }, [loadOverview])
+
+  function changeView(value: string | number) {
+    const next = parseView(String(value))
+    const nextParams = new URLSearchParams(searchParams)
+    nextParams.set('view', next)
+    setSearchParams(nextParams)
   }
 
-  const doSync = async () => {
-    setLoading(true)
-    try {
-      const result = await syncDownloaderPackages()
-      await syncDownloaderTasks()
-      message.success(`已同步 ${result.packages_seen} 个资源包，新增 ${result.candidates_created} 个候选`)
-      setSelected([])
-      await load()
-    } catch (error) {
-      message.error(errorText(error))
-      setLoading(false)
-    }
-  }
+  const openTask = useCallback((nextTaskId: string) => {
+    const nextParams = new URLSearchParams(searchParams)
+    nextParams.set('view', 'tasks')
+    nextParams.set('task', nextTaskId)
+    setSearchParams(nextParams)
+  }, [searchParams, setSearchParams])
 
-  const submit = async () => {
-    if (!selected.length) {
-      message.warning('请先选择候选资源包')
-      return
-    }
-    setLoading(true)
-    try {
-      const result = await submitDownloaderBatches(selected)
-      message.success(`已提交 ${result.submitted} 个下载批次，跳过 ${result.skipped} 个`)
-      setSelected([])
-      await load()
-    } catch (error) {
-      message.error(errorText(error))
-      setLoading(false)
-    }
-  }
-
-  // Columns are stable; action handlers call the current page loader explicitly.
-  const candidateColumns: ColumnsType<DownloaderCandidate> = useMemo(() => [
-    { title: '资源包', dataIndex: 'title', key: 'title', render: (value, row) => <Space direction="vertical" size={0}><Typography.Text strong>{value}</Typography.Text><Typography.Text type="secondary">{row.channel_title || '未标注频道'} · #{row.remote_package_id}</Typography.Text></Space> },
-    { title: '白名单命中', dataIndex: 'keyword', key: 'keyword', render: (value, row) => <Space><Tag color="blue">{value}</Tag><Typography.Text type="secondary">{row.matched_term}</Typography.Text></Space> },
-    { title: '资源包状态', key: 'package', render: (_, row) => <Space><Tag color={row.boundary_status === 'stable' ? 'green' : 'orange'}>{row.boundary_status}</Tag><Tag>{row.current_download_status}</Tag></Space> },
-    { title: '版本', key: 'revision', render: (_, row) => <Tag color={row.package_revision > (row.completed_revision ?? 0) ? 'gold' : undefined}>r{row.package_revision}</Tag> },
-    { title: '媒体', key: 'media', render: (_, row) => `${row.media_count} 个 / ${row.known_total_size || 0} bytes` },
-  ], [])
-
-  const taskColumns: ColumnsType<DownloaderTask> = useMemo(() => [
-    { title: '任务', dataIndex: 'title', key: 'title', render: (value, row) => <Space direction="vertical" size={0}><Typography.Text>{value || row.remote_task_id}</Typography.Text><Typography.Text type="secondary">{row.remote_task_id}</Typography.Text></Space> },
-    { title: '状态', dataIndex: 'status', key: 'status', render: (value) => <Tag color={value === 'completed' ? 'green' : value === 'failed' ? 'red' : 'blue'}>{value}</Tag> },
-    { title: '进度', key: 'progress', render: (_, row) => <Space direction="vertical" size={0} style={{ minWidth: 180 }}><Progress percent={row.total_count ? Math.round((row.success_count / row.total_count) * 100) : 0} size="small" /><Typography.Text type="secondary">{row.success_count}/{row.total_count} 成功，失败 {row.failed_count}</Typography.Text></Space> },
-    { title: '操作', key: 'actions', render: (_, row) => <Space><Button size="small" onClick={() => void cancelDownloaderTask(row.remote_task_id).then(load).catch((error) => message.error(errorText(error)))}>取消</Button><Button size="small" onClick={() => void retryDownloaderTask(row.remote_task_id).then(load).catch((error) => message.error(errorText(error)))}>重试</Button></Space> },
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  ], [])
-
-  const loadTaskHistory = async (taskId: string) => {
-    try {
-      const result = await listDownloaderTaskHistory(taskId)
-      setTaskHistory((current) => ({ ...current, [taskId]: result.items ?? [] }))
-    } catch (error) {
-      message.error(errorText(error))
-    }
-  }
-
-  const historyColumns: ColumnsType<DownloaderTaskHistory> = useMemo(() => [
-    { title: '观察时间', dataIndex: 'observed_at', key: 'observed_at' },
-    { title: '状态', dataIndex: 'status', key: 'status', render: (value) => <Tag>{value}</Tag> },
-    { title: '进度', key: 'progress', render: (_, row) => `${row.success_count}/${row.total_count} 成功，失败 ${row.failed_count}` },
-    { title: '文件快照', key: 'files', render: (_, row) => `${row.files.length} 个文件` },
-  ], [])
+  const closeTask = useCallback(() => {
+    const nextParams = new URLSearchParams(searchParams)
+    nextParams.delete('task')
+    setSearchParams(nextParams)
+  }, [searchParams, setSearchParams])
 
   return (
     <PageScaffold
       className="downloader-page"
-      title="下载器资源包"
-      description="用 18x 白名单和黑名单筛选 RN 下载器已扫描的资源包，确认后精确创建下载批次。"
-      actions={<Space><Button icon={<PauseCircleOutlined />} onClick={() => void controlDownloader('pause').then(load).catch((error) => message.error(errorText(error)))}>暂停下载</Button><Button onClick={() => void controlDownloader('resume').then(load).catch((error) => message.error(errorText(error)))}>恢复下载</Button><Button type="primary" icon={<SyncOutlined />} loading={loading} onClick={() => void doSync()}>同步资源包</Button></Space>}
+      title="下载器"
+      description="在候选收件箱中确认资源包，并在任务看板中跟踪下载进度。"
+      actions={<DownloaderHeader status={status} onSynced={() => void loadOverview()} />}
     >
-      {status && !status.enabled ? <Alert type="warning" showIcon message="RN 下载器未启用" description="请配置 DOWNLOADER_ENABLED、DOWNLOADER_BASE_URL 和 DOWNLOADER_PASSWORD。" /> : null}
-      {status && status.enabled && !status.remote_ready ? <Alert type="error" showIcon message="RN 下载器不可用" description={String(status.remote?.message || '请检查网络和登录密码。')} /> : null}
-      <Card title={`待确认候选（${candidates.length}）`} style={{ marginTop: 16 }} extra={<Space><Input.Search placeholder="按资源包标题筛选" allowClear value={search} onChange={(event) => setSearch(event.target.value)} onSearch={() => void load()} /><Button icon={<ReloadOutlined />} onClick={() => void load()}>刷新</Button><Button type="primary" disabled={!selected.length} onClick={() => void submit()}>确认并下载 ({selected.length})</Button></Space>}>
-        <Table rowKey="candidate_id" loading={loading} columns={candidateColumns} dataSource={candidates} rowSelection={{ selectedRowKeys: selected, onChange: (keys) => void handleSelectionChange(keys.filter((key): key is string | number => typeof key === 'string' || typeof key === 'number')) }} pagination={false} locale={{ emptyText: '暂无待确认候选；请先同步资源包' }} />
-      </Card>
-      <Card title="下载任务进度" style={{ marginTop: 16 }} extra={<Button icon={<ReloadOutlined />} onClick={() => void load()}>刷新任务</Button>}>
-        <Table
-          rowKey="remote_task_id"
-          loading={loading}
-          columns={taskColumns}
-          dataSource={tasks}
-          pagination={{ pageSize: 10 }}
-          expandable={{
-            onExpand: (expanded, row) => {
-              if (expanded && !taskHistory[row.remote_task_id]) void loadTaskHistory(row.remote_task_id)
-            },
-            expandedRowRender: (row) => (
-              <Table
-                rowKey="id"
-                size="small"
-                pagination={false}
-                loading={!taskHistory[row.remote_task_id]}
-                columns={historyColumns}
-                dataSource={taskHistory[row.remote_task_id] ?? []}
-                locale={{ emptyText: '暂无状态变化历史' }}
-              />
-            ),
-          }}
-          locale={{ emptyText: '暂无已同步的下载任务' }}
-        />
-      </Card>
+      {status && !status.enabled ? (
+        <Alert type="warning" showIcon title="RN 下载器未启用" description="请配置下载器连接后再同步资源包。" />
+      ) : null}
+      {status?.enabled && !status.remote_ready ? (
+        <Alert type="error" showIcon title="RN 下载器不可用" description={String(status.remote?.message || '请检查网络和登录密码。')} />
+      ) : null}
+      <Segmented
+        className="downloader-view-switcher"
+        value={view}
+        onChange={changeView}
+        options={[
+          { label: `候选收件箱 (${counts.candidates} 待确认)`, value: 'inbox' },
+          { label: `任务看板与历史 (${activeCount} 活跃)`, value: 'tasks' },
+        ]}
+      />
+      {view === 'inbox' ? (
+        <CandidatesInbox onCountsChange={setCounts} />
+      ) : (
+        <TasksBoard onActiveCountChange={setActiveCount} onOpenTask={openTask} />
+      )}
+      <TaskInspector taskId={taskId} onClose={closeTask} onChanged={() => void loadOverview()} />
+      {loading ? <span className="sr-only">正在加载下载器数据</span> : null}
     </PageScaffold>
   )
 }
