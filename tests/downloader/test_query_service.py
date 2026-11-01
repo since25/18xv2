@@ -68,7 +68,7 @@ def test_list_inbox_aggregates_multiple_keyword_candidates_per_package(db_sessio
     items, total, counts = DownloaderQueryService.list_inbox(db_session, view="candidates")
 
     assert total == 1
-    assert counts == {"candidates": 1, "ignored": 0}
+    assert counts == {"candidates": 1, "ignored": 0, "unmatched": 0}
     assert len(items) == 1
     assert len(items[0]["candidate_ids"]) == 2
     assert {item["keyword_entry_id"] for item in items[0]["keywords"]} == {first.id, second.id}
@@ -85,14 +85,14 @@ def test_ignore_and_unignore_package_is_idempotent_and_rematches(db_session):
     candidate_items, _, candidate_counts = DownloaderQueryService.list_inbox(db_session, view="candidates")
     ignored_items, _, ignored_counts = DownloaderQueryService.list_inbox(db_session, view="ignored")
     assert candidate_items == []
-    assert candidate_counts == {"candidates": 0, "ignored": 1}
+    assert candidate_counts == {"candidates": 0, "ignored": 1, "unmatched": 0}
     assert len(ignored_items) == 1
-    assert ignored_counts == {"candidates": 0, "ignored": 1}
+    assert ignored_counts == {"candidates": 0, "ignored": 1, "unmatched": 0}
 
     assert DownloaderQueryService.unignore_packages(db_session, [package_id]) == 1
     restored, _, restored_counts = DownloaderQueryService.list_inbox(db_session, view="candidates")
     assert len(restored) == 1
-    assert restored_counts == {"candidates": 1, "ignored": 0}
+    assert restored_counts == {"candidates": 1, "ignored": 0, "unmatched": 0}
     statuses = db_session.scalars(
         select(DownloaderPackageCandidate.status).where(DownloaderPackageCandidate.package_id == package_id)
     ).all()
@@ -153,6 +153,37 @@ def test_list_inbox_reports_new_media_and_filters_search_status_and_size(db_sess
     no_count, _, _ = DownloaderQueryService.list_inbox(db_session, view="candidates", search="older")
     assert no_completed[0]["new_media_count"] == 2
     assert no_count[0]["new_media_count"] is None
+
+
+def test_list_inbox_filters_by_channel_title(db_session):
+    entry = add_keyword(db_session, "Foo", "whitelist")
+    packages = [
+        DownloaderPackage(
+            node_key="rn",
+            remote_package_id=index,
+            title=f"Foo package {index}",
+            channel_title=channel,
+            boundary_status="stable",
+            current_download_status="never",
+            index_revision=1,
+            raw_payload_json="{}",
+        )
+        for index, channel in enumerate(["频道 A", "频道 B"], start=1)
+    ]
+    db_session.add_all(packages)
+    db_session.flush()
+    db_session.add_all(
+        [
+            DownloaderPackageCandidate(package_id=package.id, keyword_entry_id=entry.id, package_revision=1, matched_term="Foo")
+            for package in packages
+        ]
+    )
+    db_session.commit()
+
+    items, total, counts = DownloaderQueryService.list_inbox(db_session, view="candidates", channel_title="频道 B")
+    assert total == 1
+    assert items[0]["channel_title"] == "频道 B"
+    assert counts["candidates"] == 1
 
 
 def _seed_tasks(db_session):
@@ -356,7 +387,7 @@ def test_list_inbox_query_count_does_not_grow_with_package_count(db_session):
             assert len(statements) <= 5, (view, len(statements))
     finally:
         event.remove(engine, "before_cursor_execute", count_statement)
-    assert counts == {"candidates": 30, "ignored": 0}
+    assert counts == {"candidates": 30, "ignored": 0, "unmatched": 0}
 
 
 def test_ignore_channel_ignores_only_that_channels_inbox_packages_and_exposes_rn_errors(db_session):
@@ -381,9 +412,9 @@ def test_ignore_channel_ignores_only_that_channels_inbox_packages_and_exposes_rn
     assert len(package_ids) == 2
     remaining, _, counts = DownloaderQueryService.list_inbox(db_session, view="candidates")
     assert [item["channel_title"] for item in remaining] == ["Live channel"]
-    assert counts == {"candidates": 1, "ignored": 2}
+    assert counts == {"candidates": 1, "ignored": 2, "unmatched": 0}
     assert DownloaderQueryService.ignore_channel(db_session, "Dead channel") == []
 
     assert DownloaderQueryService.unignore_packages(db_session, package_ids) == 2
     _, _, restored_counts = DownloaderQueryService.list_inbox(db_session, view="candidates")
-    assert restored_counts == {"candidates": 3, "ignored": 0}
+    assert restored_counts == {"candidates": 3, "ignored": 0, "unmatched": 0}

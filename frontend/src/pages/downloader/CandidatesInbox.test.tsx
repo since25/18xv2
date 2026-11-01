@@ -6,10 +6,12 @@ import FloatingActionBar from './FloatingActionBar'
 
 const api = vi.hoisted(() => ({
   listInbox: vi.fn(),
+  listDownloaderChannels: vi.fn(),
   ignoreChannel: vi.fn(),
   ignorePackages: vi.fn(),
   unignorePackages: vi.fn(),
   submitDownloaderBatches: vi.fn(),
+  submitDownloaderPackages: vi.fn(),
 }))
 
 vi.mock('@/api/downloader', () => api)
@@ -41,13 +43,15 @@ describe('CandidatesInbox', () => {
 
   beforeEach(() => {
     api.listInbox.mockResolvedValue(inboxPayload())
+    api.listDownloaderChannels.mockResolvedValue(['频道 A', '频道 B'])
     api.ignorePackages.mockResolvedValue({ ignored: 1 })
     api.ignoreChannel.mockResolvedValue({ ignored: 3, package_ids: [1, 2, 3] })
     api.unignorePackages.mockResolvedValue({ restored: 1 })
     api.submitDownloaderBatches.mockResolvedValue({ submitted: 2, skipped: 0, failed: 0 })
+    api.submitDownloaderPackages.mockResolvedValue({ submitted: 1, skipped: 0, failed: 0 })
   })
 
-  it('shows channel errors and ignores a whole channel with undo', async () => {
+  it('shows channel errors and ignores a whole channel from the toolbar filter with undo', async () => {
     api.listInbox.mockResolvedValue(inboxPayload([
       { ...rows[0], current_download_status: 'failed', last_download_error: 'channel_unavailable', channel_error: 'channel_unavailable' },
     ]))
@@ -55,8 +59,15 @@ describe('CandidatesInbox', () => {
 
     expect(await screen.findByText('频道不可访问')).toBeTruthy()
     expect(screen.getByText('频道不可访问（可能已被封禁或转为私有）')).toBeTruthy()
+    // 行内不再放「忽略频道」
+    expect(screen.queryByRole('button', { name: /忽略频道/ })).toBeNull()
+    expect(screen.queryByRole('button', { name: '忽略此频道' })).toBeNull()
 
-    await userEvent.click(screen.getByRole('button', { name: '忽略频道 频道 A' }))
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: '频道筛选' }))
+    await userEvent.click(await screen.findByTitle('频道 A'))
+    await waitFor(() => expect(api.listInbox).toHaveBeenLastCalledWith(expect.objectContaining({ channelTitle: '频道 A' })))
+
+    await userEvent.click(screen.getByRole('button', { name: '忽略此频道' }))
     await waitFor(() => expect(api.ignoreChannel).toHaveBeenCalledWith('频道 A'))
     expect(await screen.findByText('已忽略频道「频道 A」的 3 个资源包')).toBeTruthy()
 
@@ -88,6 +99,27 @@ describe('CandidatesInbox', () => {
     expect(screen.getByText('2.4 GB · 18 媒体')).toBeInTheDocument()
     expect(screen.getByText('有更新 (+3)')).toBeInTheDocument()
     expect(screen.getAllByText(/写真/).length).toBeGreaterThan(0)
+  })
+
+  it('downloads a single row from its inline button', async () => {
+    render(<CandidatesInbox onCountsChange={vi.fn()} />)
+    await screen.findByText('春季写真 001')
+    await userEvent.click(screen.getByRole('button', { name: '下载 春季写真 001' }))
+    await waitFor(() => expect(api.submitDownloaderBatches).toHaveBeenCalledWith([11, 12]))
+  })
+
+  it('downloads unmatched packages by package id', async () => {
+    api.submitDownloaderBatches.mockClear()
+    const unmatched = { ...rows[1], package_id: 9, title: '未命中资源包', candidate_ids: [], keywords: [], boundary_status: 'stable' }
+    api.listInbox.mockImplementation(({ view }: { view: string }) =>
+      Promise.resolve(view === 'unmatched' ? inboxPayload([unmatched]) : inboxPayload()),
+    )
+    render(<CandidatesInbox onCountsChange={vi.fn()} />)
+    await screen.findByText('春季写真 001')
+    await userEvent.click(screen.getByTitle(/未命中/))
+    await userEvent.click(await screen.findByRole('button', { name: '下载 未命中资源包' }))
+    await waitFor(() => expect(api.submitDownloaderPackages).toHaveBeenCalledWith([9]))
+    expect(api.submitDownloaderBatches).not.toHaveBeenCalled()
   })
 
   it('submits all candidate ids for selected rows with Enter', async () => {

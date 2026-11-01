@@ -306,3 +306,44 @@ def test_sync_tasks_skips_unchanged_finished_tasks_and_fills_channel_by_chat_id(
     summary["updated_at"] = 1793531500.0
     DownloaderSyncService.sync_tasks(db_session, remote)
     assert detail_calls == ["task-9", "task-9"]
+
+
+def test_unmatched_package_is_listed_and_can_be_submitted_by_package(db_session):
+    from app.models.downloader import DownloaderSubmission
+    from app.services.downloader.query_service import DownloaderQueryService
+
+    add_keyword(db_session, "Foo", "whitelist")
+    client = FakeDownloader()
+    client.packages.append({"id": 4, "library_id": 4, "title": "Bar plain", "boundary_status": "stable", "current_download_status": "never", "index_revision": 1})
+    DownloaderSyncService.sync_packages(db_session, client)
+
+    items, total, counts = DownloaderQueryService.list_inbox(db_session, view="unmatched")
+    titles = {item["title"] for item in items}
+    # 命中白名单的 Foo One 不在未命中里，没命中的 Bar plain 在
+    assert "Bar plain" in titles
+    assert "Foo One" not in titles
+    assert counts["unmatched"] == total
+
+    bar = next(item for item in items if item["title"] == "Bar plain")
+    first = DownloaderSyncService.submit_packages(db_session, client, [bar["package_id"]])
+    second = DownloaderSyncService.submit_packages(db_session, client, [bar["package_id"]])
+    assert first.submitted == 1
+    assert second.skipped == 1
+    assert len(client.submitted) == 1
+    submission = db_session.scalar(select(DownloaderSubmission).where(DownloaderSubmission.package_id == bar["package_id"]))
+    assert submission.candidate_id is None
+
+    # 被忽略后从未命中视图消失
+    DownloaderQueryService.ignore_packages(db_session, package_ids=[bar["package_id"]])
+    after, _, _ = DownloaderQueryService.list_inbox(db_session, view="unmatched")
+    assert "Bar plain" not in {item["title"] for item in after}
+
+
+def test_submit_packages_rejects_unstable_package(db_session):
+    import pytest
+
+    client = FakeDownloader()
+    DownloaderSyncService.sync_packages(db_session, client)
+    unstable = db_session.scalar(select(DownloaderPackage).where(DownloaderPackage.remote_package_id == 2))
+    with pytest.raises(ValueError):
+        DownloaderSyncService.submit_packages(db_session, client, [unstable.id])

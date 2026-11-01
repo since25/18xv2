@@ -13,6 +13,11 @@ class DownloaderSubmitRequest(BaseModel):
     candidate_ids: list[int] = Field(min_length=1)
 
 
+class DownloaderPackageSubmitRequest(BaseModel):
+    # 未命中白名单的资源包直接按资源包 ID 提交
+    package_ids: list[int] = Field(min_length=1)
+
+
 class DownloaderControlRequest(BaseModel):
     state: Literal["pause", "resume"]
 

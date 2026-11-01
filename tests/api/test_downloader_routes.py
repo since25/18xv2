@@ -126,7 +126,7 @@ def test_packages_view_candidates_returns_counts(client, db_session):
     response = client.get("/downloader/packages?view=candidates")
 
     assert response.status_code == 200
-    assert response.json()["counts"] == {"candidates": 1, "ignored": 0}
+    assert response.json()["counts"] == {"candidates": 1, "ignored": 0, "unmatched": 0}
     assert response.json()["total"] == 1
 
 

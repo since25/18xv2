@@ -17,6 +17,7 @@ from app.schemas.downloader import (
     DownloaderInboxResponse,
     DownloaderRetryRequest,
     DownloaderSelectRequest,
+    DownloaderPackageSubmitRequest,
     DownloaderSubmitRequest,
     DownloaderTaskListResponse,
     DownloaderUnignoreRequest,
@@ -87,11 +88,12 @@ def sync_downloader(db: Session = Depends(get_db)) -> dict:
 
 @router.get("/packages", response_model=None)
 def list_downloader_candidates(
-    view: Literal["candidates", "ignored"] | None = Query(default=None),
+    view: Literal["candidates", "ignored", "unmatched"] | None = Query(default=None),
     download_status: str | None = Query(default=None),
     candidate_status: str | None = Query(default="pending"),
     keyword_entry_id: int | None = Query(default=None),
     search: str | None = Query(default=None),
+    channel_title: str | None = Query(default=None),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
@@ -103,6 +105,7 @@ def list_downloader_candidates(
             download_status=download_status,
             keyword_entry_id=keyword_entry_id,
             search=search,
+            channel_title=channel_title,
             page=page,
             page_size=page_size,
         )
@@ -174,6 +177,27 @@ def submit_downloader_batches(
             db,
             _client(),
             payload.candidate_ids,
+            node_key=get_settings().downloader_node_key,
+        )
+    except DownloaderRemoteError as error:
+        raise _remote_error(error) from error
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    return {"submitted": result.submitted, "skipped": result.skipped, "failed": result.failed, "items": result.items}
+
+
+@router.post("/packages/download")
+def submit_downloader_packages(
+    payload: DownloaderPackageSubmitRequest,
+    db: Session = Depends(get_db),
+) -> dict:
+    try:
+        result = DownloaderSyncService.submit_packages(
+            db,
+            _client(),
+            payload.package_ids,
             node_key=get_settings().downloader_node_key,
         )
     except DownloaderRemoteError as error:

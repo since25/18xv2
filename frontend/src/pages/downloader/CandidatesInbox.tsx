@@ -6,8 +6,10 @@ import { SearchOutlined } from '@ant-design/icons'
 import {
   ignoreChannel,
   ignorePackages,
+  listDownloaderChannels,
   listInbox,
   submitDownloaderBatches,
+  submitDownloaderPackages,
   unignorePackages,
   type InboxItem,
 } from '@/api/downloader'
@@ -24,7 +26,7 @@ type CandidatesInboxProps = {
   onCountsChange: (counts: { candidates: number; ignored: number }) => void
 }
 
-type InboxView = 'candidates' | 'ignored'
+type InboxView = 'candidates' | 'ignored' | 'unmatched'
 
 function errorText(error: unknown) {
   return error instanceof Error ? error.message : '请求失败'
@@ -33,15 +35,19 @@ function errorText(error: unknown) {
 export default function CandidatesInbox({ onCountsChange }: CandidatesInboxProps) {
   const [view, setView] = useState<InboxView>('candidates')
   const [items, setItems] = useState<InboxItem[]>([])
-  const [counts, setCounts] = useState({ candidates: 0, ignored: 0 })
+  const [counts, setCounts] = useState({ candidates: 0, ignored: 0, unmatched: 0 })
   const [page, setPage] = useState(1)
   const [search, setSearch] = useState('')
   const [downloadStatus, setDownloadStatus] = useState<string | undefined>()
   const [keywordEntryId, setKeywordEntryId] = useState<number | undefined>()
+  const [channelTitle, setChannelTitle] = useState<string | undefined>()
+  const [channels, setChannels] = useState<string[]>([])
   const [selected, setSelected] = useState<Set<number>>(() => new Set())
   const [fading, setFading] = useState<Set<number>>(() => new Set())
   const [loading, setLoading] = useState(false)
   const [submitting, setSubmitting] = useState(false)
+  // 行内「下载」正在提交的资源包，用于单行按钮的加载状态
+  const [submittingRowId, setSubmittingRowId] = useState<number | null>(null)
   const searchRef = useRef<InputRef | null>(null)
   const lastSelectedIndex = useRef<number | null>(null)
 
@@ -53,17 +59,18 @@ export default function CandidatesInbox({ onCountsChange }: CandidatesInboxProps
         search: search.trim() || undefined,
         downloadStatus,
         keywordEntryId,
+        channelTitle,
         page: requestedPage,
       })
       setItems(payload.items ?? [])
-      setCounts(payload.counts ?? { candidates: payload.total, ignored: 0 })
+      setCounts({ unmatched: 0, ...(payload.counts ?? { candidates: payload.total, ignored: 0 }) })
       onCountsChange(payload.counts ?? { candidates: payload.total, ignored: 0 })
     } catch (error) {
       message.error(errorText(error))
     } finally {
       setLoading(false)
     }
-  }, [downloadStatus, keywordEntryId, onCountsChange, page, search, view])
+  }, [channelTitle, downloadStatus, keywordEntryId, onCountsChange, page, search, view])
 
   const commitIgnore = useCallback(async (packageIds: number[]) => {
     await ignorePackages({ packageIds })
@@ -75,6 +82,11 @@ export default function CandidatesInbox({ onCountsChange }: CandidatesInboxProps
     const timer = window.setTimeout(() => { void load() }, 0)
     return () => window.clearTimeout(timer)
   }, [load])
+
+  useEffect(() => {
+    // 频道很少，进页面取一次作为频道筛选项
+    listDownloaderChannels().then(setChannels).catch(() => setChannels([]))
+  }, [])
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -105,15 +117,26 @@ export default function CandidatesInbox({ onCountsChange }: CandidatesInboxProps
     return [...values].map(([value, label]) => ({ value, label }))
   }, [items])
 
-  async function submitSelected() {
+  function submitSelected() {
     if (!selectedItems.length || submitting) return
-    const packageIds = selectedItems.map((item) => item.package_id)
-    const candidateIds = selectedItems.flatMap((item) => item.candidate_ids)
+    return submitItems(selectedItems)
+  }
+
+  async function submitItems(targets: InboxItem[], rowId: number | null = null) {
+    if (submitting) return
+    const packageIds = targets.map((item) => item.package_id)
+    const candidateIds = targets.flatMap((item) => item.candidate_ids)
     setSubmitting(true)
+    setSubmittingRowId(rowId)
     try {
-      const result = await submitDownloaderBatches(candidateIds)
+      // 未命中视图没有白名单候选，按资源包直接提交
+      const result = view === 'unmatched' ? await submitDownloaderPackages(packageIds) : await submitDownloaderBatches(candidateIds)
       setFading(new Set(packageIds))
-      setSelected(new Set())
+      setSelected((current) => {
+        const next = new Set(current)
+        packageIds.forEach((id) => next.delete(id))
+        return next
+      })
       const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
       if (!reduced) await new Promise((resolve) => window.setTimeout(resolve, 200))
       setFading(new Set())
@@ -125,6 +148,7 @@ export default function CandidatesInbox({ onCountsChange }: CandidatesInboxProps
       message.error(errorText(error))
     } finally {
       setSubmitting(false)
+      setSubmittingRowId(null)
     }
   }
 
@@ -182,13 +206,15 @@ export default function CandidatesInbox({ onCountsChange }: CandidatesInboxProps
     })
   }
 
-  async function ignoreWholeChannel(channelTitle: string) {
+  async function ignoreWholeChannel(targetChannel: string) {
     try {
-      const result = await ignoreChannel(channelTitle)
-      await load()
+      const result = await ignoreChannel(targetChannel)
+      // 忽略后清掉频道筛选，回到全部候选（筛选变化会自动重新加载）
+      setChannelTitle(undefined)
+      setPage(1)
       notification.open({
         key: 'downloader-ignore-channel',
-        title: `已忽略频道「${channelTitle}」的 ${result.ignored} 个资源包`,
+        title: `已忽略频道「${targetChannel}」的 ${result.ignored} 个资源包`,
         description: '可以在 5 秒内撤销，之后也能在「已忽略」里逐个恢复。',
         btn: <Button size="small" onClick={() => {
           notification.destroy('downloader-ignore-channel')
@@ -248,8 +274,8 @@ export default function CandidatesInbox({ onCountsChange }: CandidatesInboxProps
       key: 'actions',
       render: (_, item) => view === 'ignored' ? <Button aria-label="恢复" className="downloader-row-action" size="small" onClick={() => void restore(item)}>恢复</Button> : (
         <Space size={4} wrap>
+          <Button aria-label={`下载 ${item.title}`} className="downloader-row-action" size="small" type="primary" loading={submittingRowId === item.package_id} disabled={(submitting && submittingRowId !== item.package_id) || (item.boundary_status !== undefined && item.boundary_status !== 'stable')} title={item.boundary_status !== undefined && item.boundary_status !== 'stable' ? '上游还在整理，暂不可下载' : undefined} onClick={() => void submitItems([item], item.package_id)}>下载</Button>
           <Button aria-label="忽略" className="downloader-row-action" size="small" onClick={() => ignoreOne(item)}>忽略</Button>
-          {item.channel_title ? <Button aria-label={`忽略频道 ${item.channel_title}`} className="downloader-row-action" size="small" type="link" danger={Boolean(item.channel_error)} onClick={() => void ignoreWholeChannel(item.channel_title as string)}>忽略频道</Button> : null}
         </Space>
       ),
     },
@@ -258,8 +284,8 @@ export default function CandidatesInbox({ onCountsChange }: CandidatesInboxProps
   return (
     <section className="downloader-inbox" data-testid="candidates-inbox" aria-label="候选收件箱">
       <DataToolbar
-        left={<Segmented value={view} onChange={(value) => { setView(value as InboxView); setPage(1); setSelected(new Set()) }} options={[{ label: `待确认 (${counts.candidates})`, value: 'candidates' }, { label: `已忽略 (${counts.ignored})`, value: 'ignored' }]} />}
-        right={<Space wrap><Input ref={searchRef} prefix={<SearchOutlined />} allowClear placeholder="搜索资源包" value={search} onChange={(event) => { setSearch(event.target.value); setPage(1) }} /><Select allowClear placeholder="白名单命中词" options={keywordOptions} value={keywordEntryId} onChange={(value) => { setKeywordEntryId(value); setPage(1) }} /><Select allowClear placeholder="下载状态" value={downloadStatus} onChange={(value) => { setDownloadStatus(value); setPage(1) }} options={[{ label: '全部', value: undefined }, { label: '未下载', value: 'never' }, { label: '有更新', value: 'outdated' }, { label: '曾失败', value: 'failed' }]} /></Space>}
+        left={<Segmented value={view} onChange={(value) => { setView(value as InboxView); setPage(1); setSelected(new Set()); if (value === 'unmatched') setKeywordEntryId(undefined) }} options={[{ label: `待确认 (${counts.candidates})`, value: 'candidates' }, { label: `未命中 (${counts.unmatched})`, value: 'unmatched' }, { label: `已忽略 (${counts.ignored})`, value: 'ignored' }]} />}
+        right={<Space wrap><Input ref={searchRef} prefix={<SearchOutlined />} allowClear placeholder="搜索资源包" value={search} onChange={(event) => { setSearch(event.target.value); setPage(1) }} /><Select allowClear placeholder="频道" aria-label="频道筛选" options={channels.map((value) => ({ value, label: value }))} value={channelTitle} onChange={(value) => { setChannelTitle(value); setPage(1); setSelected(new Set()) }} />{channelTitle && view === 'candidates' ? <Button danger onClick={() => void ignoreWholeChannel(channelTitle)}>忽略此频道</Button> : null}{view === 'unmatched' ? null : <Select allowClear placeholder="白名单命中词" options={keywordOptions} value={keywordEntryId} onChange={(value) => { setKeywordEntryId(value); setPage(1) }} />}<Select allowClear placeholder="下载状态" value={downloadStatus} onChange={(value) => { setDownloadStatus(value); setPage(1) }} options={[{ label: '全部', value: undefined }, { label: '未下载', value: 'never' }, { label: '有更新', value: 'outdated' }, { label: '曾失败', value: 'failed' }, { label: '已完成', value: 'completed' }]} /></Space>}
       />
       <Table<InboxItem>
         className="downloader-inbox-table"
@@ -267,11 +293,11 @@ export default function CandidatesInbox({ onCountsChange }: CandidatesInboxProps
         loading={loading}
         columns={columns}
         dataSource={visibleItems}
-        pagination={{ current: page, pageSize: 50, total: view === 'candidates' ? counts.candidates : counts.ignored, hideOnSinglePage: true, onChange: (nextPage) => setPage(nextPage) }}
+        pagination={{ current: page, pageSize: 50, total: counts[view], hideOnSinglePage: true, onChange: (nextPage) => setPage(nextPage) }}
         rowClassName={(item) => fading.has(item.package_id) ? 'downloader-row-fading' : ''}
-        locale={{ emptyText: <EmptyState title={view === 'ignored' ? '暂无已忽略资源包' : '暂无待确认候选'} description="可以先同步资源包，或调整筛选条件。" /> }}
+        locale={{ emptyText: <EmptyState title={{ candidates: '暂无待确认候选', unmatched: '暂无未命中资源包', ignored: '暂无已忽略资源包' }[view]} description="可以先同步资源包，或调整筛选条件。" /> }}
       />
-      <FloatingActionBar count={selectedItems.length} totalBytes={selectedBytes} onSelectAll={() => setSelected(new Set(visibleItems.map((item) => item.package_id)))} onClear={() => setSelected(new Set())} onIgnore={ignoreSelected} onSubmit={() => void submitSelected()} loading={submitting} />
+      <FloatingActionBar count={selectedItems.length} totalBytes={selectedBytes} onSelectAll={() => setSelected(new Set(visibleItems.map((item) => item.package_id)))} onClear={() => setSelected(new Set())} onIgnore={ignoreSelected} onSubmit={() => void submitSelected()} loading={submitting && submittingRowId === null} />
     </section>
   )
 }

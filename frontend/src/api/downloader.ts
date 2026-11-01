@@ -33,6 +33,7 @@ export interface InboxItem {
   media_count: number
   known_total_size: number
   current_download_status: string
+  boundary_status?: string
   index_revision: number
   completed_revision: number | null
   new_media_count: number | null
@@ -49,7 +50,7 @@ export interface InboxResponse {
   total: number
   page: number
   page_size: number
-  counts: { candidates: number; ignored: number }
+  counts: { candidates: number; ignored: number; unmatched?: number }
 }
 
 export interface TaskRow {
@@ -124,9 +125,10 @@ export interface TaskFilters {
 }
 
 export interface InboxFilters {
-  view?: 'candidates' | 'ignored'
+  view?: 'candidates' | 'ignored' | 'unmatched'
   downloadStatus?: string
   keywordEntryId?: number
+  channelTitle?: string
   search?: string
   page?: number
   pageSize?: number
@@ -163,6 +165,7 @@ export function listInbox(params: InboxFilters = {}) {
     ['download_status', params.downloadStatus],
     ['keyword_entry_id', params.keywordEntryId],
     ['search', params.search],
+    ['channel_title', params.channelTitle],
     ['page', params.page ?? 1],
     ['page_size', params.pageSize ?? 50],
   ])
@@ -175,6 +178,13 @@ export function ignorePackages(payload: { candidateIds?: number[]; packageIds?: 
   if (payload.packageIds) body.package_ids = payload.packageIds
   if (payload.reason) body.reason = payload.reason
   return api.post<{ ignored: number }>('/downloader/packages/ignore', body)
+}
+
+// 未命中白名单的资源包按资源包 ID 直接提交下载
+export function submitDownloaderPackages(packageIds: number[]) {
+  return api.post<{ submitted: number; skipped: number; failed: number }>('/downloader/packages/download', {
+    package_ids: packageIds,
+  })
 }
 
 export function ignoreChannel(channelTitle: string) {

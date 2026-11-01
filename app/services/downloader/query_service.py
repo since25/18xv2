@@ -99,13 +99,18 @@ class DownloaderQueryService:
         package: DownloaderPackage,
         candidates: list[DownloaderPackageCandidate],
         *,
-        view: Literal["candidates", "ignored"],
+        view: Literal["candidates", "ignored", "unmatched"],
         download_status: str | None,
         keyword_entry_id: int | None,
         search: str | None,
+        channel_title: str | None = None,
     ) -> bool:
         if view == "candidates":
             if package.ignored_at is not None or not candidates:
+                return False
+        elif view == "unmatched":
+            # 未命中：没被忽略，且当前版本没有任何未作废的白名单候选
+            if package.ignored_at is not None or candidates:
                 return False
         elif package.ignored_at is None:
             return False
@@ -119,6 +124,8 @@ class DownloaderQueryService:
         ):
             return False
         if search and search.casefold() not in (package.title or "").casefold():
+            return False
+        if channel_title and package.channel_title != channel_title:
             return False
         return True
 
@@ -148,6 +155,7 @@ class DownloaderQueryService:
             "media_count": package.media_count,
             "known_total_size": package.known_total_size,
             "current_download_status": package.current_download_status,
+            "boundary_status": package.boundary_status,
             "index_revision": package.index_revision,
             "completed_revision": package.completed_revision,
             "new_media_count": new_media_count,
@@ -173,10 +181,11 @@ class DownloaderQueryService:
     def list_inbox(
         db: Session,
         *,
-        view: Literal["candidates", "ignored"],
+        view: Literal["candidates", "ignored", "unmatched"],
         download_status: str | None = None,
         keyword_entry_id: int | None = None,
         search: str | None = None,
+        channel_title: str | None = None,
         sort: Literal["published_at", "size", "media_count"] = "published_at",
         page: int = 1,
         page_size: int = 50,
@@ -188,52 +197,34 @@ class DownloaderQueryService:
             select(DownloaderPackageCandidate).order_by(DownloaderPackageCandidate.id)
         ).all():
             all_candidates_by_package.setdefault(candidate.package_id, []).append(candidate)
-        candidates_by_package: dict[int, list[DownloaderPackageCandidate]] = {}
-        for package in packages:
-            statuses = {"pending", "selected"} if view == "candidates" else None
-            candidates_by_package[package.id] = DownloaderQueryService._filter_candidates(
-                package, all_candidates_by_package.get(package.id, []), current_only=True, statuses=statuses
-            )
-
+        # 各视图用到的候选口径：待确认看 pending/selected，已忽略和未命中先取全部
+        view_statuses: dict[str, set[str] | None] = {
+            "candidates": {"pending", "selected"},
+            "ignored": None,
+            "unmatched": None,
+        }
+        filters = {
+            "download_status": download_status,
+            "keyword_entry_id": keyword_entry_id,
+            "search": search,
+            "channel_title": channel_title,
+        }
         matching: list[tuple[DownloaderPackage, list[DownloaderPackageCandidate]]] = []
-        candidate_count = ignored_count = 0
+        counts = {name: 0 for name in view_statuses}
         for package in packages:
-            candidates = candidates_by_package[package.id]
-            if DownloaderQueryService._inbox_matches(
-                package,
-                candidates,
-                view="candidates",
-                download_status=download_status,
-                keyword_entry_id=keyword_entry_id,
-                search=search,
-            ):
-                candidate_count += 1
-            ignored_candidates = candidates
-            if view == "ignored":
-                ignored_candidates = DownloaderQueryService._filter_candidates(
-                    package, all_candidates_by_package.get(package.id, []), current_only=True, statuses=None
+            package_candidates = all_candidates_by_package.get(package.id, [])
+            for name, statuses in view_statuses.items():
+                candidates = DownloaderQueryService._filter_candidates(
+                    package, package_candidates, current_only=True, statuses=statuses
                 )
-            if DownloaderQueryService._inbox_matches(
-                package,
-                ignored_candidates,
-                view="ignored",
-                download_status=download_status,
-                keyword_entry_id=keyword_entry_id,
-                search=search,
-            ):
-                ignored_count += 1
-            if DownloaderQueryService._inbox_matches(
-                package,
-                candidates,
-                view=view,
-                download_status=download_status,
-                keyword_entry_id=keyword_entry_id,
-                search=search,
-            ):
-                selected_candidates = candidates
-                if view == "ignored":
-                    selected_candidates = ignored_candidates
-                matching.append((package, selected_candidates))
+                if name == "unmatched":
+                    # 已作废的候选不算命中（如黑名单排除），提交后状态各异，所以按排除法判断
+                    candidates = [candidate for candidate in candidates if candidate.status != "dismissed"]
+                if not DownloaderQueryService._inbox_matches(package, candidates, view=name, **filters):
+                    continue
+                counts[name] += 1
+                if name == view:
+                    matching.append((package, candidates))
 
         def sort_key(item: tuple[DownloaderPackage, list[DownloaderPackageCandidate]]):
             package = item[0]
@@ -248,7 +239,7 @@ class DownloaderQueryService:
         safe_size = min(max(page_size, 1), 200)
         start = (safe_page - 1) * safe_size
         items = [DownloaderQueryService._inbox_item(db, package, candidates) for package, candidates in matching[start : start + safe_size]]
-        return items, len(matching), {"candidates": candidate_count, "ignored": ignored_count}
+        return items, len(matching), counts
 
     @staticmethod
     def ignore_packages(

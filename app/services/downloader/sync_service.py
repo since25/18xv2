@@ -460,71 +460,108 @@ class DownloaderSyncService:
             revision = package.index_revision or 0
             if candidate.package_revision != revision:
                 raise ValueError(f"candidate {candidate_id} 对应的资源包版本已更新，请重新同步")
-            mode = "incremental"
-            key = f"18x:{node_key}:package:{package.remote_package_id}:r{revision}:{mode}"
-            existing = db.scalar(select(DownloaderSubmission).where(DownloaderSubmission.idempotency_key == key))
-            if existing is not None and existing.status == "submitted":
-                candidate.status = "submitted"
-                skipped += 1
-                items.append({"candidate_id": candidate.id, "submission_id": existing.id, "remote_task_id": existing.remote_task_id, "status": existing.status})
-                continue
-            try:
-                payload = client.submit_package(package.remote_package_id, key, mode=mode)
-                batch = payload.get("batch") if isinstance(payload, dict) else {}
-                batch = batch if isinstance(batch, dict) else {}
-                if existing is None:
-                    existing = DownloaderSubmission(
-                        package_id=package.id,
-                        candidate_id=candidate.id,
-                        package_revision=revision,
-                        download_mode=mode,
-                        idempotency_key=key,
-                    )
-                    db.add(existing)
-                if not batch:
-                    existing.status = "no_new_items"
-                    existing.remote_batch_id = None
-                    existing.remote_task_id = None
-                    existing.error_message = None
-                    candidate.status = "no_new_items"
-                    skipped += 1
-                    items.append({"candidate_id": candidate.id, "submission_id": existing.id, "status": existing.status})
-                    continue
-                existing.remote_batch_id = _int(batch.get("id"), 0) or None
-                existing.remote_task_id = str(batch.get("task_id")) if batch.get("task_id") else None
-                existing.status = "submitted"
-                existing.error_message = None
-                candidate.status = "submitted"
+            outcome, item = DownloaderSyncService._submit_package(db, client, package, candidate, node_key=node_key)
+            items.append(item)
+            if outcome == "submitted":
                 submitted += 1
-                items.append({"candidate_id": candidate.id, "submission_id": existing.id, "remote_task_id": existing.remote_task_id, "status": existing.status})
-            except DownloaderRemoteError as exc:
-                if existing is None:
-                    existing = DownloaderSubmission(
-                        package_id=package.id,
-                        candidate_id=candidate.id,
-                        package_revision=revision,
-                        download_mode=mode,
-                        idempotency_key=key,
-                    )
-                    db.add(existing)
-                existing.status = "failed"
-                existing.error_message = str(exc)
-                db.commit()
-                raise
-            except Exception as exc:
-                if existing is None:
-                    existing = DownloaderSubmission(
-                        package_id=package.id,
-                        candidate_id=candidate.id,
-                        package_revision=revision,
-                        download_mode=mode,
-                        idempotency_key=key,
-                    )
-                    db.add(existing)
-                existing.status = "failed"
-                existing.error_message = str(exc)
+            elif outcome == "skipped":
+                skipped += 1
+            else:
                 failed += 1
-                items.append({"candidate_id": candidate.id, "submission_id": existing.id, "status": "failed", "error": "remote submission failed"})
+        db.commit()
+        return SubmissionSummary(submitted, skipped, failed, items)
+
+    @staticmethod
+    def _submit_package(
+        db: Session,
+        client: Any,
+        package: DownloaderPackage,
+        candidate: DownloaderPackageCandidate | None,
+        *,
+        node_key: str,
+    ) -> tuple[str, dict[str, Any]]:
+        """提交一个资源包的当前版本；candidate 为空表示未命中白名单、直接按资源包提交。
+
+        返回 (submitted|skipped|failed, 明细)。远端错误会先落库再抛出。
+        """
+        revision = package.index_revision or 0
+        mode = "incremental"
+        key = f"18x:{node_key}:package:{package.remote_package_id}:r{revision}:{mode}"
+        ref: dict[str, Any] = {"candidate_id": candidate.id} if candidate is not None else {"package_id": package.id}
+        existing = db.scalar(select(DownloaderSubmission).where(DownloaderSubmission.idempotency_key == key))
+        if existing is not None and existing.status == "submitted":
+            if candidate is not None:
+                candidate.status = "submitted"
+            return "skipped", {**ref, "submission_id": existing.id, "remote_task_id": existing.remote_task_id, "status": existing.status}
+
+        def ensure_submission() -> DownloaderSubmission:
+            nonlocal existing
+            if existing is None:
+                existing = DownloaderSubmission(
+                    package_id=package.id,
+                    candidate_id=candidate.id if candidate is not None else None,
+                    package_revision=revision,
+                    download_mode=mode,
+                    idempotency_key=key,
+                )
+                db.add(existing)
+            return existing
+
+        try:
+            payload = client.submit_package(package.remote_package_id, key, mode=mode)
+            batch = payload.get("batch") if isinstance(payload, dict) else {}
+            batch = batch if isinstance(batch, dict) else {}
+            submission = ensure_submission()
+            if not batch:
+                submission.status = "no_new_items"
+                submission.remote_batch_id = None
+                submission.remote_task_id = None
+                submission.error_message = None
+                if candidate is not None:
+                    candidate.status = "no_new_items"
+                return "skipped", {**ref, "submission_id": submission.id, "status": submission.status}
+            submission.remote_batch_id = _int(batch.get("id"), 0) or None
+            submission.remote_task_id = str(batch.get("task_id")) if batch.get("task_id") else None
+            submission.status = "submitted"
+            submission.error_message = None
+            if candidate is not None:
+                candidate.status = "submitted"
+            return "submitted", {**ref, "submission_id": submission.id, "remote_task_id": submission.remote_task_id, "status": submission.status}
+        except DownloaderRemoteError as exc:
+            submission = ensure_submission()
+            submission.status = "failed"
+            submission.error_message = str(exc)
+            db.commit()
+            raise
+        except Exception as exc:
+            submission = ensure_submission()
+            submission.status = "failed"
+            submission.error_message = str(exc)
+            return "failed", {**ref, "submission_id": submission.id, "status": "failed", "error": "remote submission failed"}
+
+    @staticmethod
+    def submit_packages(db: Session, client: Any, package_ids: list[int], *, node_key: str = "rn") -> SubmissionSummary:
+        """按资源包直接提交下载，用于没有命中白名单的资源包。"""
+        if not package_ids:
+            raise ValueError("至少选择一个资源包")
+        submitted = skipped = failed = 0
+        items: list[dict[str, Any]] = []
+        for package_id in dict.fromkeys(package_ids):
+            package = db.scalar(
+                select(DownloaderPackage).where(DownloaderPackage.id == int(package_id)).with_for_update()
+            )
+            if package is None:
+                raise LookupError(f"package {package_id} not found")
+            if package.boundary_status != "stable":
+                raise ValueError(f"资源包 {package_id} 上游尚未整理完成，暂不可下载")
+            outcome, item = DownloaderSyncService._submit_package(db, client, package, None, node_key=node_key)
+            items.append(item)
+            if outcome == "submitted":
+                submitted += 1
+            elif outcome == "skipped":
+                skipped += 1
+            else:
+                failed += 1
         db.commit()
         return SubmissionSummary(submitted, skipped, failed, items)
 
