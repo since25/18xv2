@@ -320,3 +320,40 @@ def test_summary_counts_today_week_active_and_failed_files(db_session):
         "active_count": 2,
         "week_failed_files": 1,
     }
+
+
+def test_list_inbox_query_count_does_not_grow_with_package_count(db_session):
+    from sqlalchemy import event
+
+    add_keyword(db_session, "Foo", "whitelist")
+    remote = FakePackageRemote(
+        [
+            {
+                "id": index,
+                "title": f"Foo package {index}",
+                "boundary_status": "stable",
+                "current_download_status": "never",
+                "index_revision": 1,
+                "published_at": "2026-10-28T06:05:00+00:00",
+            }
+            for index in range(1, 31)
+        ]
+    )
+    DownloaderSyncService.sync_packages(db_session, remote)
+
+    statements: list[str] = []
+
+    def count_statement(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+
+    engine = db_session.get_bind()
+    event.listen(engine, "before_cursor_execute", count_statement)
+    try:
+        for view in ("candidates", "ignored"):
+            statements.clear()
+            _, total, counts = DownloaderQueryService.list_inbox(db_session, view=view, page_size=1)
+            # 30 个资源包时仍只需固定几条查询，不再逐包查询候选
+            assert len(statements) <= 5, (view, len(statements))
+    finally:
+        event.remove(engine, "before_cursor_execute", count_statement)
+    assert counts == {"candidates": 30, "ignored": 0}

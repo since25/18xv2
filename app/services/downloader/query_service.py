@@ -70,18 +70,13 @@ class DownloaderQueryService:
     """下载器收件箱、任务看板和统计信息的查询服务。"""
 
     @staticmethod
-    def _package_candidates(
-        db: Session,
+    def _filter_candidates(
         package: DownloaderPackage,
+        candidates: list[DownloaderPackageCandidate],
         *,
         current_only: bool,
         statuses: set[str] | None = None,
     ) -> list[DownloaderPackageCandidate]:
-        candidates = list(
-            db.scalars(
-                select(DownloaderPackageCandidate).where(DownloaderPackageCandidate.package_id == package.id)
-            ).all()
-        )
         if current_only:
             revision = package.index_revision or 0
             candidates = [candidate for candidate in candidates if candidate.package_revision == revision]
@@ -183,11 +178,17 @@ class DownloaderQueryService:
         page_size: int = 50,
     ) -> tuple[list[dict[str, Any]], int, dict[str, int]]:
         packages = list(db.scalars(select(DownloaderPackage).order_by(DownloaderPackage.id)).all())
+        # 一次取出全部候选再按资源包分组，避免逐包查询（资源包数万时会慢到数十秒）
+        all_candidates_by_package: dict[int, list[DownloaderPackageCandidate]] = {}
+        for candidate in db.scalars(
+            select(DownloaderPackageCandidate).order_by(DownloaderPackageCandidate.id)
+        ).all():
+            all_candidates_by_package.setdefault(candidate.package_id, []).append(candidate)
         candidates_by_package: dict[int, list[DownloaderPackageCandidate]] = {}
         for package in packages:
             statuses = {"pending", "selected"} if view == "candidates" else None
-            candidates_by_package[package.id] = DownloaderQueryService._package_candidates(
-                db, package, current_only=True, statuses=statuses
+            candidates_by_package[package.id] = DownloaderQueryService._filter_candidates(
+                package, all_candidates_by_package.get(package.id, []), current_only=True, statuses=statuses
             )
 
         matching: list[tuple[DownloaderPackage, list[DownloaderPackageCandidate]]] = []
@@ -205,8 +206,8 @@ class DownloaderQueryService:
                 candidate_count += 1
             ignored_candidates = candidates
             if view == "ignored":
-                ignored_candidates = DownloaderQueryService._package_candidates(
-                    db, package, current_only=True, statuses=None
+                ignored_candidates = DownloaderQueryService._filter_candidates(
+                    package, all_candidates_by_package.get(package.id, []), current_only=True, statuses=None
                 )
             if DownloaderQueryService._inbox_matches(
                 package,
