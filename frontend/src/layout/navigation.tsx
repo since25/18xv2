@@ -50,6 +50,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { key: '/magnet-tasks', label: '磁力下载', icon: <CloudDownloadOutlined /> },
       { key: '/downloader', label: '下载器', icon: <CloudDownloadOutlined /> },
       { key: '/jellyfin', label: 'Jellyfin', icon: <PlaySquareOutlined /> },
+      { key: '/script-runs', label: '脚本日报', icon: <HistoryOutlined /> },
     ],
   },
   {

@@ -200,6 +200,7 @@ from app.api.routes import (  # noqa: E402 — import after app creation
     plans,
     qr_login,
     review_intake,
+    script_runs,
     strategy,
     tasks,
     whitelist_batch,
@@ -248,6 +249,7 @@ app.include_router(files_115.router)
 app.include_router(whitelist_batch.router)
 app.include_router(review_intake.router)
 app.include_router(emby_media_actions.router)
+app.include_router(script_runs.router)
 
 
 @app.get("/healthz")

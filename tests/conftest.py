@@ -18,6 +18,7 @@ from app.models import review_intake as _review_intake_models  # noqa: F401
 from app.models import tasks as _task_models  # noqa: F401
 from app.models import tree as _tree_models  # noqa: F401
 from app.models import whitelist as _whitelist_models  # noqa: F401
+from app.models import script_runs as _script_runs_models  # noqa: F401
 from app.services.client_115.client import Fake115Client
 
 

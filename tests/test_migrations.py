@@ -106,3 +106,21 @@ def test_keyword_entries_has_merge_policy_column():
 
     assert "merge_policy" in columns
     assert columns["merge_policy"]["nullable"] is False
+
+
+def test_script_runs_migration_upgrades_and_downgrades():
+    migration_path = Path("alembic/versions/20261102_0017_script_runs.py")
+    spec = importlib.util.spec_from_file_location("script_runs_migration", migration_path)
+    assert spec is not None
+    assert spec.loader is not None
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+
+    engine = sa.create_engine("sqlite:///:memory:")
+    with engine.begin() as connection:
+        migration.op = Operations(MigrationContext.configure(connection))
+        migration.upgrade()
+        assert {"script_runs", "script_run_items"}.issubset(set(sa.inspect(connection).get_table_names()))
+        migration.downgrade()
+        assert "script_runs" not in sa.inspect(connection).get_table_names()
+        assert "script_run_items" not in sa.inspect(connection).get_table_names()

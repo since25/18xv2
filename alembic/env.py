@@ -25,6 +25,7 @@ import app.models.emby_media_actions  # noqa: E402, F401
 import app.models.background_jobs  # noqa: E402, F401
 import app.models.downloader  # noqa: E402, F401
 import app.models.jellyfin  # noqa: E402, F401
+import app.models.script_runs  # noqa: E402, F401
 
 target_metadata = Base.metadata
 

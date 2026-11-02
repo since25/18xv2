@@ -17,6 +17,7 @@ import KeywordDuplicatesPage from './pages/KeywordDuplicatesPage'
 import MagnetTasksPage from './pages/MagnetTasksPage'
 import DownloaderPage from './pages/DownloaderPage'
 import JellyfinPage from './pages/JellyfinPage'
+import ScriptRunsPage from './pages/ScriptRunsPage'
 import WhitelistBatchPage from './pages/WhitelistBatchPage'
 import ReviewIntakePage from './pages/ReviewIntakePage'
 import EmbyMediaActionsPage from './pages/EmbyMediaActionsPage'
@@ -160,6 +161,7 @@ function AppRoutes() {
           <Route path="/magnet-tasks" element={<MagnetTasksPage />} />
           <Route path="/downloader" element={<DownloaderPage />} />
           <Route path="/jellyfin" element={<JellyfinPage />} />
+          <Route path="/script-runs" element={<ScriptRunsPage />} />
           <Route path="/auth-center" element={<AuthCenterPage />} />
           <Route path="/auth-center/open-api-qr" element={<OpenAuthPage />} />
           <Route path="/auth-center/qr-login" element={<QrLoginPage />} />

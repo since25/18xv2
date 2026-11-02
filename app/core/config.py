@@ -90,6 +90,12 @@ class Settings(BaseSettings):
         default_factory=list, alias="MEDIA_LIBRARY_STRM_ROOTS"
     )
 
+    # Unraid 脚本日报预期运行时间，格式为 SCRIPT=HH:MM,SCRIPT=HH:MM
+    script_report_schedules: str = Field(
+        default="DEL_SOMETHING=12:09,MOVE_SSD_CACHE_TO_DISK2=01:01",
+        alias="SCRIPT_REPORT_SCHEDULES",
+    )
+
     # 115 cookies（供 p115client.P115Client 使用，区别于 Open API token）
     cookies_path: str = Field(default="data/cookies/cookie.txt", alias="COOKIES_PATH")
 
