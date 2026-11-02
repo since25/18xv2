@@ -83,6 +83,9 @@ class Settings(BaseSettings):
     jellyfin_timeout_seconds: int = Field(default=15, alias="JELLYFIN_TIMEOUT_SECONDS")
     jellyfin_page_size: int = Field(default=500, alias="JELLYFIN_PAGE_SIZE")
     jellyfin_daily_run_hour: int = Field(default=3, alias="JELLYFIN_DAILY_RUN_HOUR")
+    jellyfin_cover_since: str | None = Field(default=None, alias="JELLYFIN_COVER_SINCE")
+    jellyfin_cover_run_hour: int = Field(default=2, alias="JELLYFIN_COVER_RUN_HOUR")
+    jellyfin_cover_deadline_minute: int = Field(default=25, alias="JELLYFIN_COVER_DEADLINE_MINUTE")
     media_library_local_roots: Annotated[list[str], NoDecode] = Field(
         default_factory=list, alias="MEDIA_LIBRARY_LOCAL_ROOTS"
     )

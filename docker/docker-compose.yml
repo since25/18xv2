@@ -34,7 +34,7 @@ services:
       - ../data:/app/data
       # Emby 媒体动作需要在容器内按服务器原始路径扫描和删除 STRM。
       - /mnt/cache/docker1/alist-strm/video:/mnt/cache/docker1/alist-strm/video
-      # Jellyfin 关键词合集：只读扫描，路径与 Jellyfin 容器内保持一致。
-      - /mnt/disk2/qbbtdn/已整理:/mnt/disk2/qbbtdn/已整理:ro
+      # Jellyfin 本地媒体：扫描路径与 Jellyfin 容器内保持一致，并写入旁路封面。
+      - /mnt/disk2/qbbtdn/已整理:/mnt/disk2/qbbtdn/已整理
       - /mnt/user/docker1/alist-strm/video/302porn_tv1:/mnt/user/docker1/alist-strm/video/302porn_tv1:ro
     restart: unless-stopped

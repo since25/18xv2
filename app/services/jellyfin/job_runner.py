@@ -11,6 +11,7 @@ from app.db.session import SessionLocal
 from app.services.background_job_service import BackgroundJobService
 from app.services.jellyfin.client import JellyfinClient
 from app.services.jellyfin.collection_sync_service import CollectionSyncService
+from app.services.jellyfin.cover_service import CoverService
 from app.services.jellyfin.scan_service import MediaScanService
 
 
@@ -18,6 +19,7 @@ logger = logging.getLogger(__name__)
 
 JOB_SCAN = "jellyfin:scan"
 JOB_SYNC = "jellyfin:sync"
+JOB_COVERS = "jellyfin:covers"
 
 _job_start_lock = threading.Lock()
 
@@ -38,6 +40,11 @@ def jellyfin_sync_enabled(settings: Settings) -> bool:
         and getattr(settings, "jellyfin_base_url", None)
         and getattr(settings, "jellyfin_api_key", None)
     )
+
+
+def jellyfin_cover_enabled(settings: Settings) -> bool:
+    """返回本地视频封面任务是否开启。"""
+    return bool(getattr(settings, "jellyfin_cover_since", None))
 
 
 def start_job(db, job_type: str) -> str:
@@ -120,6 +127,27 @@ def run_sync_job(job_id: str) -> None:
             logger.exception("Jellyfin 同步任务失败: %s", job_id)
 
 
+def run_cover_job(job_id: str) -> None:
+    """在独立数据库会话中生成本地视频封面并记录结果。"""
+    with SessionLocal() as db:
+        BackgroundJobService.update(db, job_id, stage="生成封面中")
+        try:
+            settings = get_settings()
+            if not jellyfin_cover_enabled(settings):
+                raise RuntimeError("Jellyfin 封面任务未启用或缺少上线时间")
+            summary = CoverService().run(
+                db,
+                local_roots=list(getattr(settings, "media_library_local_roots", []) or []),
+                since=settings.jellyfin_cover_since,
+                deadline_minute=int(getattr(settings, "jellyfin_cover_deadline_minute", 25)),
+            )
+            _mark_success(db, job_id, summary)
+        except Exception as exc:  # noqa: BLE001 - 失败写入任务，不让后台线程抛出
+            db.rollback()
+            _mark_failure(db, job_id, exc)
+            logger.exception("Jellyfin 封面任务失败: %s", job_id)
+
+
 async def jellyfin_daily_loop(settings: Settings) -> None:
     """按本地时间每天运行一次扫描，并在可用时运行合集同步。"""
     run_hour = int(getattr(settings, "jellyfin_daily_run_hour", -1))
@@ -155,4 +183,32 @@ async def jellyfin_daily_loop(settings: Settings) -> None:
             raise
         except Exception:  # noqa: BLE001 - 定时循环不能因一次任务异常退出
             logger.exception("Jellyfin 每日任务循环异常")
+            await asyncio.sleep(60)
+
+
+async def jellyfin_cover_daily_loop(settings: Settings) -> None:
+    """按本地时间每天独立运行一次封面生成任务。"""
+    run_hour = int(getattr(settings, "jellyfin_cover_run_hour", -1))
+    if run_hour == -1 or not jellyfin_cover_enabled(settings):
+        return
+
+    last_run: date | None = None
+    while True:
+        try:
+            now = datetime.now().astimezone()
+            if now.hour == run_hour and last_run != now.date():
+                last_run = now.date()
+                cover_job_id = None
+                with SessionLocal() as db:
+                    try:
+                        cover_job_id = start_job(db, JOB_COVERS)
+                    except JobAlreadyRunning:
+                        logger.info("Jellyfin 每日封面任务已在运行，跳过本次创建")
+                if cover_job_id is not None:
+                    await asyncio.to_thread(run_cover_job, cover_job_id)
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 - 定时循环不能因一次任务异常退出
+            logger.exception("Jellyfin 每日封面循环异常")
             await asyncio.sleep(60)

@@ -18,6 +18,7 @@ ENV TZ=Asia/Shanghai
 RUN apt-get update && apt-get install -y --no-install-recommends \
     nginx \
     supervisor \
+    ffmpeg \
     tzdata \
     && rm -rf /var/lib/apt/lists/*
 
