@@ -1,0 +1,34 @@
+# 专供 Jellyfin 的 MediaWarp 配置模板（302 部分照抄现有 Emby 前的实例）
+port: 9000
+server:
+  type: Jellyfin
+  addr: http://192.168.70.138:8097   # 新 Jellyfin 的局域网地址
+  auth: <在 Jellyfin 控制台生成的 API Key>
+log:
+  access:
+    console: true
+    file: false
+  service:
+    console: true
+    file: true
+cache:
+  enable: true
+  http_strm_ttl: 1m
+  alist_api_ttl: 10m
+  image_ttl: 10m
+  subtitle_ttl: 2h
+web:
+  enable: false
+client:
+  enable: false
+http_strm:
+  enable: true
+  proxy: false          # 只直接播放，流量不经过服务器
+  final_url: true       # 服务器侧跟随 OpenList 跳转，把 115 最终直链 302 给客户端
+  compatibility_mode: false
+  prefix_list:
+    - /mnt/user/docker1/alist-strm/video/
+alist_strm:
+  enable: false         # 现有 STRM 都是 HTTP 地址；如需开启，参照现有实例填写
+subtitle:
+  enable: false         # 仅 Emby 支持

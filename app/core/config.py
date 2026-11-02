@@ -76,6 +76,20 @@ class Settings(BaseSettings):
     downloader_sync_interval_seconds: int = Field(default=60, alias="DOWNLOADER_SYNC_INTERVAL_SECONDS")
     downloader_task_sync_interval_seconds: int = Field(default=15, alias="DOWNLOADER_TASK_SYNC_INTERVAL_SECONDS")
 
+    # Jellyfin 媒体库
+    jellyfin_enabled: bool = Field(default=False, alias="JELLYFIN_ENABLED")
+    jellyfin_base_url: str | None = Field(default=None, alias="JELLYFIN_BASE_URL")
+    jellyfin_api_key: str | None = Field(default=None, alias="JELLYFIN_API_KEY")
+    jellyfin_timeout_seconds: int = Field(default=15, alias="JELLYFIN_TIMEOUT_SECONDS")
+    jellyfin_page_size: int = Field(default=500, alias="JELLYFIN_PAGE_SIZE")
+    jellyfin_daily_run_hour: int = Field(default=3, alias="JELLYFIN_DAILY_RUN_HOUR")
+    media_library_local_roots: Annotated[list[str], NoDecode] = Field(
+        default_factory=list, alias="MEDIA_LIBRARY_LOCAL_ROOTS"
+    )
+    media_library_strm_roots: Annotated[list[str], NoDecode] = Field(
+        default_factory=list, alias="MEDIA_LIBRARY_STRM_ROOTS"
+    )
+
     # 115 cookies（供 p115client.P115Client 使用，区别于 Open API token）
     cookies_path: str = Field(default="data/cookies/cookie.txt", alias="COOKIES_PATH")
 
@@ -112,6 +126,8 @@ class Settings(BaseSettings):
         "emby_media_actions_strm_roots",
         "emby_media_actions_organized_roots",
         "emby_media_actions_source_roots",
+        "media_library_local_roots",
+        "media_library_strm_roots",
         mode="before",
     )
     @classmethod

@@ -144,6 +144,15 @@ async def lifespan(app: FastAPI):
         app.state.downloader_task_sweeper = downloader_sweepers[1]
         logger.info("RN 下载器同步 sweeper 已启动（资源包与任务分开）")
 
+    jellyfin_daily_task: asyncio.Task | None = None
+    if int(getattr(settings, "jellyfin_daily_run_hour", -1)) != -1:
+        from app.services.jellyfin.job_runner import jellyfin_daily_loop, jellyfin_sync_enabled
+
+        if jellyfin_sync_enabled(settings):
+            jellyfin_daily_task = asyncio.create_task(jellyfin_daily_loop(settings))
+            app.state.jellyfin_daily_task = jellyfin_daily_task
+            logger.info("Jellyfin 每日任务循环已启动")
+
     yield
 
     sweeper = getattr(app.state, "whitelist_job_sweeper", None)
@@ -155,6 +164,11 @@ async def lifespan(app: FastAPI):
     for downloader_sweeper in downloader_sweepers:
         downloader_sweeper.cancel()
     await asyncio.gather(*downloader_sweepers, return_exceptions=True)
+    if jellyfin_daily_task is not None:
+        jellyfin_daily_task.cancel()
+        await asyncio.gather(jellyfin_daily_task, return_exceptions=True)
+        if hasattr(app.state, "jellyfin_daily_task"):
+            delattr(app.state, "jellyfin_daily_task")
     logger.info("Shutting down")
 
 
@@ -173,6 +187,7 @@ from app.api.routes import (  # noqa: E402 — import after app creation
     files_115,
     home,
     imports,
+    jellyfin,
     jobs,
     keywords,
     local_cleanup,
@@ -218,6 +233,7 @@ app.include_router(keywords.legacy_router)
 app.include_router(cleanup.router)
 app.include_router(dedupe.router)
 app.include_router(downloader.router)
+app.include_router(jellyfin.router)
 app.include_router(local_cleanup.router)
 app.include_router(local_organize.router)
 app.include_router(local_tree_export.router)

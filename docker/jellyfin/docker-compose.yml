@@ -1,0 +1,33 @@
+# Jellyfin + 专用 MediaWarp（302）编排，与 18x 主 compose、现有 Emby/MediaWarp 完全独立。
+# 部署前把 mediawarp-config.example.yaml 复制为 /mnt/cache/docker1/mediawarp-jellyfin/config/config.yaml 并填写认证。
+services:
+  jellyfin:
+    image: jellyfin/jellyfin:10.10.7
+    container_name: jellyfin
+    environment:
+      - TZ=Asia/Shanghai
+    ports:
+      # 只在局域网使用；外网经 MediaWarp 进入
+      - "8097:8096"
+    volumes:
+      - /mnt/cache/docker1/jellyfin/config:/config
+      - /mnt/cache/docker1/jellyfin/cache:/cache
+      # 媒体目录一律只读，路径与 18x、MediaWarp 前缀保持一致
+      - /mnt/disk2/qbbtdn/已整理:/mnt/disk2/qbbtdn/已整理:ro
+      - /mnt/user/docker1/alist-strm/video/302porn_tv1:/mnt/user/docker1/alist-strm/video/302porn_tv1:ro
+    restart: unless-stopped
+
+  mediawarp-jellyfin:
+    image: akimio/mediawarp:latest  # 部署时改为与现有 MediaWarp 实例相同的版本
+    container_name: MediaWarp-Jellyfin
+    environment:
+      - TZ=Asia/Shanghai
+    ports:
+      # Lucky 外网入口指向这个端口
+      - "9002:9000"
+    volumes:
+      - /mnt/cache/docker1/mediawarp-jellyfin/config:/config
+      - /mnt/cache/docker1/mediawarp-jellyfin/logs:/logs
+    depends_on:
+      - jellyfin
+    restart: unless-stopped
