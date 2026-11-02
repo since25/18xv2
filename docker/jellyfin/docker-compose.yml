@@ -12,6 +12,8 @@ services:
     volumes:
       - /mnt/cache/docker1/jellyfin/config:/config
       - /mnt/cache/docker1/jellyfin/cache:/cache
+      # 官方镜像没有中文字体，媒体库封面上的中文会变成方块
+      - /mnt/cache/docker1/jellyfin/fonts/wqy-zenhei.ttc:/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc:ro
       # 媒体目录一律只读，路径与 18x、MediaWarp 前缀保持一致
       - /mnt/disk2/qbbtdn/已整理:/mnt/disk2/qbbtdn/已整理:ro
       - /mnt/user/docker1/alist-strm/video/302porn_tv1:/mnt/user/docker1/alist-strm/video/302porn_tv1:ro

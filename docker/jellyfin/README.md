@@ -37,7 +37,7 @@ STRM 里是内网 OpenList 地址。Emby 的播放信息带 `DirectStreamUrl`，
 
 两个库通用：
 
-- 关闭所有在线元数据下载器和图片下载器；
+- 只读本地：关闭所有在线元数据下载器和图片下载器，也关闭 Screen Grabber 等容器内截图（缺封面由 18x 负责）；
 - 关闭「将媒体图像保存到媒体文件夹」和「NFO 保存」；
 - 定时扫描设为每天 02:30（在 01:01 移盘脚本之后、18x 03:00 同步之前）。
 
@@ -66,4 +66,11 @@ STRM 里是内网 OpenList 地址。Emby 的播放信息带 `DirectStreamUrl`，
 - **语言**：服务器默认语言已是 `zh-CN`。网页端按浏览器语言显示，也可在每台设备的「设置 → 显示 → 显示语言」选「汉语 (简体字)」；手机和电视客户端用各自的语言设置。
 - **皮肤**：`theme/ElegantFin-v25.10.27-zh.css`，由 ElegantFin v25.10.27（GPL-2.0）改成不依赖外部网络，中文字体用系统无衬线字体，写死的英文改成中文。升级 Jellyfin 大版本前要重新检查兼容性。
 - **应用方式**：把文件内容写入 Jellyfin「品牌」配置的自定义 CSS（`POST /System/Configuration/branding`），立即生效，不用重启。皮肤只影响网页端，Infuse、SenPlayer 等客户端不受影响。
+- **中文字体**：官方镜像没有中文字体，服务器生成媒体库封面时中文会变成方块。部署前把文泉驿字体放到 `/mnt/cache/docker1/jellyfin/fonts/wqy-zenhei.ttc`，compose 会只读挂载。已有的错误封面要删除旧图后刷新媒体库才会重新生成；**不要用 `MetadataRefreshMode=FullRefresh`**，它会把库里的视频重新读取一遍。
 - **还原**：把 `/mnt/cache/docker1/jellyfin/theme/branding-backup-20261102.json` 的内容提交回同一接口。
+
+## 新视频封面
+
+- Jellyfin 不生成封面。18x 每天 02:00 给新入库的本地视频生成 `<视频名>-poster.jpg`，放在视频旁边，02:25 后不再开始新视频；没做完或失败的第二天继续。
+- 配置在 18x 的 `.env`：`JELLYFIN_COVER_SINCE`（上线时间，带时区；为空时功能关闭）、`JELLYFIN_COVER_RUN_HOUR`、`JELLYFIN_COVER_DEADLINE_MINUTE`。
+- 只处理上线时间之后出现的视频，已有视频和已有封面不动。18x 的 `已整理` 挂载因此可写，Jellyfin 仍是只读。

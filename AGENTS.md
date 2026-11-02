@@ -12,7 +12,13 @@
 ## 开发环境
 - 开发机：macOS（本地）
 - 生产环境：Unraid Docker，服务器 root@192.168.70.138，SSH密钥已配置
-- 主要在本地开发和测试，功能稳定后再部署到 Unraid
+- 主要在本地开发，功能稳定后再部署到 Unraid
+- 测试服务器：Spark（SSH 别名 `spark`，ARM64 Linux）
+
+## 测试
+- pytest、vitest、前端构建和 lint 都在 Spark 上跑，不在本机跑。
+- 统一用 `scripts/remote-test.sh backend|frontend|all [额外参数]`：脚本会同步当前检出（含未提交改动和 worktree），本机只显示摘要和日志路径。
+- 完整日志在 Spark 的 `~/ci/18x_v2/<检出目录名>/.remote-test-logs/`。
 
 ## 115 API 说明
 - 复杂的函数优先参考 p115client 仓库：https://github.com/ChenyangGao/p115client，但是p115基于cookies调用更多。
