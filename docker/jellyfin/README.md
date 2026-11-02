@@ -7,7 +7,14 @@
 | 容器 | 宿主机端口 | 作用 |
 |---|---|---|
 | `jellyfin` | 8097 | 媒体库与播放，只读挂载媒体目录 |
-| `MediaWarp-Jellyfin` | 9002 | 播放 115 STRM 时 302 到 115 直链，Lucky 外网入口指向这里 |
+| `MediaWarp-Jellyfin` | 9002 | 播放 115 STRM 时 302 到 115 直链 |
+| `jellyfin-playback-rewrite` | 9003 | 改写播放信息后转发给 MediaWarp，Lucky 外网入口指向这里 |
+
+## 为什么需要 9003
+
+STRM 里是内网 OpenList 地址。Emby 的播放信息带 `DirectStreamUrl`，客户端会走 MediaWarp；Jellyfin 的播放信息没有这个字段，客户端（已确认 SenPlayer、Infuse）直接连内网地址，外网起不了播。
+
+9003 只改写 `/Items/{id}/PlaybackInfo` 的响应：把内网 OpenList 地址换成当前访问地址下的 `/Videos/{id}/stream`，同时填上 `DirectStreamUrl`。其余请求（含本地影片取流和 WebSocket）原样转发，视频流量仍由 115 直连客户端。
 
 ## 部署步骤（每一步都需要先经用户批准）
 
@@ -22,8 +29,9 @@
    - `JELLYFIN_BASE_URL=http://<内网>:8097`
    - `MEDIA_LIBRARY_LOCAL_ROOTS=/mnt/disk2/qbbtdn/已整理`
    - `MEDIA_LIBRARY_STRM_ROOTS=/mnt/user/docker1/alist-strm/video/302porn_tv1`
-6. 在 Lucky 新增外网入口，指向 9002。
-7. 在 18x 的「Jellyfin」页面依次点「立即扫描」「立即同步合集」。
+6. 把 `playback-rewrite/` 下的文件复制到 `/mnt/cache/docker1/jellyfin-playback-rewrite/`，启动 `jellyfin-playback-rewrite`。
+7. 在 Lucky 新增外网入口，指向 9003，并转发原始 Host 和 `X-Forwarded-Proto`。
+8. 在 18x 的「Jellyfin」页面依次点「立即扫描」「立即同步合集」。
 
 ## Jellyfin 媒体库设置清单
 
@@ -43,7 +51,7 @@
 | 场景 | 本地视频 | 115 STRM |
 |---|---|---|
 | 家里网页端 | 能播 | 能播 |
-| 外网网页端 | 能播 | 能播，并在 MediaWarp 日志里看到 302 |
+| 外网网页端 | 能播 | 能播，并在 9003 和 MediaWarp 日志里看到 302 |
 | 外网手机客户端（由用户指定一款） | 能播 | 能播，并确认是 302 |
 
 另外两项检查：

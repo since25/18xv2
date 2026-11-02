@@ -1,4 +1,4 @@
-# 专供 Jellyfin 的 MediaWarp 配置模板（302 部分照抄现有 Emby 前的实例）
+# 专供 Jellyfin 的 MediaWarp 配置模板：与现有 Emby 前的实例一致，只改 server 段
 port: 9000
 server:
   type: Jellyfin
@@ -29,6 +29,14 @@ http_strm:
   prefix_list:
     - /mnt/user/docker1/alist-strm/video/
 alist_strm:
-  enable: false         # 现有 STRM 都是 HTTP 地址；如需开启，参照现有实例填写
+  enable: true
+  proxy: true
+  raw_url: false
+  list:
+    - addr: http://192.168.70.138:5244   # OpenList 地址
+      username: <OpenList 用户名>
+      password: <OpenList 密码>
+      prefix_list:
+        - /mnt/user/docker1/alist-strm/video/
 subtitle:
   enable: false         # 仅 Emby 支持

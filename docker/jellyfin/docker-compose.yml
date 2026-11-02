@@ -23,11 +23,27 @@ services:
     environment:
       - TZ=Asia/Shanghai
     ports:
-      # Lucky 外网入口指向这个端口
+      # 不直接对外：Jellyfin 返回的 115 地址是内网 OpenList，外网客户端连不上
       - "9002:9000"
     volumes:
       - /mnt/cache/docker1/mediawarp-jellyfin/config:/config
       - /mnt/cache/docker1/mediawarp-jellyfin/logs:/logs
     depends_on:
       - jellyfin
+    restart: unless-stopped
+
+  playback-rewrite:
+    image: nginx:1.27-alpine
+    container_name: jellyfin-playback-rewrite
+    environment:
+      - TZ=Asia/Shanghai
+    ports:
+      # Lucky 外网入口指向这个端口
+      - "9003:9000"
+    volumes:
+      # 部署时把 playback-rewrite/ 下的文件复制到这个目录
+      - /mnt/cache/docker1/jellyfin-playback-rewrite/nginx.conf:/etc/nginx/nginx.conf:ro
+      - /mnt/cache/docker1/jellyfin-playback-rewrite:/etc/nginx/playback:ro
+    depends_on:
+      - mediawarp-jellyfin
     restart: unless-stopped
