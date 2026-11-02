@@ -145,6 +145,7 @@ async def lifespan(app: FastAPI):
         logger.info("RN 下载器同步 sweeper 已启动（资源包与任务分开）")
 
     jellyfin_daily_task: asyncio.Task | None = None
+    jellyfin_cover_task: asyncio.Task | None = None
     if int(getattr(settings, "jellyfin_daily_run_hour", -1)) != -1:
         from app.services.jellyfin.job_runner import jellyfin_daily_loop, jellyfin_sync_enabled
 
@@ -152,6 +153,13 @@ async def lifespan(app: FastAPI):
             jellyfin_daily_task = asyncio.create_task(jellyfin_daily_loop(settings))
             app.state.jellyfin_daily_task = jellyfin_daily_task
             logger.info("Jellyfin 每日任务循环已启动")
+    if int(getattr(settings, "jellyfin_cover_run_hour", -1)) != -1:
+        from app.services.jellyfin.job_runner import jellyfin_cover_daily_loop, jellyfin_cover_enabled
+
+        if jellyfin_cover_enabled(settings):
+            jellyfin_cover_task = asyncio.create_task(jellyfin_cover_daily_loop(settings))
+            app.state.jellyfin_cover_task = jellyfin_cover_task
+            logger.info("Jellyfin 每日封面循环已启动")
 
     yield
 
@@ -169,6 +177,11 @@ async def lifespan(app: FastAPI):
         await asyncio.gather(jellyfin_daily_task, return_exceptions=True)
         if hasattr(app.state, "jellyfin_daily_task"):
             delattr(app.state, "jellyfin_daily_task")
+    if jellyfin_cover_task is not None:
+        jellyfin_cover_task.cancel()
+        await asyncio.gather(jellyfin_cover_task, return_exceptions=True)
+        if hasattr(app.state, "jellyfin_cover_task"):
+            delattr(app.state, "jellyfin_cover_task")
     logger.info("Shutting down")
 
 
