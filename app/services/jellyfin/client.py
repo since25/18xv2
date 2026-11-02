@@ -29,6 +29,7 @@ class JellyfinClient:
         self.transport = transport
         self._sleep = sleep_fn or time.sleep
         self._session: httpx.Client | None = None
+        self._admin_user_id: str | None = None
 
     def __enter__(self) -> "JellyfinClient":
         self._session = self._new_session()
@@ -193,14 +194,16 @@ class JellyfinClient:
             yield item_ids[index : index + size]
 
     def create_collection(self, name: str, item_ids: list[str]) -> str:
-        """创建合集并返回新合集 ID。"""
-        response = self._request("POST", "/Collections", params={"Name": name, "Ids": ",".join(item_ids)})
+        """创建合集并返回新合集 ID；成员分批写入，避免请求地址超长。"""
+        first_batch = item_ids[:100]
+        response = self._request("POST", "/Collections", params={"Name": name, "Ids": ",".join(first_batch)})
         payload = self._payload(response) if response.content else {}
         collection_id = payload.get("Id", payload.get("id", payload.get("CollectionId")))
         if not isinstance(collection_id, str):
             collection_id = response.headers.get("Location", "").rstrip("/").split("/")[-1]
         if not collection_id:
             raise JellyfinError("Jellyfin 创建合集未返回 ID")
+        self.add_to_collection(collection_id, item_ids[100:])
         return collection_id
 
     def add_to_collection(self, collection_id: str, item_ids: list[str]) -> None:
@@ -213,9 +216,27 @@ class JellyfinClient:
         for chunk in self._chunks(item_ids):
             self._request("DELETE", f"/Collections/{collection_id}/Items", params={"Ids": ",".join(chunk)})
 
+    def _get_admin_user_id(self) -> str:
+        """取管理员用户 ID：Jellyfin 10.10 用 API Key 读单个条目时必须指定用户。"""
+        if self._admin_user_id is None:
+            response = self._request("GET", "/Users")
+            try:
+                users = response.json()
+            except ValueError as exc:
+                raise JellyfinError("Jellyfin 返回格式无效") from exc
+            if not isinstance(users, list):
+                raise JellyfinError("Jellyfin 用户列表格式无效")
+            for user in users:
+                if isinstance(user, dict) and (user.get("Policy") or {}).get("IsAdministrator") and isinstance(user.get("Id"), str):
+                    self._admin_user_id = user["Id"]
+                    break
+            if self._admin_user_id is None:
+                raise JellyfinError("Jellyfin 没有可用的管理员用户")
+        return self._admin_user_id
+
     def set_name_and_tags(self, collection_id: str, name: str, tags: list[str]) -> None:
         """读取合集完整对象后更新名称和标签。"""
-        response = self._request("GET", f"/Items/{collection_id}")
+        response = self._request("GET", f"/Items/{collection_id}", params={"userId": self._get_admin_user_id()})
         payload = self._payload(response)
         payload["Name"] = name
         payload["Tags"] = tags

@@ -29,29 +29,23 @@ class CollectionSyncService:
             "errors": 0,
         }
 
-        try:
-            path_to_item_id = dict(client.iter_media_paths())
-            listing_complete = True
-        except JellyfinError:
-            path_to_item_id = {}
-            listing_complete = False
-
         media_items = db.scalars(
             select(JellyfinMediaItem)
             .where(JellyfinMediaItem.active.is_(True))
             .options(selectinload(JellyfinMediaItem.keyword_links))
         ).all()
-        if listing_complete:
-            for item in media_items:
-                item_id = path_to_item_id.get(item.path)
-                item.jellyfin_item_id = item_id
-                item.resolve_state = "resolved" if item_id else "pending"
-        else:
-            for item in media_items:
-                if item.jellyfin_item_id and item.resolve_state == "resolved":
-                    continue
-                item.jellyfin_item_id = None
-                item.resolve_state = "pending"
+        try:
+            path_to_item_id = dict(client.iter_media_paths())
+        except JellyfinError:
+            # 拿不到影片列表（比如扫描中）时停止，避免按过期信息增删合集
+            result["pending_items"] = sum(1 for item in media_items if item.resolve_state != "resolved")
+            result["errors"] = 1
+            return result
+
+        for item in media_items:
+            item_id = path_to_item_id.get(item.path)
+            item.jellyfin_item_id = item_id
+            item.resolve_state = "resolved" if item_id else "pending"
         result["pending_items"] = sum(1 for item in media_items if item.resolve_state != "resolved")
 
         try:
@@ -112,6 +106,10 @@ class CollectionSyncService:
                     collection_id = mapping.jellyfin_collection_id
                     remote = remote_by_id.get(collection_id)
                     if remote is not None:
+                        if mapping.status == "untagged":
+                            # 上次建好合集但打标签失败，这里补上
+                            client.set_name_and_tags(collection_id, entry.canonical_name, [MANAGED_TAG])
+                            remote = {**remote, "name": entry.canonical_name, "tags": [MANAGED_TAG]}
                         if not self._is_managed(remote):
                             mapping.status = "conflict"
                             mapping.last_sync_at = now
@@ -123,7 +121,6 @@ class CollectionSyncService:
                             remote,
                             expected,
                             entry.canonical_name,
-                            listing_complete,
                             result,
                         )
                         mapping.status = "active"
@@ -151,16 +148,20 @@ class CollectionSyncService:
                     result["conflicts"] += 1
                     continue
 
+                if not expected:
+                    # 影片还没入库时不建空合集，等下次同步
+                    continue
+
                 collection_id = client.create_collection(entry.canonical_name, sorted(expected))
                 result["collections_created"] += 1
                 result["items_added"] += len(expected)
-                client.set_name_and_tags(collection_id, entry.canonical_name, [MANAGED_TAG])
+                # 先记下合集，打标签失败时下次还能认出来
                 if mapping is None:
                     mapping = JellyfinKeywordCollection(
                         keyword_entry_id=entry.id,
                         jellyfin_collection_id=collection_id,
                         canonical_name_snapshot=entry.canonical_name,
-                        status="active",
+                        status="untagged",
                         last_sync_at=now,
                     )
                     db.add(mapping)
@@ -168,9 +169,11 @@ class CollectionSyncService:
                 else:
                     mapping.jellyfin_collection_id = collection_id
                     mapping.canonical_name_snapshot = entry.canonical_name
-                    mapping.status = "active"
+                    mapping.status = "untagged"
                     mapping.last_sync_at = now
-                    mapping.last_error = None
+                client.set_name_and_tags(collection_id, entry.canonical_name, [MANAGED_TAG])
+                mapping.status = "active"
+                mapping.last_error = None
             except Exception as exc:
                 if mapping is not None:
                     mapping.last_error = str(exc)
@@ -218,7 +221,6 @@ class CollectionSyncService:
         remote: dict[str, Any],
         expected: set[str],
         canonical_name: str,
-        listing_complete: bool,
         result: dict[str, int],
     ) -> None:
         current = client.get_collection_item_ids(collection_id)
@@ -226,11 +228,10 @@ class CollectionSyncService:
         if to_add:
             client.add_to_collection(collection_id, to_add)
             result["items_added"] += len(to_add)
-        if listing_complete:
-            to_remove = sorted(current - expected)
-            if to_remove:
-                client.remove_from_collection(collection_id, to_remove)
-                result["items_removed"] += len(to_remove)
+        to_remove = sorted(current - expected)
+        if to_remove:
+            client.remove_from_collection(collection_id, to_remove)
+            result["items_removed"] += len(to_remove)
         if remote.get("name") != canonical_name:
             tags = remote.get("tags", [])
             if not isinstance(tags, list):

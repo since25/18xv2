@@ -41,6 +41,8 @@ STRM 里是内网 OpenList 地址。Emby 的播放信息带 `DirectStreamUrl`，
 - 关闭「将媒体图像保存到媒体文件夹」和「NFO 保存」；
 - 定时扫描设为每天 02:30（在 01:01 移盘脚本之后、18x 03:00 同步之前）。
 
+服务器元数据设置：合集（BoxSet）关闭 TMDb 的资料和图片下载，否则 18x 按关键词建的合集会被错误改名、换封面。影片类型不受影响。
+
 各库单独设置：
 
 - **115 番号**：库路径只填 `/mnt/user/docker1/alist-strm/video/302porn_tv1`，元数据读取器启用本地 NFO。**不要加 `porn_tv1`**，否则约 6300 个视频会重复。
@@ -58,3 +60,10 @@ STRM 里是内网 OpenList 地址。Emby 的播放信息带 `DirectStreamUrl`，
 
 - 部署前后对比，Emby 的配置目录和 STRM 目录没有任何文件变化；
 - Jellyfin 没有往媒体目录写入任何文件。
+
+## 界面语言与皮肤
+
+- **语言**：服务器默认语言已是 `zh-CN`。网页端按浏览器语言显示，也可在每台设备的「设置 → 显示 → 显示语言」选「汉语 (简体字)」；手机和电视客户端用各自的语言设置。
+- **皮肤**：`theme/ElegantFin-v25.10.27-zh.css`，由 ElegantFin v25.10.27（GPL-2.0）改成不依赖外部网络，中文字体用系统无衬线字体，写死的英文改成中文。升级 Jellyfin 大版本前要重新检查兼容性。
+- **应用方式**：把文件内容写入 Jellyfin「品牌」配置的自定义 CSS（`POST /System/Configuration/branding`），立即生效，不用重启。皮肤只影响网页端，Infuse、SenPlayer 等客户端不受影响。
+- **还原**：把 `/mnt/cache/docker1/jellyfin/theme/branding-backup-20261102.json` 的内容提交回同一接口。

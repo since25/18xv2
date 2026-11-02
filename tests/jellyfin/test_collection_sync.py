@@ -21,6 +21,7 @@ class FakeJellyfinClient:
         self.calls: list[tuple] = []
         self.fail_listing = False
         self.fail_collection_ids: set[str] = set()
+        self.fail_tagging = False
         self.next_collection_id = 1
 
     def iter_media_paths(self):
@@ -49,6 +50,8 @@ class FakeJellyfinClient:
 
     def set_name_and_tags(self, collection_id: str, name: str, tags: list[str]) -> None:
         self.calls.append(("set", collection_id, name, list(tags)))
+        if self.fail_tagging:
+            raise JellyfinError("打标签失败")
         self.collections[collection_id]["name"] = name
         self.collections[collection_id]["tags"] = list(tags)
 
@@ -174,8 +177,8 @@ def test_sync_complete_listing_keeps_missing_path_pending_and_out_of_collection(
     mapping = db_session.scalar(select(JellyfinKeywordCollection))
     assert result["pending_items"] == 1
     assert item.resolve_state == "pending"
-    assert mapping is not None
-    assert client.collections[mapping.jellyfin_collection_id]["items"] == set()
+    assert mapping is None
+    assert client.collections == {}
 
 
 def test_sync_marks_conflict_for_unmanaged_same_name(db_session):
@@ -262,3 +265,56 @@ def test_one_collection_error_does_not_stop_others(db_session):
 
     assert result["errors"] == 1
     assert client.collections["collection-2"]["items"] == {"item-2"}
+
+
+def test_sync_listing_failure_creates_nothing(db_session):
+    entry = _entry(db_session, "演员甲")
+    _media_link(db_session, entry, "/媒体/演员甲/a.mp4", item_id="item-1")
+    client = FakeJellyfinClient()
+    client.fail_listing = True
+
+    result = CollectionSyncService().sync(db_session, client)
+
+    assert result["errors"] == 1
+    assert result["collections_created"] == 0
+    assert client.collections == {}
+
+
+def test_sync_does_not_create_collection_without_resolved_members(db_session):
+    entry = _entry(db_session, "演员甲")
+    _media_link(db_session, entry, "/媒体/演员甲/missing.mp4")
+    client = FakeJellyfinClient()
+
+    result = CollectionSyncService().sync(db_session, client)
+
+    assert result["collections_created"] == 0
+    assert result["pending_items"] == 1
+    assert client.collections == {}
+
+
+def test_tagging_failure_keeps_mapping_and_next_sync_retries(db_session):
+    entry = _entry(db_session, "演员甲")
+    _media_link(db_session, entry, "/媒体/演员甲/a.mp4")
+    client = FakeJellyfinClient([("/媒体/演员甲/a.mp4", "item-1")])
+    client.fail_tagging = True
+    service = CollectionSyncService()
+
+    first = service.sync(db_session, client)
+
+    mapping = db_session.scalar(select(JellyfinKeywordCollection))
+    assert first["errors"] == 1
+    assert mapping.jellyfin_collection_id == "collection-1"
+    assert mapping.status == "untagged"
+    assert mapping.last_error
+
+    client.fail_tagging = False
+    second = service.sync(db_session, client)
+
+    db_session.refresh(mapping)
+    assert second["errors"] == 0
+    assert second["conflicts"] == 0
+    assert second["collections_created"] == 0
+    assert len(client.collections) == 1
+    assert client.collections["collection-1"]["tags"] == [MANAGED_TAG]
+    assert mapping.status == "active"
+    assert mapping.last_error is None
