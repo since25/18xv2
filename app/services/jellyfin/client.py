@@ -162,11 +162,13 @@ class JellyfinClient:
         """分页读取合集的成员 ID。"""
         start_index = 0
         item_ids: set[str] = set()
+        # Jellyfin 10.10 不指定用户时合集成员为空
+        user_id = self._get_admin_user_id()
         while True:
             response = self._request(
                 "GET",
                 "/Items",
-                params={"ParentId": collection_id, "StartIndex": start_index, "Limit": self.page_size},
+                params={"ParentId": collection_id, "userId": user_id, "StartIndex": start_index, "Limit": self.page_size},
             )
             payload = self._payload(response)
             items = self._items(payload)
@@ -217,7 +219,7 @@ class JellyfinClient:
             self._request("DELETE", f"/Collections/{collection_id}/Items", params={"Ids": ",".join(chunk)})
 
     def _get_admin_user_id(self) -> str:
-        """取管理员用户 ID：Jellyfin 10.10 用 API Key 读单个条目时必须指定用户。"""
+        """取管理员用户 ID：Jellyfin 10.10 用 API Key 读单个条目和合集成员时必须指定用户。"""
         if self._admin_user_id is None:
             response = self._request("GET", "/Users")
             try:

@@ -144,3 +144,17 @@ def test_create_collection_sends_large_member_list_in_batches():
     assert [path for path, _ in batches] == ["/Collections", "/Collections/collection-1/Items", "/Collections/collection-1/Items"]
     assert all(len(ids) <= 100 for _, ids in batches)
     assert [item for _, ids in batches for item in ids] == item_ids
+
+
+def test_get_collection_item_ids_reads_members_as_user():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/Users":
+            return httpx.Response(200, json=[{"Id": "user-1", "Policy": {"IsAdministrator": True}}])
+        # Jellyfin 10.10 读合集成员时不指定用户会返回空列表
+        if request.url.params.get("userId") != "user-1":
+            return httpx.Response(200, json={"Items": [], "TotalRecordCount": 0})
+        return httpx.Response(200, json={"Items": [{"Id": "item-1"}, {"Id": "item-2"}], "TotalRecordCount": 2})
+
+    client = JellyfinClient("http://jellyfin.test", "test-key", 3, 2, httpx.MockTransport(handler), sleep_fn=lambda _: None)
+
+    assert client.get_collection_item_ids("collection-1") == {"item-1", "item-2"}
