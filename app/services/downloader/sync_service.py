@@ -7,7 +7,7 @@ import json
 import math
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.downloader import (
@@ -174,6 +174,25 @@ def _load_terms(db: Session) -> tuple[list[tuple[KeywordEntry, list[tuple[str, s
     ]
     blacklist = [term for entry in entries if entry.keyword_type == "blacklist" for term in _terms(entry)]
     return whitelist, blacklist
+
+
+def _dismiss_fallback_candidates(db: Session) -> int:
+    """兜底清理低优先级白名单留下的候选。
+
+    正常情况下 _load_terms 已经把它们排除在外；这里覆盖两类漏网：关键词在两次同步之间
+    改成低优先级，以及资源包已不在远端列表、本轮不会被匹配到的历史候选。
+    """
+    fallback_keyword_ids = select(KeywordEntry.id).where(KeywordEntry.merge_policy == "fallback_only")
+    result = db.execute(
+        update(DownloaderPackageCandidate)
+        .where(
+            DownloaderPackageCandidate.status.in_(["pending", "selected"]),
+            DownloaderPackageCandidate.keyword_entry_id.in_(fallback_keyword_ids),
+        )
+        .values(status="dismissed", dismissed_reason="低优先级词不参与下载器候选")
+        .execution_options(synchronize_session=False)
+    )
+    return result.rowcount or 0
 
 
 def _match_package(
@@ -366,6 +385,8 @@ class DownloaderSyncService:
                 cursor = page.get("next_cursor")
                 if not cursor:
                     break
+            # 补清理：低优先级词留下的候选、远端已下架资源包上的历史候选
+            dismissed += _dismiss_fallback_candidates(db)
             run.status = "completed"
             run.packages_seen = seen
             run.candidates_created = created

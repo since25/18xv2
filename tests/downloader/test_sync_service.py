@@ -116,7 +116,10 @@ def test_existing_candidates_are_dismissed_when_keyword_becomes_fallback_only(db
 
     entry.merge_policy = "fallback_only"
     db_session.flush()
-    summary = DownloaderSyncService.sync_packages(db_session, FakeDownloader())
+    # 第二轮让远端列表为空：资源包本轮匹配不到，只能靠兜底清理
+    client = FakeDownloader()
+    client.packages = []
+    summary = DownloaderSyncService.sync_packages(db_session, client)
     _, total_after = DownloaderSyncService.list_candidates(db_session)
 
     assert total_before == 1
