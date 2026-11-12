@@ -40,17 +40,21 @@ def _sync_downloader_once(settings, kind: str) -> None:
 
 async def _downloader_sync_loop(settings, kind: str) -> None:
     if kind == "packages":
-        interval = max(int(getattr(settings, "downloader_sync_interval_seconds", 60)), 10)
+        interval = max(int(getattr(settings, "downloader_sync_interval_seconds", 21600)), 10)
     else:
         interval = max(int(getattr(settings, "downloader_task_sync_interval_seconds", 15)), 5)
     while True:
-        await asyncio.sleep(interval)
+        # 启动后先跑一轮，避免重启后要等满一个间隔才看到新资源
         try:
             await asyncio.to_thread(_sync_downloader_once, settings, kind)
         except asyncio.CancelledError:
             raise
         except Exception:  # noqa: BLE001 - one remote outage must not stop the app
             logger.exception("RN downloader %s sync failed", kind)
+            # 远端不可用时缩短重试间隔，别等满 6 小时
+            await asyncio.sleep(min(interval, 300))
+            continue
+        await asyncio.sleep(interval)
 
 
 @asynccontextmanager

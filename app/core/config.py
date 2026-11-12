@@ -73,7 +73,8 @@ class Settings(BaseSettings):
     downloader_password: str | None = Field(default=None, alias="DOWNLOADER_PASSWORD")
     downloader_node_key: str = Field(default="rn", alias="DOWNLOADER_NODE_KEY")
     downloader_timeout_seconds: float = Field(default=10.0, alias="DOWNLOADER_TIMEOUT_SECONDS")
-    downloader_sync_interval_seconds: int = Field(default=60, alias="DOWNLOADER_SYNC_INTERVAL_SECONDS")
+    # 资源包索引日均更新一次，全量翻页成本高，默认 6 小时跑一轮；需要即时生效时用页头「同步资源包」
+    downloader_sync_interval_seconds: int = Field(default=21600, alias="DOWNLOADER_SYNC_INTERVAL_SECONDS")
     downloader_task_sync_interval_seconds: int = Field(default=15, alias="DOWNLOADER_TASK_SYNC_INTERVAL_SECONDS")
 
     # Jellyfin 媒体库

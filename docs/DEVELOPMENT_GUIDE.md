@@ -92,9 +92,9 @@ npm run dev
 | 会话文件 | `data/auth_sessions.json` | 登录态持久化 |
 | Cookie 文件 | `data/cookies/` | 供 Cookie 扫码/目录树导出使用 |
 
-RN 下载器相关配置只放在 `.env`：`DOWNLOADER_BASE_URL`、`DOWNLOADER_PASSWORD`、`DOWNLOADER_NODE_KEY`、`DOWNLOADER_TIMEOUT_SECONDS`、`DOWNLOADER_SYNC_INTERVAL_SECONDS`（资源包同步间隔）、`DOWNLOADER_TASK_SYNC_INTERVAL_SECONDS`（任务进度同步间隔，默认 15 秒）。密码不写入数据库、日志或前端响应。
+RN 下载器相关配置只放在 `.env`：`DOWNLOADER_BASE_URL`、`DOWNLOADER_PASSWORD`、`DOWNLOADER_NODE_KEY`、`DOWNLOADER_TIMEOUT_SECONDS`、`DOWNLOADER_SYNC_INTERVAL_SECONDS`（资源包同步间隔，默认 6 小时）、`DOWNLOADER_TASK_SYNC_INTERVAL_SECONDS`（任务进度同步间隔，默认 15 秒）。密码不写入数据库、日志或前端响应。
 
-后台同步分成两个独立循环：资源包同步和任务同步互不等待。每轮同步在一个已登录会话内完成（`with DownloaderClient(...)`），不再每个请求重新登录。任务同步对「已结束且 RN 更新时间未变」的任务不再拉详情；RN 任务载荷只带 `chat_id`，频道名按资源包的 `source_chat_id` 补齐。
+后台同步分成两个独立循环：资源包同步和任务同步互不等待。每轮同步在一个已登录会话内完成（`with DownloaderClient(...)`），不再每个请求重新登录。任务同步对「已结束且 RN 更新时间未变」的任务不再拉详情；RN 任务载荷只带 `chat_id`，频道名按资源包的 `source_chat_id` 补齐。白名单匹配跳过 `merge_policy=fallback_only` 的低优先级词：这类词只服务整理任务，不生成下载器候选；改回普通后下一轮同步恢复。
 
 页面入口为 `/downloader`，后端控制面为 `/downloader/*`。下载器页面采用候选收件箱和任务看板双流模型：收件箱处理候选确认、忽略和 5 秒撤销，任务看板处理任务筛选与历史，点击任务后通过侧边检查抽屉查看文件详情。候选携带资源包版本号；确认新版本后由 RN 增量批次跳过旧版本完整成功的消息。现场验收时先用“同步资源包”检查连接，再人工选择一条候选提交；测试环境只使用 mock HTTP 客户端。
 

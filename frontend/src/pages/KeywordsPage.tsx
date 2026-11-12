@@ -63,7 +63,7 @@ const TYPE_OPTIONS = [
 
 const MERGE_POLICY_OPTIONS: Array<{ label: string; value: KeywordMergePolicy; help: string }> = [
   { label: '普通', value: 'normal', help: '可参与组合目录' },
-  { label: '低优先级', value: 'fallback_only', help: '仅在没有其他普通白名单命中时生效' },
+  { label: '低优先级', value: 'fallback_only', help: '整理时仅在没有普通白名单命中才生效，不参与下载器待确认' },
 ]
 
 const MERGE_POLICY_LABEL: Record<KeywordMergePolicy, string> = {
@@ -440,7 +440,7 @@ export default function KeywordsPage() {
                 />
               </Form.Item>
               <Text type="secondary">
-                低优先级关键词只在没有其他普通白名单命中时参与整理；修改后需重新生成整理任务才会生效。
+                低优先级关键词只在没有其他普通白名单命中时参与整理，不进入下载器的待确认候选；修改后需重新生成整理任务才会生效。
               </Text>
               <Form.Item
                 name="aliases"
@@ -614,7 +614,7 @@ export default function KeywordsPage() {
             <Select options={MERGE_POLICY_OPTIONS.map(({ label, value }) => ({ label, value }))} />
           </Form.Item>
           <Text type="secondary">
-            低优先级关键词只在没有其他普通白名单命中时参与整理；修改后需重新生成整理任务才会生效。
+            低优先级关键词只在没有其他普通白名单命中时参与整理，不进入下载器的待确认候选；修改后需重新生成整理任务才会生效。
           </Text>
           <Form.Item name="note" label="备注">
             <Input.TextArea rows={4} />

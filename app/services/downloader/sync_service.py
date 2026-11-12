@@ -155,7 +155,11 @@ def _package_values(payload: dict[str, Any], *, node_key: str, now: datetime) ->
 
 
 def _load_terms(db: Session) -> tuple[list[tuple[KeywordEntry, list[tuple[str, str]]]], list[tuple[str, str]]]:
-    """加载当前有效的白名单和黑名单词。"""
+    """加载当前有效的白名单和黑名单词。
+
+    低优先级白名单（merge_policy=fallback_only）只服务整理任务，不参与下载器候选命中：
+    这类词命中率极高，放进待确认会把列表冲满。改回普通后下一轮同步即恢复。
+    """
     entries = list(
         db.scalars(
             select(KeywordEntry)
@@ -163,7 +167,11 @@ def _load_terms(db: Session) -> tuple[list[tuple[KeywordEntry, list[tuple[str, s
             .options(selectinload(KeywordEntry.aliases))
         ).all()
     )
-    whitelist = [(entry, _terms(entry)) for entry in entries if entry.keyword_type == "whitelist"]
+    whitelist = [
+        (entry, _terms(entry))
+        for entry in entries
+        if entry.keyword_type == "whitelist" and entry.merge_policy != "fallback_only"
+    ]
     blacklist = [term for entry in entries if entry.keyword_type == "blacklist" for term in _terms(entry)]
     return whitelist, blacklist
 

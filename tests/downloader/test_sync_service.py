@@ -75,6 +75,55 @@ def test_sync_matches_whitelist_alias_and_excludes_blacklist_or_unstable(db_sess
     assert candidates[0]["matched_term"] == "Foo"
 
 
+def test_sync_skips_fallback_only_whitelist_keyword(db_session):
+    """低优先级白名单只服务整理任务，不进下载器待确认。"""
+    entry = add_keyword(db_session, "Foo", "whitelist")
+    entry.merge_policy = "fallback_only"
+    db_session.flush()
+
+    summary = DownloaderSyncService.sync_packages(db_session, FakeDownloader())
+    candidates, total = DownloaderSyncService.list_candidates(db_session)
+
+    assert summary.candidates_created == 0
+    assert total == 0
+    assert candidates == []
+
+
+def test_fallback_keyword_switched_to_normal_creates_candidates_next_sync(db_session):
+    entry = add_keyword(db_session, "Foo", "whitelist")
+    add_keyword(db_session, "Blocked", "blacklist")
+    entry.merge_policy = "fallback_only"
+    db_session.flush()
+    DownloaderSyncService.sync_packages(db_session, FakeDownloader())
+    _, total_before = DownloaderSyncService.list_candidates(db_session)
+
+    entry.merge_policy = "normal"
+    db_session.flush()
+    summary = DownloaderSyncService.sync_packages(db_session, FakeDownloader())
+    candidates, total_after = DownloaderSyncService.list_candidates(db_session)
+
+    assert total_before == 0
+    assert summary.candidates_created == 1
+    assert total_after == 1
+    assert candidates[0]["remote_package_id"] == 1
+
+
+def test_existing_candidates_are_dismissed_when_keyword_becomes_fallback_only(db_session):
+    entry = add_keyword(db_session, "Foo", "whitelist")
+    add_keyword(db_session, "Blocked", "blacklist")
+    DownloaderSyncService.sync_packages(db_session, FakeDownloader())
+    _, total_before = DownloaderSyncService.list_candidates(db_session)
+
+    entry.merge_policy = "fallback_only"
+    db_session.flush()
+    summary = DownloaderSyncService.sync_packages(db_session, FakeDownloader())
+    _, total_after = DownloaderSyncService.list_candidates(db_session)
+
+    assert total_before == 1
+    assert summary.candidates_dismissed == 1
+    assert total_after == 0
+
+
 def test_submit_selected_is_idempotent_and_syncs_task_snapshot(db_session):
     add_keyword(db_session, "Foo", "whitelist")
     client = FakeDownloader()
