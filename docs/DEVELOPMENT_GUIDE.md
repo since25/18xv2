@@ -103,6 +103,7 @@ RN 下载器相关配置只放在 `.env`：`DOWNLOADER_BASE_URL`、`DOWNLOADER_P
 下载器控制面新增或调整以下接口：
 
 - `GET /downloader/packages?view=candidates|unmatched|ignored`：收件箱待确认/未命中/已忽略视图（未命中＝没被忽略、当前版本没有未作废白名单候选的资源包，响应 `counts` 含 `unmatched`），支持下载状态、白名单词、标题搜索、频道（`channel_title`，精确匹配）和分页参数。页面上每行有「下载」「忽略」；「忽略此频道」只在顶部工具栏选中某个频道后出现。
+- `POST /downloader/keyword-quick-add`：传 `keyword`、`list_type`（`whitelist` / `blacklist`）、`dry_run`（默认 `true`）。把收件箱搜索词写入关键词库（普通优先级），并立即只重算「归一化标题包含该词」的资源包；`dry_run=true` 走同一流程后回滚，用于预览新增/移走的候选数和最多 5 个示例标题。归一化后不足 2 个字符返回 400；该词（含别名，不分大小写）已在另一类名单或已停用时返回 409，需到关键词页处理。页面上搜索框有内容时出现「加入白名单」「加入黑名单」，先弹窗预览再确认。撤销：到关键词页删除或停用该词；被黑名单移走的候选要等下一轮同步（或手动「同步资源包」）才恢复。
 - `POST /downloader/packages/download`：传 `package_ids`，不经白名单候选直接按资源包提交下载（用于未命中视图）；只接受上游已整理完成（stable）的资源包，与候选提交共用同一个幂等键，不会重复提交。
 - `POST /downloader/packages/ignore`、`POST /downloader/packages/unignore`：按候选或资源包忽略、恢复候选。`ignore` 也可传 `channel_title`，忽略该频道当前在收件箱里的全部资源包，响应返回 `package_ids` 供撤销。
 - 收件箱条目带 `last_download_error`（本包最近一次下载失败原因码）和 `channel_error`（频道级错误码，如 `channel_unavailable`），来自 RN 资源包载荷；前端在 `utils/statusText.ts` 的 `downloaderErrorText` 中翻译为中文。

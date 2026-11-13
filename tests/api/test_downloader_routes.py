@@ -188,3 +188,21 @@ def test_summary_route_returns_six_keys(client):
         "active_count",
         "week_failed_files",
     }
+
+
+def test_keyword_quick_add_route_preview_and_conflict(client, db_session):
+    from app.models.keywords import KeywordEntry
+
+    db_session.add(KeywordEntry(canonical_name="Foo", canonical_name_normalized="Foo", keyword_type="whitelist", status="active"))
+    db_session.commit()
+
+    preview = client.post("/downloader/keyword-quick-add", json={"keyword": "bar", "list_type": "blacklist"})
+    assert preview.status_code == 200
+    assert preview.json()["entry_status"] == "created"
+    assert db_session.query(KeywordEntry).filter(KeywordEntry.canonical_name == "bar").count() == 0
+
+    conflict = client.post(
+        "/downloader/keyword-quick-add", json={"keyword": "foo", "list_type": "blacklist", "dry_run": False}
+    )
+    assert conflict.status_code == 409
+    assert "关键词页" in conflict.json()["detail"]

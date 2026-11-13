@@ -42,6 +42,13 @@ class DownloaderIgnoreRequest(BaseModel):
     reason: str | None = None
 
 
+class DownloaderKeywordQuickAddRequest(BaseModel):
+    # 收件箱搜索词一键加入白名单 / 黑名单；dry_run=True 只预览影响，不落库
+    keyword: str = Field(min_length=1, max_length=255)
+    list_type: Literal["whitelist", "blacklist"]
+    dry_run: bool = True
+
+
 class DownloaderUnignoreRequest(BaseModel):
     package_ids: list[int] = Field(min_length=1)
 

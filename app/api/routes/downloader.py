@@ -15,6 +15,7 @@ from app.schemas.downloader import (
     DownloaderControlRequest,
     DownloaderIgnoreRequest,
     DownloaderInboxResponse,
+    DownloaderKeywordQuickAddRequest,
     DownloaderRetryRequest,
     DownloaderSelectRequest,
     DownloaderPackageSubmitRequest,
@@ -23,6 +24,7 @@ from app.schemas.downloader import (
     DownloaderUnignoreRequest,
 )
 from app.services.downloader.client import DownloaderClient, DownloaderRemoteError
+from app.services.downloader.keyword_quick_add import KeywordQuickAddError, quick_add_keyword
 from app.services.downloader.query_service import DownloaderQueryService
 from app.services.downloader.sync_service import DownloaderSyncService
 
@@ -150,6 +152,16 @@ def unignore_downloader_packages(
     db: Session = Depends(get_db),
 ) -> dict:
     return {"restored": DownloaderQueryService.unignore_packages(db, payload.package_ids)}
+
+
+@router.post("/keyword-quick-add")
+def keyword_quick_add(payload: DownloaderKeywordQuickAddRequest, db: Session = Depends(get_db)) -> dict:
+    try:
+        return quick_add_keyword(
+            db, keyword=payload.keyword, list_type=payload.list_type, dry_run=payload.dry_run
+        )
+    except KeywordQuickAddError as error:
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
 
 
 @router.post("/packages/{candidate_id}/select")

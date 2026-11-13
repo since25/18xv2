@@ -12,6 +12,7 @@ const api = vi.hoisted(() => ({
   unignorePackages: vi.fn(),
   submitDownloaderBatches: vi.fn(),
   submitDownloaderPackages: vi.fn(),
+  quickAddKeyword: vi.fn(),
 }))
 
 vi.mock('@/api/downloader', () => api)
@@ -73,6 +74,46 @@ describe('CandidatesInbox', () => {
 
     await userEvent.click(screen.getByRole('button', { name: /撤\s*销/ }))
     await waitFor(() => expect(api.unignorePackages).toHaveBeenCalledWith([1, 2, 3]))
+  })
+
+  it('adds the search text to the blacklist after previewing the impact', async () => {
+    api.quickAddKeyword.mockImplementation(async (keyword: string, listType: string, dryRun: boolean) => ({
+      keyword, list_type: listType, entry_status: 'created', keyword_entry_id: dryRun ? null : 99,
+      packages_affected: 1, candidates_created: 0, candidates_dismissed: 1, sample_titles: ['春季写真 001'],
+    }))
+    render(<CandidatesInbox onCountsChange={vi.fn()} />)
+    await screen.findByText('资源包 2')
+
+    await userEvent.type(screen.getByPlaceholderText('搜索资源包'), '写真')
+    await userEvent.click(screen.getByRole('button', { name: '加入黑名单' }))
+
+    await waitFor(() => expect(api.quickAddKeyword).toHaveBeenCalledWith('写真', 'blacklist', true))
+    expect(await screen.findByText('涉及 1 个资源包，将移走 1 条待确认候选')).toBeTruthy()
+    expect(screen.getAllByText('春季写真 001').length).toBeGreaterThan(1)
+
+    const callsBefore = api.listInbox.mock.calls.length
+    await userEvent.click(screen.getByRole('button', { name: '确认加入黑名单' }))
+    await waitFor(() => expect(api.quickAddKeyword).toHaveBeenLastCalledWith('写真', 'blacklist', false))
+    await waitFor(() => expect(api.listInbox.mock.calls.length).toBeGreaterThan(callsBefore))
+  })
+
+  it('hides the quick add buttons when search is empty', async () => {
+    render(<CandidatesInbox onCountsChange={vi.fn()} />)
+    await screen.findByText('资源包 2')
+    expect(screen.queryByRole('button', { name: '加入黑名单' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '加入白名单' })).toBeNull()
+  })
+
+  it('shows the conflict message from the server', async () => {
+    api.quickAddKeyword.mockRejectedValue(new Error('「写真」已在白名单中，请到关键词页修改类型'))
+    render(<CandidatesInbox onCountsChange={vi.fn()} />)
+    await screen.findByText('资源包 2')
+
+    await userEvent.type(screen.getByPlaceholderText('搜索资源包'), '写真')
+    await userEvent.click(screen.getByRole('button', { name: '加入黑名单' }))
+
+    expect(await screen.findByText('「写真」已在白名单中，请到关键词页修改类型')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: '确认加入黑名单' })).toBeNull()
   })
 
   it('mounts the floating action bar outside the rendered page container', () => {

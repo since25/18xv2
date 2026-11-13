@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Button, Checkbox, Input, Select, Segmented, Space, Table, Tag, Tooltip, Typography, message, notification } from 'antd'
+import { Button, Checkbox, Input, Modal, Select, Segmented, Space, Table, Tag, Tooltip, Typography, message, notification } from 'antd'
 import type { InputRef } from 'antd/es/input'
 import type { ColumnsType } from 'antd/es/table'
 import { SearchOutlined } from '@ant-design/icons'
@@ -8,10 +8,12 @@ import {
   ignorePackages,
   listDownloaderChannels,
   listInbox,
+  quickAddKeyword,
   submitDownloaderBatches,
   submitDownloaderPackages,
   unignorePackages,
   type InboxItem,
+  type KeywordQuickAddResult,
 } from '@/api/downloader'
 import EmptyState from '@/components/EmptyState'
 import StatusTag from '@/components/StatusTag'
@@ -27,6 +29,18 @@ type CandidatesInboxProps = {
 }
 
 type InboxView = 'candidates' | 'ignored' | 'unmatched'
+
+type ListType = 'whitelist' | 'blacklist'
+
+const LIST_LABELS: Record<ListType, string> = { whitelist: '白名单', blacklist: '黑名单' }
+
+function quickAddSummary(result: KeywordQuickAddResult) {
+  const changes = [
+    result.candidates_created ? `将新增 ${result.candidates_created} 条候选` : '',
+    result.candidates_dismissed ? `将移走 ${result.candidates_dismissed} 条待确认候选` : '',
+  ].filter(Boolean)
+  return `涉及 ${result.packages_affected} 个资源包，${changes.length ? changes.join('，') : '候选不会变化'}`
+}
 
 function errorText(error: unknown) {
   return error instanceof Error ? error.message : '请求失败'
@@ -48,6 +62,9 @@ export default function CandidatesInbox({ onCountsChange }: CandidatesInboxProps
   const [submitting, setSubmitting] = useState(false)
   // 行内「下载」正在提交的资源包，用于单行按钮的加载状态
   const [submittingRowId, setSubmittingRowId] = useState<number | null>(null)
+  // 搜索词一键加黑/白名单：先预览，确认后再写入
+  const [quickAdd, setQuickAdd] = useState<KeywordQuickAddResult | null>(null)
+  const [quickAddLoading, setQuickAddLoading] = useState<ListType | 'confirm' | null>(null)
   const searchRef = useRef<InputRef | null>(null)
   const lastSelectedIndex = useRef<number | null>(null)
 
@@ -116,6 +133,35 @@ export default function CandidatesInbox({ onCountsChange }: CandidatesInboxProps
     items.forEach((item) => item.keywords.forEach((keyword) => values.set(keyword.keyword_entry_id, keyword.keyword)))
     return [...values].map(([value, label]) => ({ value, label }))
   }, [items])
+
+  async function previewQuickAdd(listType: ListType) {
+    const keyword = search.trim()
+    if (!keyword || quickAddLoading) return
+    setQuickAddLoading(listType)
+    try {
+      setQuickAdd(await quickAddKeyword(keyword, listType, true))
+    } catch (error) {
+      message.error(errorText(error))
+    } finally {
+      setQuickAddLoading(null)
+    }
+  }
+
+  async function confirmQuickAdd() {
+    if (!quickAdd || quickAddLoading) return
+    setQuickAddLoading('confirm')
+    try {
+      const result = await quickAddKeyword(quickAdd.keyword, quickAdd.list_type, false)
+      message.success(`已加入${LIST_LABELS[result.list_type]}：${quickAddSummary(result).replace(/将/g, '已')}`)
+      setQuickAdd(null)
+      setSelected(new Set())
+      await load(1)
+    } catch (error) {
+      message.error(errorText(error))
+    } finally {
+      setQuickAddLoading(null)
+    }
+  }
 
   function submitSelected() {
     if (!selectedItems.length || submitting) return
@@ -285,7 +331,7 @@ export default function CandidatesInbox({ onCountsChange }: CandidatesInboxProps
     <section className="downloader-inbox" data-testid="candidates-inbox" aria-label="候选收件箱">
       <DataToolbar
         left={<Segmented value={view} onChange={(value) => { setView(value as InboxView); setPage(1); setSelected(new Set()); if (value === 'unmatched') setKeywordEntryId(undefined) }} options={[{ label: `待确认 (${counts.candidates})`, value: 'candidates' }, { label: `未命中 (${counts.unmatched})`, value: 'unmatched' }, { label: `已忽略 (${counts.ignored})`, value: 'ignored' }]} />}
-        right={<Space wrap><Input ref={searchRef} prefix={<SearchOutlined />} allowClear placeholder="搜索资源包" value={search} onChange={(event) => { setSearch(event.target.value); setPage(1) }} /><Select allowClear placeholder="频道" aria-label="频道筛选" options={channels.map((value) => ({ value, label: value }))} value={channelTitle} onChange={(value) => { setChannelTitle(value); setPage(1); setSelected(new Set()) }} />{channelTitle && view === 'candidates' ? <Button danger onClick={() => void ignoreWholeChannel(channelTitle)}>忽略此频道</Button> : null}{view === 'unmatched' ? null : <Select allowClear placeholder="白名单命中词" options={keywordOptions} value={keywordEntryId} onChange={(value) => { setKeywordEntryId(value); setPage(1) }} />}<Select allowClear placeholder="下载状态" value={downloadStatus} onChange={(value) => { setDownloadStatus(value); setPage(1) }} options={[{ label: '全部', value: undefined }, { label: '未下载', value: 'never' }, { label: '有更新', value: 'outdated' }, { label: '曾失败', value: 'failed' }, { label: '已完成', value: 'completed' }]} /></Space>}
+        right={<Space wrap><Input ref={searchRef} prefix={<SearchOutlined />} allowClear placeholder="搜索资源包" value={search} onChange={(event) => { setSearch(event.target.value); setPage(1) }} />{search.trim() ? <><Button loading={quickAddLoading === 'whitelist'} onClick={() => void previewQuickAdd('whitelist')}>加入白名单</Button><Button danger loading={quickAddLoading === 'blacklist'} onClick={() => void previewQuickAdd('blacklist')}>加入黑名单</Button></> : null}<Select allowClear placeholder="频道" aria-label="频道筛选" options={channels.map((value) => ({ value, label: value }))} value={channelTitle} onChange={(value) => { setChannelTitle(value); setPage(1); setSelected(new Set()) }} />{channelTitle && view === 'candidates' ? <Button danger onClick={() => void ignoreWholeChannel(channelTitle)}>忽略此频道</Button> : null}{view === 'unmatched' ? null : <Select allowClear placeholder="白名单命中词" options={keywordOptions} value={keywordEntryId} onChange={(value) => { setKeywordEntryId(value); setPage(1) }} />}<Select allowClear placeholder="下载状态" value={downloadStatus} onChange={(value) => { setDownloadStatus(value); setPage(1) }} options={[{ label: '全部', value: undefined }, { label: '未下载', value: 'never' }, { label: '有更新', value: 'outdated' }, { label: '曾失败', value: 'failed' }, { label: '已完成', value: 'completed' }]} /></Space>}
       />
       <Table<InboxItem>
         className="downloader-inbox-table"
@@ -297,6 +343,28 @@ export default function CandidatesInbox({ onCountsChange }: CandidatesInboxProps
         rowClassName={(item) => fading.has(item.package_id) ? 'downloader-row-fading' : ''}
         locale={{ emptyText: <EmptyState title={{ candidates: '暂无待确认候选', unmatched: '暂无未命中资源包', ignored: '暂无已忽略资源包' }[view]} description="可以先同步资源包，或调整筛选条件。" /> }}
       />
+      <Modal
+        open={quickAdd !== null}
+        title={quickAdd ? `把「${quickAdd.keyword}」加入${LIST_LABELS[quickAdd.list_type]}` : ''}
+        okText={quickAdd ? `确认加入${LIST_LABELS[quickAdd.list_type]}` : '确认'}
+        okButtonProps={{ danger: quickAdd?.list_type === 'blacklist', loading: quickAddLoading === 'confirm' }}
+        cancelText="取消"
+        onOk={() => void confirmQuickAdd()}
+        onCancel={() => setQuickAdd(null)}
+      >
+        {quickAdd ? (
+          <Space orientation="vertical" size={8}>
+            <Typography.Text>{quickAddSummary(quickAdd)}</Typography.Text>
+            {quickAdd.entry_status === 'existing' ? <Typography.Text type="secondary">该词已在{LIST_LABELS[quickAdd.list_type]}中，本次只重新计算候选。</Typography.Text> : null}
+            {quickAdd.sample_titles.length ? (
+              <>
+                <Typography.Text type="secondary">示例资源包：</Typography.Text>
+                {quickAdd.sample_titles.map((title) => <Typography.Text key={title}>{title}</Typography.Text>)}
+              </>
+            ) : null}
+          </Space>
+        ) : null}
+      </Modal>
       <FloatingActionBar count={selectedItems.length} totalBytes={selectedBytes} onSelectAll={() => setSelected(new Set(visibleItems.map((item) => item.package_id)))} onClear={() => setSelected(new Set())} onIgnore={ignoreSelected} onSubmit={() => void submitSelected()} loading={submitting && submittingRowId === null} />
     </section>
   )

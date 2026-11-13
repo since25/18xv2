@@ -194,6 +194,26 @@ export function ignoreChannel(channelTitle: string) {
   })
 }
 
+export interface KeywordQuickAddResult {
+  keyword: string
+  list_type: 'whitelist' | 'blacklist'
+  entry_status: 'created' | 'existing'
+  keyword_entry_id: number | null
+  packages_affected: number
+  candidates_created: number
+  candidates_dismissed: number
+  sample_titles: string[]
+}
+
+// 收件箱搜索词一键加入白名单 / 黑名单；dryRun=true 只预览影响
+export function quickAddKeyword(keyword: string, listType: 'whitelist' | 'blacklist', dryRun: boolean) {
+  return api.post<KeywordQuickAddResult>('/downloader/keyword-quick-add', {
+    keyword,
+    list_type: listType,
+    dry_run: dryRun,
+  })
+}
+
 export function unignorePackages(packageIds: number[]) {
   return api.post<{ restored: number }>('/downloader/packages/unignore', { package_ids: packageIds })
 }
