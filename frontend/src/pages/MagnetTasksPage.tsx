@@ -90,12 +90,13 @@ export default function MagnetTasksPage() {
 
   // 拉取 115 目录树快照；成功后刷新批次列表并选中新批次
   const fetchTreeAction = useApiAction(
-    (payload: RemoteFetchRequest) => api.post<TreeImport>('/imports/remote-fetch', payload),
+    // 该接口返回 {import_id, status}，不是完整的批次对象
+    (payload: RemoteFetchRequest) => api.post<{ import_id: number; status: string }>('/imports/remote-fetch', payload),
     {
-      successMessage: (result) => `目录树快照已创建，批次 #${result.id}`,
+      successMessage: (result) => `目录树快照已创建，批次 #${result.import_id}`,
       onSuccess: async (result) => {
         await loadTreeImports()
-        setSelectedTreeImportId(result.id)
+        setSelectedTreeImportId(result.import_id)
       },
     },
   )
