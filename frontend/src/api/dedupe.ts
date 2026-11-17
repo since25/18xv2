@@ -1,24 +1,11 @@
 import { api } from './client'
+import type { components } from './schema.gen'
 
-export interface DedupeScanJobRequest {
-  tree_import_id: number
-  scope_path_prefix?: string | null
-  included_extensions?: string[]
-  candidate_threshold?: number
-  high_confidence_threshold?: number
-  noise_words?: string[]
-  regex_patterns?: string[]
-}
+export type DedupeScanJobRequest = components['schemas']['DedupeScanJobRequest']
 
-export interface DedupeConfirmJobRequest {
-  candidate_ids: number[]
-}
+export type DedupeConfirmJobRequest = components['schemas']['DedupeConfirmJobRequest']
 
-export interface DedupeDeletePlanCreateRequest {
-  name: string
-  candidate_ids: number[]
-  rate_limit_seconds?: number
-}
+export type DedupeDeletePlanCreateRequest = components['schemas']['DedupeDeletePlanCreateRequest']
 
 export interface DedupeDeletePlanExecuteRequest {
   confirm: boolean
@@ -37,11 +24,7 @@ export interface DedupeJobFrame {
   finished_at: string | null
 }
 
-export interface DedupeActiveJobs {
-  scan: DedupeJobFrame | null
-  confirm: DedupeJobFrame | null
-  delete: DedupeJobFrame | null
-}
+export type DedupeActiveJobs = components['schemas']['DedupeActiveJobsResponse']
 
 export interface DedupeGroup {
   id: number
@@ -57,20 +40,7 @@ export interface DedupeGroup {
   updated_at?: string | null
 }
 
-export interface DedupeCandidate {
-  id: number
-  group_id: number
-  node_file_id: number
-  raw_name: string
-  raw_path: string
-  file_ext: string | null
-  normalized_name: string
-  similarity_score: number
-  suggested_action: string
-  suggested_reason: string | null
-  user_action: string
-  user_reason: string | null
-}
+export type DedupeCandidate = components['schemas']['DedupeCandidateResponse']
 
 export interface DedupeGroupListResponse {
   items: DedupeGroup[]
@@ -84,49 +54,13 @@ export interface DedupeGroupDetailResponse {
   candidates: DedupeCandidate[]
 }
 
-export interface DedupeDeletePlan {
-  id: number
-  name: string
-  source_scan_run_id: number | null
-  tree_import_id: number
-  status: string
-  rate_limit_seconds: number
-  total_items: number
-  deleted_count: number
-  failed_count: number
-  skipped_count: number
-  created_at: string | null
-  confirmed_at: string | null
-  started_at: string | null
-  finished_at: string | null
-}
+export type DedupeDeletePlan = components['schemas']['DedupeDeletePlanResponse']
 
-export interface DedupeDeletePlanItem {
-  id: number
-  plan_id: number
-  candidate_id: number
-  node_file_id: number
-  remote_file_id: string
-  raw_path: string
-  remote_path: string | null
-  confirmation_level: string
-  delete_reason: string
-  status: string
-  error_message: string | null
-  deleted_at: string | null
-  created_at: string | null
-  updated_at: string | null
-}
+export type DedupeDeletePlanItem = components['schemas']['DedupeDeletePlanItemResponse']
 
-export interface DedupeDeletePlanDetailResponse {
-  plan: DedupeDeletePlan
-  items: DedupeDeletePlanItem[]
-}
+export type DedupeDeletePlanDetailResponse = components['schemas']['DedupeDeletePlanDetailResponse']
 
-export interface DedupeDeletePlanListResponse {
-  items: DedupeDeletePlan[]
-  total: number
-}
+export type DedupeDeletePlanListResponse = components['schemas']['DedupeDeletePlanListResponse']
 
 export interface DedupeGroupListParams {
   status?: string

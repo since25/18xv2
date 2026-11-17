@@ -1,19 +1,10 @@
 import { api } from './client'
+import type { components } from './schema.gen'
 
 export type ReviewBucket = 'whitelist' | 'blacklist' | 'keyword'
 export type ReviewStatus = 'pending' | 'approved' | 'dismissed'
 
-export interface ReviewKeywordCandidate {
-  keyword: string
-  count: number
-  source: string
-  examples: string[]
-  match_status: string
-  matched_entry_id: number | null
-  matched_canonical_name: string | null
-  matched_keyword_type: string | null
-  similar_score: number | null
-}
+export type ReviewKeywordCandidate = components['schemas']['ReviewKeywordCandidate']
 
 export interface ReviewIntakeItem {
   id: number
@@ -39,17 +30,7 @@ export interface ReviewIntakeListResponse {
   page_size: number
 }
 
-export interface ReviewIntakeSummary {
-  whitelist_pending: number
-  blacklist_pending: number
-  whitelist_approved: number
-  blacklist_approved: number
-  whitelist_dismissed: number
-  blacklist_dismissed: number
-  keyword_pending: number
-  keyword_approved: number
-  keyword_dismissed: number
-}
+export type ReviewIntakeSummary = components['schemas']['ReviewIntakeSummaryResponse']
 
 export interface ReviewIntakeCreatePayload {
   bucket: ReviewBucket
@@ -117,10 +98,7 @@ export interface ReviewIntakeBatchResponse {
   results: ReviewIntakeBatchResultItem[]
 }
 
-export interface ReviewIntakeBatchApproveEntry {
-  id: number
-  keyword: string
-}
+export type ReviewIntakeBatchApproveEntry = components['schemas']['ReviewIntakeBatchApproveEntry']
 
 // 批量接口逐条返回结果，一条失败不影响其它条
 export function batchApproveReviewIntakeItems(items: ReviewIntakeBatchApproveEntry[]) {

@@ -1,4 +1,5 @@
 import { api } from './client'
+import type { components } from './schema.gen'
 
 // ── Types ──────────────────────────────────────────────────────────────
 export interface ScanJobRequest {
@@ -7,10 +8,7 @@ export interface ScanJobRequest {
   per_keyword_limit?: number
 }
 
-export interface SubmitJobRequest {
-  candidate_ids: number[]
-  force_submit?: boolean
-}
+export type SubmitJobRequest = components['schemas']['SubmitJobRequest']
 
 export interface JobFrame {
   job_id: string
@@ -30,38 +28,9 @@ export interface ActiveJobs {
   submit: JobFrame | null
 }
 
-export interface WhitelistCandidate {
-  id: number
-  source_tid: number
-  source_magnet: string
-  source_title: string
-  source_section: string | null
-  source_detail_url: string | null
-  matched_keyword_entry_id: number
-  matched_keyword: string
-  matched_alias: string | null
-  match_score: number
-  last_scanned_tree_import_id: number | null
-  duplicate_status: string
-  duplicate_reason: string | null
-  matched_import_label: string | null
-  target_path: string
-  lifecycle_status: string
-  magnet_task_id: number | null
-  dismissed_at: string | null
-  submitted_at: string | null
-  failure_reason: string | null
-  first_seen_at: string
-  last_scanned_at: string
-  updated_at: string
-}
+export type WhitelistCandidate = components['schemas']['CandidateResponse']
 
-export interface CandidateListResponse {
-  items: WhitelistCandidate[]
-  total: number
-  page: number
-  page_size: number
-}
+export type CandidateListResponse = components['schemas']['CandidateListResponse']
 
 export interface CandidateListParams {
   lifecycle_status?: string

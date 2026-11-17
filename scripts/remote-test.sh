@@ -5,6 +5,7 @@
 #   scripts/remote-test.sh backend [pytest 参数...]   # 默认 tests -q -n 16（并行）
 #   scripts/remote-test.sh frontend [vitest 参数...]  # npm run test + build + lint
 #   scripts/remote-test.sh all
+#   scripts/remote-test.sh gen-api                    # 导出接口定义并生成前端类型，取回本机（供 scripts/gen-api-types.sh 调用）
 #
 # 环境变量：
 #   REMOTE_TEST_HOST  SSH 主机别名，默认 spark
@@ -26,8 +27,8 @@ NAME="$(basename "$LOCAL_DIR")"
 REMOTE_DIR="$ROOT/$NAME"
 
 case "$MODE" in
-  backend|frontend|all) ;;
-  *) echo "用法：$0 backend|frontend|all [额外参数]" >&2; exit 2 ;;
+  backend|frontend|all|gen-api) ;;
+  *) echo "用法：$0 backend|frontend|all|gen-api [额外参数]" >&2; exit 2 ;;
 esac
 
 ssh "$HOST" "mkdir -p $REMOTE_DIR"
@@ -74,7 +75,8 @@ fi
 EXTRA=""
 for arg in "$@"; do EXTRA+=" $(printf '%q' "$arg")"; done
 
-ssh "$HOST" "bash -s -- $MODE $REMOTE_DIR $PY_VER$EXTRA" <<'REMOTE'
+RC=0
+ssh "$HOST" "bash -s -- $MODE $REMOTE_DIR $PY_VER$EXTRA" <<'REMOTE' || RC=$?
 set -uo pipefail
 MODE="$1"; DIR="$2"; PY_VER="$3"; shift 3
 cd "$DIR"
@@ -90,7 +92,8 @@ deps_changed() { # $1=依赖文件 $2=标记文件
   return 1
 }
 
-run_backend() {
+# 准备与本机一致的后端 venv（Python 小版本 + 冻结依赖）
+prepare_backend() {
   mkdir -p data
   # 找与本机同小版本的 Python：系统自带优先，否则用 micromamba 在共享目录建一次
   local py; py="$(command -v "python$PY_VER" || true)"
@@ -128,6 +131,10 @@ run_backend() {
     rm -rf "$site"/p115client "$site"/p115client-*.dist-info
     cp -R .local-pkgs/. "$site"/
   fi
+}
+
+run_backend() {
+  prepare_backend || return 1
   # 远程串行跑主要耗在磁盘等待上（约 7 分半），并行后约 1 分钟；pytest-xdist 只装在远程测试环境，不进项目依赖
   .venv/bin/python -c "import xdist" 2>/dev/null || .venv/bin/pip install -q pytest-xdist >>"$LOG" 2>&1
   local args=("$@"); [ ${#args[@]} -eq 0 ] && args=(tests -q -n 16)
@@ -162,7 +169,20 @@ case "$MODE" in
   backend) run_backend "$@" || STATUS=1 ;;
   frontend) run_frontend "$@" || STATUS=1 ;;
   all) run_backend || STATUS=1; run_frontend || STATUS=1 ;;
+  gen-api)
+    prepare_backend && .venv/bin/python scripts/export_openapi.py >>"$LOG" 2>&1 || STATUS=1
+    echo "生成接口类型 退出码=$STATUS$( [ $STATUS -ne 0 ] && echo "：$(tail -1 "$LOG")")"
+    ;;
 esac
 echo "完整日志：$(hostname):$LOG"
 exit $STATUS
 REMOTE
+
+# 生成模式：把远程生成的两个文件取回本机（下次同步带 --delete，不取回会被删掉）
+if [ "$MODE" = gen-api ] && [ $RC -eq 0 ]; then
+  for f in frontend/openapi.json frontend/src/api/schema.gen.ts; do
+    rsync -az "$HOST:$REMOTE_DIR/$f" "$LOCAL_DIR/$f"
+  done
+  echo "已取回 frontend/openapi.json、frontend/src/api/schema.gen.ts"
+fi
+exit $RC

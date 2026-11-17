@@ -1,30 +1,9 @@
 import { api } from './client'
+import type { components } from './schema.gen'
 
-export interface EmbyDeletePlanItem {
-  id: number
-  group: string
-  target_type: string
-  target_path: string | null
-  remote_file_id: string | null
-  display_name: string
-  status: string
-  blocked_reason: string | null
-  error_message: string | null
-}
+export type EmbyDeletePlanItem = components['schemas']['EmbyDeletePlanItemResponse']
 
-export interface EmbyDeletePlan {
-  id: number
-  source: string
-  emby_item_id: string
-  scope: string
-  status: string
-  summary: string
-  total_items: number
-  deleted_count: number
-  failed_count: number
-  blocked_count: number
-  items: EmbyDeletePlanItem[]
-}
+export type EmbyDeletePlan = components['schemas']['EmbyDeletePlanResponse']
 
 export type EmbyDeleteScope = 'movie' | 'episode' | 'season' | 'series'
 export type EmbyMetadataTargetList = 'emby_blacklist' | 'emby_whitelist'

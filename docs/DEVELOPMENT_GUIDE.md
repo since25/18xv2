@@ -108,6 +108,16 @@ const removeAction = useApiAction((id: number) => api.delete(`/items/${id}`), {
 - 页面自带 `message.useMessage()` 的，操作设 `silent`，提示继续走页面的 `messageApi`。
 - 定时轮询和进度推送（SSE 订阅）保留在页面里，机制不变；其中的刷新调用 `reload()`（轮询可用 `reload({ silent: true })` 不切换加载状态），会自动使用最新的筛选条件。
 
+### 3.5 前端类型由后端接口定义生成
+
+- `frontend/openapi.json`（后端接口定义）和 `frontend/src/api/schema.gen.ts`（由其中的数据模型生成的前端类型）都由 `scripts/gen-api-types.sh` 生成，入库，不要手改。生成器是 `scripts/export_openapi.py`，不依赖任何 npm 包。
+- 后端改了接口或数据模型（`response_model`、请求体、Pydantic 模型）之后，运行 `scripts/gen-api-types.sh`，把两个生成文件和代码一起提交。脚本会在 Spark 上导出并生成，再取回本机。忘了运行时，后端测试 `tests/api/test_openapi_snapshot.py` 会失败并提示这条命令。
+- 新写前端类型时，后端有对应数据模型的，优先写成别名：`export type Xxx = components['schemas']['XxxResponse']`（`import type { components } from './schema.gen'`）。FastAPI 在请求和返回形状不同时会生成 `Xxx-Input` / `Xxx-Output` 两个名字：返回值用 Output，请求参数用 Input。
+- 字段是否可选：后端导出的接口定义把有默认值的字段（含 `X | None = None`、`default_factory`）一律标成可选。生成器按用途区分——只出现在返回内容里（含被返回模型间接引用）的模型，所有字段都生成为必填（可空性 `| null` 照常保留），因为返回时模型的全部字段都会输出（全仓没有用 `exclude_unset` / `exclude_none` / `exclude_defaults`，以后要用的话需同步调整生成器）；请求参数或请求体里用到的模型（包括两边都用到的）维持接口定义里的可选性。
+- 这条规则只在接口经过模型序列化时成立：路由设了 `response_model` 或返回模型实例。直接返回字典、`JSONResponse` 或 `StreamingResponse`（如 SSE 推送的任务进度帧）的接口，不要用生成类型描述它的返回，继续手写。
+- 生成的类型比手写宽松（例如字段在生成类型里是可选的，或固定取值变成普通字符串），或两边字段不一致时，保留手写类型，不要为了对上而改后端或页面。
+- 生成器遇到不认识的定义写法会直接报错并指出模型和字段，这时补充 `scripts/export_openapi.py` 的映射规则和对应测试（`tests/api/test_openapi_typescript.py`）。
+
 ---
 
 ## 四、配置与数据
