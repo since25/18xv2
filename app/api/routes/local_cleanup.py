@@ -221,7 +221,6 @@ def local_cleanup_workbench() -> str:
     <section class="hero">
       <h1>本地清理台</h1>
       <p>面向本地目录的扫描与删除入口。它只根据黑名单关键词扫描文件和文件夹命中项，不再附带任何内置去重或杂项清理规则，默认先 dry-run，再决定是否真实删除。</p>
-      <a href="/workbench">返回统一工作台</a>
     </section>
     <div class="grid">
       <aside class="panel">

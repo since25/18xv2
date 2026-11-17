@@ -70,9 +70,6 @@ def auth_code_page() -> str:
     <textarea id="codeInput" placeholder="粘贴授权码…"></textarea>
     <button id="submitBtn">提交授权码</button>
     <div class="result" id="result">等待提交…</div>
-    <p style="margin-top:16px;font-size:13px;color:var(--muted)">
-      也可以用 <a href="/tools/qr-login">扫码登录</a> 获取 Cookie。
-    </p>
   </div>
 </div>
 <script>

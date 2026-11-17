@@ -202,7 +202,6 @@ from app.api.routes import (  # noqa: E402 — import after app creation
     emby_media_actions,
     extractor,
     files_115,
-    home,
     imports,
     jellyfin,
     jobs,
@@ -240,7 +239,6 @@ async def enforce_authentication(request: Request, call_next):
 
 
 app.include_router(auth.router)
-app.include_router(home.router)
 app.include_router(auth_code.router)
 app.include_router(imports.router)
 app.include_router(nodes.router)

@@ -8,7 +8,6 @@ which is kept separate from the Open API token flow used by Real115Client.
 Cookies are saved to data/cookies/ (volume-mounted in Docker).
 
 Routes:
-  GET  /tools/qr-login          — HTML workbench
   GET  /tools/qr-login/clients  — list available 115 client types
   GET  /tools/qr-login/records  — saved login records
   POST /tools/qr-login/sessions — start a QR login session
@@ -26,7 +25,6 @@ from urllib.request import Request, urlopen
 from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 router = APIRouter(prefix="/tools/qr-login", tags=["tools"])
@@ -269,15 +267,6 @@ def _fetch_login_result(uid: str, app_name: str) -> dict:
 
 # ── API routes ─────────────────────────────────────────────────────────────
 
-@router.get("", response_class=HTMLResponse)
-def qr_login_page() -> str:
-    options_html = "".join(
-        f'<option value="{item["app"]}">{item["label"]} ({item["app"]})</option>'
-        for item in CLIENT_OPTIONS
-    )
-    return _QR_LOGIN_HTML.replace("<!-- __CLIENT_OPTIONS__ -->", options_html)
-
-
 @router.get("/clients")
 def list_clients() -> dict[str, list[dict]]:
     return {"clients": CLIENT_OPTIONS}
@@ -376,187 +365,3 @@ def poll_login_session(session_id: str) -> SessionResponse:
             session.saved_path = saved_path_str
             _append_record(session)
     return _to_response(session)
-
-
-# ── Embedded HTML ──────────────────────────────────────────────────────────
-
-_QR_LOGIN_HTML = """<!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>115 扫码登录工具</title>
-  <style>
-    :root{--bg:#f4efe7;--card:#fffaf4;--ink:#1e2320;--muted:#66706a;--accent:#125f54;--line:#ded4c6;--soft:#dcefeb}
-    *{box-sizing:border-box}
-    body{margin:0;font-family:"PingFang SC","Noto Sans SC",sans-serif;background:linear-gradient(135deg,#f8f2ea,#ebe0d2);color:var(--ink)}
-    .shell{max-width:900px;margin:0 auto;padding:28px 18px 48px}
-    .hero{padding:24px;color:#fff;background:linear-gradient(135deg,rgba(18,95,84,.95),rgba(15,92,138,.92));border-radius:24px;margin-bottom:22px}
-    .hero h1{margin:0 0 6px;font-size:22px}
-    .hero p{margin:0;opacity:.85;font-size:14px}
-    .panel{background:var(--card);border:1px solid var(--line);border-radius:20px;padding:20px;margin-bottom:18px}
-    label{display:block;margin:10px 0 5px;font-size:13px;color:var(--muted)}
-    select,input{width:100%;padding:11px 14px;border:1px solid var(--line);border-radius:12px;font:inherit;background:#fff}
-    button{width:100%;padding:12px;margin-top:12px;border:none;border-radius:14px;cursor:pointer;font:inherit;font-weight:600;background:var(--accent);color:#fff}
-    button.sec{background:var(--soft);color:var(--accent);border:1px solid rgba(18,95,84,.2)}
-    .qr-wrap{text-align:center;padding:16px 0}
-    .qr-wrap img{max-width:220px;border-radius:12px;border:1px solid var(--line)}
-    .status-box{margin-top:14px;padding:12px 16px;border-radius:14px;background:#f3ece2;font-size:13px;line-height:1.6;white-space:pre-wrap}
-    .badge{display:inline-block;padding:3px 10px;border-radius:999px;font-size:12px;background:#eee5d8;color:var(--muted);margin-right:6px}
-    .badge.ok{background:#c7ead5;color:#0d5c3a}
-    .badge.err{background:#f7d9d6;color:#8c2010}
-    .record-list{display:grid;gap:10px;margin-top:14px}
-    .record{background:#fff;border:1px solid var(--line);border-radius:14px;padding:10px 14px;font-size:13px}
-    .record strong{display:block;margin-bottom:4px}
-    .record .meta{color:var(--muted)}
-    a{color:var(--accent)}
-  </style>
-</head>
-<body>
-<div class="shell">
-  <section class="hero">
-    <h1>115 扫码登录工具</h1>
-    <p>扫码获取 115 账号 Cookie，保存为文本文件备用。此功能与 Open API Token 流程相互独立。</p>
-  </section>
-
-  <div class="panel">
-    <label for="appSel">目标客户端</label>
-    <select id="appSel"><!-- __CLIENT_OPTIONS__ --></select>
-    <div id="clientErr" style="display:none;color:#8c2010;font-size:13px;margin-top:6px;padding:8px 12px;background:#fff0ee;border-radius:10px;border:1px solid rgba(140,32,16,.18)"></div>
-    <label for="fileNameInput">保存文件名</label>
-    <input id="fileNameInput" placeholder="例如：myaccount" />
-    <button id="startBtn">生成二维码</button>
-  </div>
-
-  <div class="panel" id="qrPanel" style="display:none">
-    <div class="qr-wrap">
-      <img id="qrImg" src="" alt="QR Code" />
-      <div style="margin-top:8px;font-size:13px;color:var(--muted)">请使用 115 扫码</div>
-    </div>
-    <div class="status-box" id="statusBox">等待扫码…</div>
-    <button class="sec" id="stopBtn" style="margin-top:10px">停止轮询</button>
-  </div>
-
-  <div class="panel">
-    <strong style="font-size:15px">历史记录</strong>
-    <button class="sec" id="refreshRecordsBtn" style="width:auto;padding:6px 16px;margin-top:8px">刷新</button>
-    <div class="record-list" id="recordList"><div style="color:var(--muted);font-size:13px;margin-top:10px">暂无记录</div></div>
-  </div>
-</div>
-
-<script>
-const API = "/tools/qr-login";
-let pollTimer = null;
-let currentSessionId = null;
-
-async function fetchJson(url, opts = {}) {
-  const r = await fetch(url, opts);
-  const body = await r.json();
-  if (!r.ok) throw new Error(body.detail || JSON.stringify(body));
-  return body;
-}
-
-async function loadClients() {
-  const errDiv = document.getElementById("clientErr");
-  try {
-    const data = await fetchJson(API + "/clients");
-    if (!Array.isArray(data.clients) || data.clients.length === 0) {
-      errDiv.textContent = "未获取到客户端列表，请刷新重试。";
-      errDiv.style.display = "";
-      return;
-    }
-    const sel = document.getElementById("appSel");
-    sel.innerHTML = "";
-    data.clients.forEach(c => {
-      const o = document.createElement("option");
-      o.value = c.app;
-      o.textContent = c.label + " (" + c.app + ")";
-      sel.appendChild(o);
-    });
-    errDiv.style.display = "none";
-  } catch (e) {
-    errDiv.textContent = "加载客户端失败：" + e.message;
-    errDiv.style.display = "";
-  }
-}
-
-async function loadRecords() {
-  const { records } = await fetchJson(API + "/records");
-  const list = document.getElementById("recordList");
-  if (!records.length) {
-    list.innerHTML = '<div style="color:var(--muted);font-size:13px;margin-top:10px">暂无记录</div>';
-    return;
-  }
-  list.innerHTML = records.map(r => `
-    <div class="record">
-      <strong>${r.file_name}</strong>
-      <div class="meta">客户端：${r.app} &nbsp;|&nbsp; uid: ${r.uid}</div>
-      <div class="meta">保存路径：${r.saved_path || "—"}</div>
-      <div class="meta">${r.updated_at}</div>
-    </div>`).join("");
-}
-
-function stopPolling() {
-  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
-}
-
-function statusBadge(status, message) {
-  if (status === 2) return '<span class="badge ok">已登录</span>';
-  if (status < 0) return '<span class="badge err">' + message + '</span>';
-  if (status === 1) return '<span class="badge">已扫码，请在手机确认</span>';
-  return '<span class="badge">等待扫码</span>';
-}
-
-async function poll() {
-  if (!currentSessionId) return;
-  try {
-    const s = await fetchJson(API + "/sessions/" + currentSessionId);
-    const box = document.getElementById("statusBox");
-    box.innerHTML = statusBadge(s.status, s.message);
-    if (s.status === 2 && s.saved_path) {
-      box.innerHTML += "\n✅ Cookie 已保存至：" + s.saved_path;
-      if (s.cookies) box.innerHTML += "\n\nCookie 预览（前200字符）：\n" + s.cookies.slice(0, 200);
-      stopPolling();
-      loadRecords();
-    } else if (s.status < 0) {
-      box.innerHTML += (s.error ? "\n错误：" + s.error : "");
-      stopPolling();
-    }
-  } catch(e) {
-    document.getElementById("statusBox").textContent = "轮询出错：" + e.message;
-    stopPolling();
-  }
-}
-
-document.getElementById("startBtn").addEventListener("click", async () => {
-  stopPolling();
-  const app = document.getElementById("appSel").value;
-  const fileName = document.getElementById("fileNameInput").value.trim() || "cookie";
-  try {
-    const s = await fetchJson(API + "/sessions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ app, file_name: fileName }),
-    });
-    currentSessionId = s.session_id;
-    document.getElementById("qrImg").src = s.qr_image_url;
-    document.getElementById("qrPanel").style.display = "";
-    document.getElementById("statusBox").textContent = "等待扫码…";
-    pollTimer = setInterval(poll, 2000);
-  } catch(e) {
-    alert("创建会话失败：" + e.message);
-  }
-});
-
-document.getElementById("stopBtn").addEventListener("click", () => {
-  stopPolling();
-  document.getElementById("statusBox").textContent = "已停止轮询。";
-});
-
-document.getElementById("refreshRecordsBtn").addEventListener("click", loadRecords);
-
-loadClients();
-loadRecords();
-</script>
-</body>
-</html>"""

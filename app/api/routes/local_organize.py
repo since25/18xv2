@@ -132,7 +132,6 @@ def local_organize_workbench() -> str:
     <section class="hero">
       <h1>本地整理台</h1>
       <p>按白名单关键词扫描本地文件夹，生成移动预览，再决定是否真实整理。默认会自动读取数据库里的 active whitelist；当前只匹配“当前目录名”，不拿整条路径做匹配。</p>
-      <a href="/workbench">返回统一工作台</a>
     </section>
     <div class="grid">
       <aside class="panel">

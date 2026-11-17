@@ -92,7 +92,6 @@ def local_tree_export_workbench() -> str:
     <section class="hero">
       <h1>本地目录树导出</h1>
       <p>把本地路径扫描成和 115 目录树文本兼容的层级格式，并固定保存到 `collect/generated_trees/` 目录。</p>
-      <a href="/workbench">返回统一工作台</a>
     </section>
     <div class="grid">
       <aside class="panel">
