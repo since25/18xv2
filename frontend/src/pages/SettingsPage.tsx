@@ -1,4 +1,3 @@
-import { useEffect, useState } from 'react'
 import { Alert, Button, Card, Descriptions, Space, Spin, Table, Typography } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { ReloadOutlined } from '@ant-design/icons'
@@ -7,31 +6,19 @@ import type { CookieStatusItem, SystemStatusResponse } from '@/api/types'
 import PageScaffold from '@/layout/PageScaffold'
 import TimeText from '@/components/TimeText'
 import StatusTag from '@/components/StatusTag'
+import { useApiQuery } from '@/hooks/useApiQuery'
 
 const { Text } = Typography
 
 export default function SettingsPage() {
-  const [status, setStatus] = useState<SystemStatusResponse | null>(null)
-  const [loading, setLoading] = useState(false)
-  const [err, setErr] = useState<string | null>(null)
-
-  const load = async () => {
-    setLoading(true)
-    setErr(null)
-    try {
-      const data = await api.get<SystemStatusResponse>('/system-status')
-      setStatus(data)
-    } catch (e: unknown) {
-      setErr((e as Error).message)
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => { void load() }, 0)
-    return () => window.clearTimeout(timer)
-  }, [])
+  // 出错时不弹提示，错误信息在页面提示条里显示；重新检查期间先隐藏上次的错误
+  const { data, loading, error, reload: load } = useApiQuery(
+    () => api.get<SystemStatusResponse>('/system-status'),
+    [],
+    { silent: true },
+  )
+  const status = data ?? null
+  const err = loading ? null : error?.message ?? null
 
   const cookieColumns: ColumnsType<CookieStatusItem> = [
     {

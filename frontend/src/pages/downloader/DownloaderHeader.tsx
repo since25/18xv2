@@ -1,44 +1,48 @@
 import { PauseCircleOutlined, SyncOutlined } from '@ant-design/icons'
 import { Button, Space, Typography, message } from 'antd'
-import { useState } from 'react'
 import { controlDownloader, syncDownloaderPackages, syncDownloaderTasks, type DownloaderStatus } from '@/api/downloader'
 import { formatRelative } from '@/utils/format'
+import { useApiAction } from '@/hooks/useApiAction'
 
 type DownloaderHeaderProps = {
   status: DownloaderStatus | null
   onSynced: () => void
 }
 
-function errorText(error: unknown) {
-  return error instanceof Error ? error.message : '请求失败'
+// 401 由全局登录过期处理负责提示，这里不重复弹
+function showError(messageApi: ReturnType<typeof message.useMessage>[0], error: Error) {
+  if ((error as { status?: number }).status === 401) return
+  messageApi.error(error.message)
 }
 
 export default function DownloaderHeader({ status, onSynced }: DownloaderHeaderProps) {
   const [messageApi, contextHolder] = message.useMessage()
-  const [loading, setLoading] = useState(false)
+  // 提示统一走本组件的 messageApi，所以两个操作都设为 silent，出错文字在这里自行弹出
+  const syncAction = useApiAction(async () => {
+    await syncDownloaderPackages()
+    await syncDownloaderTasks()
+  }, { silent: true })
+  const controlAction = useApiAction((state: 'pause' | 'resume') => controlDownloader(state), { silent: true })
+  const loading = syncAction.loading
 
   async function sync() {
-    setLoading(true)
-    try {
-      await syncDownloaderPackages()
-      await syncDownloaderTasks()
-      messageApi.success('资源包和任务已同步')
-      onSynced()
-    } catch (error) {
-      messageApi.error(errorText(error))
-    } finally {
-      setLoading(false)
+    const result = await syncAction.run()
+    if (!result.ok) {
+      showError(messageApi, result.error)
+      return
     }
+    messageApi.success('资源包和任务已同步')
+    onSynced()
   }
 
   async function changeState(state: 'pause' | 'resume') {
-    try {
-      await controlDownloader(state)
-      messageApi.success(state === 'pause' ? '已暂停全部下载' : '已恢复全部下载')
-      onSynced()
-    } catch (error) {
-      messageApi.error(errorText(error))
+    const result = await controlAction.run(state)
+    if (!result.ok) {
+      showError(messageApi, result.error)
+      return
     }
+    messageApi.success(state === 'pause' ? '已暂停全部下载' : '已恢复全部下载')
+    onSynced()
   }
 
   const ready = Boolean(status?.enabled && status.remote_ready)

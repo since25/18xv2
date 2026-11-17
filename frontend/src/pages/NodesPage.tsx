@@ -1,47 +1,35 @@
-import { useCallback, useEffect, useState } from 'react'
-import { Button, Card, Input, InputNumber, Select, Table, Tag, Typography, message } from 'antd'
+import { useState } from 'react'
+import { Button, Card, Input, InputNumber, Select, Table, Tag, Typography } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { useSearchParams } from 'react-router-dom'
 import { api } from '@/api/client'
 import type { ImportListResponse, TreeImport, TreeImportEntry, TreeImportEntryListResponse } from '@/api/types'
 import DataToolbar from '@/layout/DataToolbar'
 import PageScaffold from '@/layout/PageScaffold'
+import { useApiQuery } from '@/hooks/useApiQuery'
 
 const { Text } = Typography
 
 export default function NodesPage() {
   const [searchParams] = useSearchParams()
-  const [imports, setImports] = useState<TreeImport[]>([])
   const [selectedImportId, setSelectedImportId] = useState<number | null>(
     searchParams.get('import_id') ? Number(searchParams.get('import_id')) : null,
   )
   const [query, setQuery] = useState('')
   const [maxDepth, setMaxDepth] = useState<number | null>(null)
-  const [entries, setEntries] = useState<TreeImportEntry[]>([])
-  const [total, setTotal] = useState(0)
-  const [loadingImports, setLoadingImports] = useState(false)
-  const [loadingEntries, setLoadingEntries] = useState(false)
 
-  const loadImports = useCallback(async () => {
-    setLoadingImports(true)
-    try {
-      const response = await api.get<ImportListResponse>('/imports/data?limit=200')
-      setImports(response.items ?? [])
-    } catch (error: unknown) {
-      message.error((error as Error).message)
-    } finally {
-      setLoadingImports(false)
-    }
-  }, [])
+  const { data: imports, loading: loadingImports } = useApiQuery(
+    () => api.get<ImportListResponse>('/imports/data?limit=200').then((response) => response.items ?? []),
+    [],
+    { initialData: [] as TreeImport[] },
+  )
 
-  const loadEntries = useCallback(async () => {
-    if (!selectedImportId) {
-      setEntries([])
-      setTotal(0)
-      return
-    }
-    setLoadingEntries(true)
-    try {
+  // 未选批次时不请求，列表显示为空
+  const { data: entryPage, loading: loadingEntries, reload: reloadEntries } = useApiQuery(
+    async () => {
+      if (!selectedImportId) {
+        return { items: [] as TreeImportEntry[], total: 0 }
+      }
       const params = new URLSearchParams()
       if (query.trim()) {
         params.set('query', query.trim())
@@ -51,28 +39,13 @@ export default function NodesPage() {
       }
       params.set('limit', '500')
       const response = await api.get<TreeImportEntryListResponse>(`/imports/${selectedImportId}/entries?${params.toString()}`)
-      setEntries(response.items ?? [])
-      setTotal(response.total ?? 0)
-    } catch (error: unknown) {
-      message.error((error as Error).message)
-    } finally {
-      setLoadingEntries(false)
-    }
-  }, [maxDepth, query, selectedImportId])
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      void loadImports()
-    }, 0)
-    return () => window.clearTimeout(timer)
-  }, [loadImports])
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      void loadEntries()
-    }, 0)
-    return () => window.clearTimeout(timer)
-  }, [loadEntries])
+      return { items: response.items ?? [], total: response.total ?? 0 }
+    },
+    [maxDepth, query, selectedImportId],
+    { enabled: Boolean(selectedImportId), initialData: { items: [] as TreeImportEntry[], total: 0 } },
+  )
+  const entries = selectedImportId ? entryPage.items : []
+  const total = selectedImportId ? entryPage.total : 0
 
   const columns: ColumnsType<TreeImportEntry> = [
     {
@@ -128,7 +101,7 @@ export default function NodesPage() {
             placeholder="路径 / 名称搜索"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            onPressEnter={() => void loadEntries()}
+            onPressEnter={() => void reloadEntries()}
           />
           <InputNumber
             style={{ width: 140 }}
@@ -137,7 +110,7 @@ export default function NodesPage() {
             value={maxDepth ?? undefined}
             onChange={(value) => setMaxDepth(typeof value === 'number' ? value : null)}
           />
-          <Button onClick={() => void loadEntries()} loading={loadingEntries}>
+          <Button onClick={() => void reloadEntries()} loading={loadingEntries}>
             刷新内容
           </Button>
         </DataToolbar>

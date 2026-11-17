@@ -25,53 +25,38 @@ import type {
 import TimeText from '@/components/TimeText'
 import StatusTag from '@/components/StatusTag'
 import DataToolbar from '@/layout/DataToolbar'
+import { useApiAction } from '@/hooks/useApiAction'
+import { useApiQuery } from '@/hooks/useApiQuery'
 
 const { Text } = Typography
 
 export default function QrLoginPage() {
-  const [clients, setClients] = useState<QrLoginClientOption[]>([])
-  const [records, setRecords] = useState<QrLoginRecord[]>([])
   const [selectedApp, setSelectedApp] = useState<string>()
   const [fileName, setFileName] = useState('cookie')
   const [session, setSession] = useState<QrLoginSession | null>(null)
-  const [loadingClients, setLoadingClients] = useState(false)
-  const [loadingRecords, setLoadingRecords] = useState(false)
-  const [creatingSession, setCreatingSession] = useState(false)
 
-  const loadClients = async () => {
-    setLoadingClients(true)
-    try {
-      const response = await api.get<QrLoginClientsResponse>('/tools/qr-login/clients')
+  // 可选客户端：取到后若还没选，默认选第一个
+  const clientsQuery = useApiQuery(
+    () => api.get<QrLoginClientsResponse>('/tools/qr-login/clients').then((response) => {
       const items = response.clients ?? []
-      setClients(items)
       setSelectedApp((current) => current ?? items[0]?.app)
-    } catch (error: unknown) {
-      message.error((error as Error).message)
-    } finally {
-      setLoadingClients(false)
-    }
-  }
+      return items
+    }),
+    [],
+    { initialData: [] as QrLoginClientOption[] },
+  )
+  const clients = clientsQuery.data
+  const loadingClients = clientsQuery.loading
+  const loadClients = clientsQuery.reload
 
-  const loadRecords = async () => {
-    setLoadingRecords(true)
-    try {
-      const response = await api.get<QrLoginRecordsResponse>('/tools/qr-login/records')
-      setRecords(response.records ?? [])
-    } catch (error: unknown) {
-      message.error((error as Error).message)
-    } finally {
-      setLoadingRecords(false)
-    }
-  }
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      void loadClients()
-      void loadRecords()
-    }, 0)
-
-    return () => window.clearTimeout(timer)
-  }, [])
+  const recordsQuery = useApiQuery(
+    () => api.get<QrLoginRecordsResponse>('/tools/qr-login/records').then((response) => response.records ?? []),
+    [],
+    { initialData: [] as QrLoginRecord[] },
+  )
+  const records = recordsQuery.data
+  const loadingRecords = recordsQuery.loading
+  const loadRecords = recordsQuery.reload
 
   const isTerminal = useMemo(() => {
     if (!session) {
@@ -104,7 +89,21 @@ export default function QrLoginPage() {
     return () => {
       window.clearInterval(timer)
     }
-  }, [isPolling, session])
+  }, [isPolling, loadRecords, session])
+
+  const createAction = useApiAction(
+    (app: string) => api.post<QrLoginSession>('/tools/qr-login/sessions', {
+      app,
+      file_name: fileName.trim() || 'cookie',
+    }),
+    {
+      onSuccess: (response) => {
+        setSession(response)
+        message.success('二维码已生成')
+      },
+    },
+  )
+  const creatingSession = createAction.loading
 
   const createSession = async () => {
     if (!selectedApp) {
@@ -112,19 +111,7 @@ export default function QrLoginPage() {
       return
     }
 
-    setCreatingSession(true)
-    try {
-      const response = await api.post<QrLoginSession>('/tools/qr-login/sessions', {
-        app: selectedApp,
-        file_name: fileName.trim() || 'cookie',
-      })
-      setSession(response)
-      message.success('二维码已生成')
-    } catch (error: unknown) {
-      message.error((error as Error).message)
-    } finally {
-      setCreatingSession(false)
-    }
+    await createAction.run(selectedApp)
   }
 
   return (

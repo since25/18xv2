@@ -23,6 +23,8 @@ import { formatBytes } from '@/utils/format'
 import { downloaderErrorText } from '@/utils/statusText'
 import FloatingActionBar from './FloatingActionBar'
 import { useUndoableIgnore } from './useUndoableIgnore'
+import { useApiAction } from '@/hooks/useApiAction'
+import { useApiQuery } from '@/hooks/useApiQuery'
 
 type CandidatesInboxProps = {
   onCountsChange: (counts: { candidates: number; ignored: number }) => void
@@ -42,23 +44,15 @@ function quickAddSummary(result: KeywordQuickAddResult) {
   return `涉及 ${result.packages_affected} 个资源包，${changes.length ? changes.join('，') : '候选不会变化'}`
 }
 
-function errorText(error: unknown) {
-  return error instanceof Error ? error.message : '请求失败'
-}
-
 export default function CandidatesInbox({ onCountsChange }: CandidatesInboxProps) {
   const [view, setView] = useState<InboxView>('candidates')
-  const [items, setItems] = useState<InboxItem[]>([])
-  const [counts, setCounts] = useState({ candidates: 0, ignored: 0, unmatched: 0 })
   const [page, setPage] = useState(1)
   const [search, setSearch] = useState('')
   const [downloadStatus, setDownloadStatus] = useState<string | undefined>()
   const [keywordEntryId, setKeywordEntryId] = useState<number | undefined>()
   const [channelTitle, setChannelTitle] = useState<string | undefined>()
-  const [channels, setChannels] = useState<string[]>([])
   const [selected, setSelected] = useState<Set<number>>(() => new Set())
   const [fading, setFading] = useState<Set<number>>(() => new Set())
-  const [loading, setLoading] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   // 行内「下载」正在提交的资源包，用于单行按钮的加载状态
   const [submittingRowId, setSubmittingRowId] = useState<number | null>(null)
@@ -68,43 +62,117 @@ export default function CandidatesInbox({ onCountsChange }: CandidatesInboxProps
   const searchRef = useRef<InputRef | null>(null)
   const lastSelectedIndex = useRef<number | null>(null)
 
-  const load = useCallback(async (requestedPage = page) => {
-    setLoading(true)
-    try {
-      const payload = await listInbox({
-        view,
-        search: search.trim() || undefined,
-        downloadStatus,
-        keywordEntryId,
-        channelTitle,
-        page: requestedPage,
-      })
-      setItems(payload.items ?? [])
-      setCounts({ unmatched: 0, ...(payload.counts ?? { candidates: payload.total, ignored: 0 }) })
-      onCountsChange(payload.counts ?? { candidates: payload.total, ignored: 0 })
-    } catch (error) {
-      message.error(errorText(error))
-    } finally {
-      setLoading(false)
-    }
-  }, [channelTitle, downloadStatus, keywordEntryId, onCountsChange, page, search, view])
+  // 按指定页码读取收件箱，并把计数回传给上层
+  const fetchInbox = (requestedPage: number) => listInbox({
+    view,
+    search: search.trim() || undefined,
+    downloadStatus,
+    keywordEntryId,
+    channelTitle,
+    page: requestedPage,
+  }).then((payload) => {
+    onCountsChange(payload.counts ?? { candidates: payload.total, ignored: 0 })
+    return { items: payload.items ?? [], counts: { unmatched: 0, ...(payload.counts ?? { candidates: payload.total, ignored: 0 }) } }
+  })
+
+  // 筛选或页码变化时自动读取当前页
+  const inbox = useApiQuery(
+    () => fetchInbox(page),
+    [channelTitle, downloadStatus, keywordEntryId, onCountsChange, page, search, view],
+    { initialData: { items: [] as InboxItem[], counts: { candidates: 0, ignored: 0, unmatched: 0 } } },
+  )
+  const { items, counts } = inbox.data
+  const { reload: load, setData: setInbox } = inbox
+
+  // 操作完成后直接读取第 1 页（与原来一样不改动页码状态），结果写回列表
+  const firstPageLoader = useApiAction(() => fetchInbox(1), { onSuccess: (data) => setInbox(data) })
+  const loading = inbox.loading || firstPageLoader.loading
+  const loadFirstPage = firstPageLoader.run
 
   const commitIgnore = useCallback(async (packageIds: number[]) => {
     await ignorePackages({ packageIds })
-    await load(1)
-  }, [load])
+    await loadFirstPage()
+  }, [loadFirstPage])
   const { schedule, undo, pendingIds } = useUndoableIgnore({ commit: commitIgnore })
 
-  useEffect(() => {
-    const timer = window.setTimeout(() => { void load() }, 0)
-    return () => window.clearTimeout(timer)
-  }, [load])
+  // 频道很少，进页面取一次作为频道筛选项；出错时静默（保持空列表）
+  const { data: channels } = useApiQuery(() => listDownloaderChannels(), [], { silent: true, initialData: [] as string[] })
 
-  useEffect(() => {
-    // 频道很少，进页面取一次作为频道筛选项
-    listDownloaderChannels().then(setChannels).catch(() => setChannels([]))
-  }, [])
+  const visibleItems = useMemo(
+    () => items.filter((item) => !pendingIds.has(item.package_id) && !fading.has(item.package_id)),
+    [fading, items, pendingIds],
+  )
+  const selectedItems = useMemo(() => items.filter((item) => selected.has(item.package_id)), [items, selected])
+  const selectedBytes = selectedItems.reduce((total, item) => total + (item.known_total_size || 0), 0)
+  const keywordOptions = useMemo(() => {
+    const values = new Map<number, string>()
+    items.forEach((item) => item.keywords.forEach((keyword) => values.set(keyword.keyword_entry_id, keyword.keyword)))
+    return [...values].map(([value, label]) => ({ value, label }))
+  }, [items])
 
+  const quickAddAction = useApiAction((keyword: string, listType: ListType, dryRun: boolean) => quickAddKeyword(keyword, listType, dryRun))
+
+  async function previewQuickAdd(listType: ListType) {
+    const keyword = search.trim()
+    if (!keyword || quickAddLoading) return
+    setQuickAddLoading(listType)
+    const result = await quickAddAction.run(keyword, listType, true)
+    if (result.ok) setQuickAdd(result.data)
+    setQuickAddLoading(null)
+  }
+
+  async function confirmQuickAdd() {
+    if (!quickAdd || quickAddLoading) return
+    setQuickAddLoading('confirm')
+    const response = await quickAddAction.run(quickAdd.keyword, quickAdd.list_type, false)
+    if (response.ok) {
+      const result = response.data
+      message.success(`已加入${LIST_LABELS[result.list_type]}：${quickAddSummary(result).replace(/将/g, '已')}`)
+      setQuickAdd(null)
+      setSelected(new Set())
+      await loadFirstPage()
+    }
+    setQuickAddLoading(null)
+  }
+
+  function submitSelected() {
+    if (!selectedItems.length || submitting) return
+    return submitItems(selectedItems)
+  }
+
+  // 未命中视图没有白名单候选，按资源包直接提交
+  const submitAction = useApiAction((targetView: InboxView, packageIds: number[], candidateIds: number[]) => (
+    targetView === 'unmatched' ? submitDownloaderPackages(packageIds) : submitDownloaderBatches(candidateIds)
+  ))
+
+  async function submitItems(targets: InboxItem[], rowId: number | null = null) {
+    if (submitting) return
+    const packageIds = targets.map((item) => item.package_id)
+    const candidateIds = targets.flatMap((item) => item.candidate_ids)
+    setSubmitting(true)
+    setSubmittingRowId(rowId)
+    const response = await submitAction.run(view, packageIds, candidateIds)
+    if (response.ok) {
+      const result = response.data
+      setFading(new Set(packageIds))
+      setSelected((current) => {
+        const next = new Set(current)
+        packageIds.forEach((id) => next.delete(id))
+        return next
+      })
+      const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+      if (!reduced) await new Promise((resolve) => window.setTimeout(resolve, 200))
+      setFading(new Set())
+      setPage(1)
+      await loadFirstPage()
+      const skipped = result.skipped ? `，跳过 ${result.skipped} 个` : ''
+      notification.success({ title: `已提交 ${result.submitted} 个下载批次${skipped}`, placement: 'bottomRight' })
+    }
+    setSubmitting(false)
+    setSubmittingRowId(null)
+  }
+
+  // 键盘快捷键：放在 submitSelected 声明之后，满足 react-hooks 对“先声明后使用”的检查
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       const active = document.activeElement as HTMLInputElement | HTMLTextAreaElement | null
@@ -121,82 +189,6 @@ export default function CandidatesInbox({ onCountsChange }: CandidatesInboxProps
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
   })
-
-  const visibleItems = useMemo(
-    () => items.filter((item) => !pendingIds.has(item.package_id) && !fading.has(item.package_id)),
-    [fading, items, pendingIds],
-  )
-  const selectedItems = useMemo(() => items.filter((item) => selected.has(item.package_id)), [items, selected])
-  const selectedBytes = selectedItems.reduce((total, item) => total + (item.known_total_size || 0), 0)
-  const keywordOptions = useMemo(() => {
-    const values = new Map<number, string>()
-    items.forEach((item) => item.keywords.forEach((keyword) => values.set(keyword.keyword_entry_id, keyword.keyword)))
-    return [...values].map(([value, label]) => ({ value, label }))
-  }, [items])
-
-  async function previewQuickAdd(listType: ListType) {
-    const keyword = search.trim()
-    if (!keyword || quickAddLoading) return
-    setQuickAddLoading(listType)
-    try {
-      setQuickAdd(await quickAddKeyword(keyword, listType, true))
-    } catch (error) {
-      message.error(errorText(error))
-    } finally {
-      setQuickAddLoading(null)
-    }
-  }
-
-  async function confirmQuickAdd() {
-    if (!quickAdd || quickAddLoading) return
-    setQuickAddLoading('confirm')
-    try {
-      const result = await quickAddKeyword(quickAdd.keyword, quickAdd.list_type, false)
-      message.success(`已加入${LIST_LABELS[result.list_type]}：${quickAddSummary(result).replace(/将/g, '已')}`)
-      setQuickAdd(null)
-      setSelected(new Set())
-      await load(1)
-    } catch (error) {
-      message.error(errorText(error))
-    } finally {
-      setQuickAddLoading(null)
-    }
-  }
-
-  function submitSelected() {
-    if (!selectedItems.length || submitting) return
-    return submitItems(selectedItems)
-  }
-
-  async function submitItems(targets: InboxItem[], rowId: number | null = null) {
-    if (submitting) return
-    const packageIds = targets.map((item) => item.package_id)
-    const candidateIds = targets.flatMap((item) => item.candidate_ids)
-    setSubmitting(true)
-    setSubmittingRowId(rowId)
-    try {
-      // 未命中视图没有白名单候选，按资源包直接提交
-      const result = view === 'unmatched' ? await submitDownloaderPackages(packageIds) : await submitDownloaderBatches(candidateIds)
-      setFading(new Set(packageIds))
-      setSelected((current) => {
-        const next = new Set(current)
-        packageIds.forEach((id) => next.delete(id))
-        return next
-      })
-      const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
-      if (!reduced) await new Promise((resolve) => window.setTimeout(resolve, 200))
-      setFading(new Set())
-      setPage(1)
-      await load(1)
-      const skipped = result.skipped ? `，跳过 ${result.skipped} 个` : ''
-      notification.success({ title: `已提交 ${result.submitted} 个下载批次${skipped}`, placement: 'bottomRight' })
-    } catch (error) {
-      message.error(errorText(error))
-    } finally {
-      setSubmitting(false)
-      setSubmittingRowId(null)
-    }
-  }
 
   function toggleSelection(packageId: number, shiftKey: boolean) {
     const index = visibleItems.findIndex((item) => item.package_id === packageId)
@@ -252,35 +244,31 @@ export default function CandidatesInbox({ onCountsChange }: CandidatesInboxProps
     })
   }
 
+  const ignoreChannelAction = useApiAction((targetChannel: string) => ignoreChannel(targetChannel))
+  const unignoreAction = useApiAction((packageIds: number[]) => unignorePackages(packageIds), { onSuccess: () => load() })
+
   async function ignoreWholeChannel(targetChannel: string) {
-    try {
-      const result = await ignoreChannel(targetChannel)
-      // 忽略后清掉频道筛选，回到全部候选（筛选变化会自动重新加载）
-      setChannelTitle(undefined)
-      setPage(1)
-      notification.open({
-        key: 'downloader-ignore-channel',
-        title: `已忽略频道「${targetChannel}」的 ${result.ignored} 个资源包`,
-        description: '可以在 5 秒内撤销，之后也能在「已忽略」里逐个恢复。',
-        btn: <Button size="small" onClick={() => {
-          notification.destroy('downloader-ignore-channel')
-          void unignorePackages(result.package_ids).then(() => load()).catch((error) => message.error(errorText(error)))
-        }}>撤销</Button>,
-        placement: 'bottomRight',
-        duration: 5,
-      })
-    } catch (error) {
-      message.error(errorText(error))
-    }
+    const response = await ignoreChannelAction.run(targetChannel)
+    if (!response.ok) return
+    const result = response.data
+    // 忽略后清掉频道筛选，回到全部候选（筛选变化会自动重新加载）
+    setChannelTitle(undefined)
+    setPage(1)
+    notification.open({
+      key: 'downloader-ignore-channel',
+      title: `已忽略频道「${targetChannel}」的 ${result.ignored} 个资源包`,
+      description: '可以在 5 秒内撤销，之后也能在「已忽略」里逐个恢复。',
+      btn: <Button size="small" onClick={() => {
+        notification.destroy('downloader-ignore-channel')
+        void unignoreAction.run(result.package_ids)
+      }}>撤销</Button>,
+      placement: 'bottomRight',
+      duration: 5,
+    })
   }
 
   async function restore(item: InboxItem) {
-    try {
-      await unignorePackages([item.package_id])
-      await load()
-    } catch (error) {
-      message.error(errorText(error))
-    }
+    await unignoreAction.run([item.package_id])
   }
 
   const columns: ColumnsType<InboxItem> = [

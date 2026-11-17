@@ -3,27 +3,22 @@ import { LinkOutlined, SafetyCertificateOutlined } from '@ant-design/icons'
 import { api } from '@/api/client'
 import type { SystemStatusResponse } from '@/api/types'
 import PageScaffold from '@/layout/PageScaffold'
-import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import TimeText from '@/components/TimeText'
 import StatusTag from '@/components/StatusTag'
 import DataToolbar from '@/layout/DataToolbar'
+import { useApiQuery } from '@/hooks/useApiQuery'
 
 const { Paragraph, Text } = Typography
 
 export default function AuthCenterPage() {
-  const [status, setStatus] = useState<SystemStatusResponse | null>(null)
-  const [error, setError] = useState<string | null>(null)
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      api.get<SystemStatusResponse>('/system-status')
-        .then(setStatus)
-        .catch((err: Error) => setError(err.message))
-    }, 0)
-
-    return () => window.clearTimeout(timer)
-  }, [])
+  // 出错时不弹提示，错误信息在页面顶部提示条里显示
+  const { data: status, error: loadError } = useApiQuery(
+    () => api.get<SystemStatusResponse>('/system-status'),
+    [],
+    { silent: true },
+  )
+  const error = loadError?.message ?? null
 
   return (
     <PageScaffold

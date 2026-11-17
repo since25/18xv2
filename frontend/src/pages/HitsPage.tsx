@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useState } from 'react'
 import {
   Select, Button, Switch, Space, Typography, Card, message, Descriptions,
   Table, Tag, Input, Alert, Divider,
@@ -15,18 +15,18 @@ import type {
 import PageScaffold from '@/layout/PageScaffold'
 import DataToolbar from '@/layout/DataToolbar'
 import StatusTag from '@/components/StatusTag'
+import { useApiAction } from '@/hooks/useApiAction'
+import { useApiQuery } from '@/hooks/useApiQuery'
 
 const { Text } = Typography
 
 export default function HitsPage() {
-  const [imports, setImports]         = useState<TreeImport[]>([])
   const [importId, setImportId]       = useState<number | null>(null)
 
   // 重建命中
   const [inclFolders, setInclFolders] = useState(true)
   const [inclFiles, setInclFiles]     = useState(false)
   const [replaceExist, setReplaceExist] = useState(true)
-  const [rebuilding, setRebuilding]   = useState(false)
   const [rebuildResult, setRebuildResult] = useState<KeywordHitRebuildResponse | null>(null)
 
   // tree-hit-summary
@@ -34,80 +34,70 @@ export default function HitsPage() {
   const [typeFilter, setTypeFilter]   = useState<string | undefined>()
   const [statusFilter, setStatusFilter] = useState<string | undefined>()
   const [summaryQ, setSummaryQ]       = useState('')
-  const [summaryLoading, setSummaryLoading] = useState(false)
-  const [summaryItems, setSummaryItems] = useState<TreeHitSummaryItem[]>([])
-  const [summaryTotal, setSummaryTotal] = useState(0)
-  const [hitsLoading, setHitsLoading] = useState(false)
-  const [hits, setHits] = useState<KeywordHit[]>([])
 
-  useEffect(() => {
-    api.get<ImportListResponse>('/imports/data?limit=100')
-      .then((d) => setImports(d.items ?? []))
-      .catch(() => {})
-  }, [])
+  // 批次列表：出错时静默
+  const { data: imports } = useApiQuery(
+    () => api.get<ImportListResponse>('/imports/data?limit=100').then((d) => d.items ?? []),
+    [],
+    { silent: true, initialData: [] as TreeImport[] },
+  )
 
-  // 重建命中
-  const rebuildHits = async () => {
-    if (!importId) { message.warning('请先选择导入批次'); return }
-    setRebuilding(true)
-    setRebuildResult(null)
-    try {
-      const res = await api.post<KeywordHitRebuildResponse>('/keywords/hits/rebuild', {
-        import_id: importId,
-        include_folders: inclFolders,
-        include_files: inclFiles,
-        replace_existing: replaceExist,
-      })
-      setRebuildResult(res)
-      message.success(`命中重建完成：命中 ${res.created_count} 条，匹配关键词 ${res.matched_keyword_count} 个`)
-      loadSummary()
-      loadHits()
-    } catch (e: unknown) {
-      message.error((e as Error).message)
-    } finally {
-      setRebuilding(false)
-    }
-  }
-
-  // 加载 tree-hit-summary
-  const loadSummary = useCallback(async () => {
-    if (!importId) return
-    setSummaryLoading(true)
-    try {
+  // 加载 tree-hit-summary（选了批次才请求）
+  const {
+    data: summary, loading: summaryLoading, reload: loadSummary,
+  } = useApiQuery(
+    async () => {
       const params = new URLSearchParams({ import_id: String(importId), limit: '200' })
       if (treePath)    params.set('tree_path', treePath)
       if (typeFilter)  params.set('keyword_type', typeFilter)
       if (statusFilter) params.set('status', statusFilter)
       if (summaryQ)    params.set('query', summaryQ)
       const data = await api.get<TreeHitSummaryResponse>(`/keywords/tree-hit-summary?${params}`)
-      setSummaryItems(data.items ?? [])
-      setSummaryTotal(data.total ?? 0)
-    } catch (e: unknown) {
-      message.error((e as Error).message)
-    } finally {
-      setSummaryLoading(false)
-    }
-  }, [importId, treePath, typeFilter, statusFilter, summaryQ])
+      return { items: data.items ?? [], total: data.total ?? 0 }
+    },
+    [importId, treePath, typeFilter, statusFilter, summaryQ],
+    { enabled: Boolean(importId), initialData: { items: [] as TreeHitSummaryItem[], total: 0 } },
+  )
+  const summaryItems = summary.items
+  const summaryTotal = summary.total
 
-  const loadHits = useCallback(async () => {
-    if (!importId) return
-    setHitsLoading(true)
-    try {
+  // 最近命中记录（选了批次才请求）
+  const { data: hits, loading: hitsLoading, reload: loadHits } = useApiQuery(
+    async () => {
       const params = new URLSearchParams({ import_id: String(importId), limit: '50' })
       const data = await api.get<KeywordHit[]>(`/keywords/hits?${params}`)
-      setHits(data ?? [])
-    } catch (e: unknown) {
-      message.error((e as Error).message)
-    } finally {
-      setHitsLoading(false)
-    }
-  }, [importId])
+      return data ?? []
+    },
+    [importId],
+    { enabled: Boolean(importId), initialData: [] as KeywordHit[] },
+  )
 
-  useEffect(() => {
-    if (!importId) return
-    void loadSummary()
-    void loadHits()
-  }, [importId, loadHits, loadSummary])
+  // 重建命中
+  const rebuildAction = useApiAction(
+    () => api.post<KeywordHitRebuildResponse>('/keywords/hits/rebuild', {
+      import_id: importId,
+      include_folders: inclFolders,
+      include_files: inclFiles,
+      replace_existing: replaceExist,
+    }),
+    {
+      successMessage: (res) => `命中重建完成：命中 ${res.created_count} 条，匹配关键词 ${res.matched_keyword_count} 个`,
+      onSuccess: () => {
+        void loadSummary()
+        void loadHits()
+      },
+    },
+  )
+  const rebuilding = rebuildAction.loading
+
+  const rebuildHits = async () => {
+    if (!importId) { message.warning('请先选择导入批次'); return }
+    setRebuildResult(null)
+    const result = await rebuildAction.run()
+    if (result.ok) {
+      setRebuildResult(result.data)
+    }
+  }
 
   const TYPE_COLOR: Record<string, string> = {
     whitelist: 'green', blacklist: 'red', ignore: 'orange', tag: 'blue',
@@ -212,7 +202,7 @@ export default function HitsPage() {
                 allowClear
                 value={treePath}
                 onChange={(e) => setTreePath(e.target.value)}
-                onPressEnter={() => loadSummary()}
+                onPressEnter={() => void loadSummary()}
               />
               <Select
                 placeholder="类型" allowClear style={{ width: 110 }}
@@ -231,7 +221,7 @@ export default function HitsPage() {
                 onSearch={(v) => setSummaryQ(v)}
                 onChange={(e) => { if (!e.target.value) setSummaryQ('') }}
               />
-              <Button onClick={loadSummary} loading={summaryLoading}>刷新</Button>
+              <Button onClick={() => void loadSummary()} loading={summaryLoading}>刷新</Button>
               <Text type="secondary" style={{ fontSize: 13 }}>共 {summaryTotal} 个关键词命中</Text>
               </Space>
             )} />

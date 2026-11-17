@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useState } from 'react'
 import {
   Alert,
   Button,
@@ -32,6 +32,8 @@ import PageScaffold from '@/layout/PageScaffold'
 import StatusTag from '@/components/StatusTag'
 import { splitTextareaLines } from '@/utils/format'
 import TimeText from '@/components/TimeText'
+import { useApiAction } from '@/hooks/useApiAction'
+import { useApiQuery } from '@/hooks/useApiQuery'
 
 const { Text } = Typography
 
@@ -72,16 +74,11 @@ const MERGE_POLICY_LABEL: Record<KeywordMergePolicy, string> = {
 }
 
 export default function KeywordsPage() {
-  const [entries, setEntries] = useState<KeywordEntry[]>([])
-  const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
-  const [loading, setLoading] = useState(false)
-  const [logs, setLogs] = useState<KeywordOperationLog[]>([])
   const [selectedRowKeys, setSelectedRowKeys] = useState<Array<string | number>>([])
   const [mergeEntryIds, setMergeEntryIds] = useState('')
   const [canonicalEntryId, setCanonicalEntryId] = useState<number | null>(null)
   const [similarKeywords, setSimilarKeywords] = useState('')
-  const [similarLoading, setSimilarLoading] = useState(false)
   const [similarResult, setSimilarResult] = useState<SimilarKeywordPreviewResponse | null>(null)
   const [query, setQuery] = useState('')
   const [queryDraft, setQueryDraft] = useState('')
@@ -99,11 +96,19 @@ export default function KeywordsPage() {
   const [aliasEntry, setAliasEntry] = useState<KeywordEntry | null>(null)
   const pageSize = 20
 
-  const loadEntries = useCallback(async (nextPage = page) => {
-    setLoading(true)
-    try {
+  // 筛选条件变化时回到第 1 页（渲染中按前值调整状态，避免多发一次旧页码的请求）
+  const filterKey = JSON.stringify([query, typeFilter ?? null, statusFilter ?? null])
+  const [lastFilterKey, setLastFilterKey] = useState(filterKey)
+  if (lastFilterKey !== filterKey) {
+    setLastFilterKey(filterKey)
+    setPage(1)
+  }
+
+  // 关键词列表：页码或筛选变化时自动重新加载
+  const entriesQuery = useApiQuery(
+    () => {
       const params = new URLSearchParams({
-        skip: String((nextPage - 1) * pageSize),
+        skip: String((page - 1) * pageSize),
         limit: String(pageSize),
       })
       if (query) {
@@ -115,63 +120,68 @@ export default function KeywordsPage() {
       if (statusFilter) {
         params.set('status', statusFilter)
       }
-      const response = await api.get<KeywordEntryListResponse>(`/keywords?${params.toString()}`)
-      setEntries(response.entries ?? [])
-      setTotal(response.total ?? 0)
-    } catch (error: unknown) {
-      message.error((error as Error).message)
-    } finally {
-      setLoading(false)
-    }
-  }, [page, pageSize, query, statusFilter, typeFilter])
+      return api.get<KeywordEntryListResponse>(`/keywords?${params.toString()}`)
+        .then((response) => ({ items: response.entries ?? [], total: response.total ?? 0 }))
+    },
+    [page, pageSize, query, statusFilter, typeFilter],
+    { initialData: { items: [] as KeywordEntry[], total: 0 } },
+  )
+  const { loading, reload: loadEntries } = entriesQuery
+  const entries = entriesQuery.data.items
+  const total = entriesQuery.data.total
 
-  const loadLogs = useCallback(async () => {
-    try {
-      const response = await api.get<KeywordOperationLog[]>('/keywords/operation-logs?limit=20')
-      setLogs(response ?? [])
-    } catch (error: unknown) {
-      message.error((error as Error).message)
-    }
-  }, [])
+  const { data: logs, reload: loadLogs } = useApiQuery(
+    () => api.get<KeywordOperationLog[]>('/keywords/operation-logs?limit=20').then((response) => response ?? []),
+    [],
+    { initialData: [] as KeywordOperationLog[] },
+  )
 
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      void loadLogs()
-    }, 0)
-
-    return () => window.clearTimeout(timer)
-  }, [loadLogs])
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      setPage(1)
-      void loadEntries(1)
-    }, 0)
-
-    return () => window.clearTimeout(timer)
-  }, [loadEntries, query, typeFilter, statusFilter])
+  // 操作成功后刷新当前页和操作日志
+  const reloadAll = async () => {
+    await Promise.all([loadEntries(), loadLogs()])
+  }
 
   const resetKeywordSelection = () => {
     setSelectedRowKeys([])
     setMergeEntryIds('')
   }
 
+  // 新建后回到第 1 页；已在第 1 页时直接刷新
+  const createAction = useApiAction(
+    (values: KeywordEntryCreatePayload) => api.post('/keywords', {
+      ...values,
+      merge_policy: values.merge_policy ?? 'normal',
+      aliases: values.aliases,
+      note: values.note?.trim() || null,
+    }),
+    {
+      successMessage: (_data, values) => `已创建关键词 ${values.canonical_name}`,
+      onSuccess: async () => {
+        createForm.resetFields()
+        if (page === 1) {
+          await reloadAll()
+        } else {
+          setPage(1)
+          await loadLogs()
+        }
+      },
+    },
+  )
+
   const handleCreate = async (values: KeywordEntryCreatePayload) => {
-    try {
-      await api.post('/keywords', {
-        ...values,
-        merge_policy: values.merge_policy ?? 'normal',
-        aliases: values.aliases,
-        note: values.note?.trim() || null,
-      })
-      message.success(`已创建关键词 ${values.canonical_name}`)
-      createForm.resetFields()
-      await Promise.all([loadEntries(1), loadLogs()])
-      setPage(1)
-    } catch (error: unknown) {
-      message.error((error as Error).message)
-    }
+    await createAction.run(values)
   }
+
+  const updateAction = useApiAction(
+    (id: number, payload: Record<string, unknown>) => api.patch(`/keywords/${id}`, payload),
+    {
+      onSuccess: async () => {
+        setEditingEntry(null)
+        message.success('关键词已更新')
+        await reloadAll()
+      },
+    },
+  )
 
   const handleUpdate = async (values: {
     canonical_name: string
@@ -182,60 +192,57 @@ export default function KeywordsPage() {
     if (!editingEntry) {
       return
     }
-    try {
-      await api.patch(`/keywords/${editingEntry.id}`, {
-        canonical_name: values.canonical_name.trim(),
-        keyword_type: values.keyword_type,
-        merge_policy: values.merge_policy,
-        note: values.note?.trim() || null,
-      })
-      setEditingEntry(null)
-      message.success('关键词已更新')
-      await Promise.all([loadEntries(page), loadLogs()])
-    } catch (error: unknown) {
-      message.error((error as Error).message)
-    }
+    await updateAction.run(editingEntry.id, {
+      canonical_name: values.canonical_name.trim(),
+      keyword_type: values.keyword_type,
+      merge_policy: values.merge_policy,
+      note: values.note?.trim() || null,
+    })
   }
+
+  const aliasAction = useApiAction(
+    (id: number, aliases: string[]) => api.post(`/keywords/${id}/aliases`, { aliases }),
+    {
+      onSuccess: async () => {
+        aliasForm.resetFields()
+        setAliasEntry(null)
+        message.success('别名已添加')
+        await reloadAll()
+      },
+    },
+  )
 
   const handleAddAliases = async (values: { aliases: string }) => {
     if (!aliasEntry) {
       return
     }
-    try {
-      await api.post(`/keywords/${aliasEntry.id}/aliases`, {
-        aliases: splitTextareaLines(values.aliases),
-      })
-      aliasForm.resetFields()
-      setAliasEntry(null)
-      message.success('别名已添加')
-      await Promise.all([loadEntries(page), loadLogs()])
-    } catch (error: unknown) {
-      message.error((error as Error).message)
-    }
+    await aliasAction.run(aliasEntry.id, splitTextareaLines(values.aliases))
   }
+
+  const statusAction = useApiAction(
+    (entry: KeywordEntry, nextStatus: string) => api.patch(`/keywords/${entry.id}`, { status: nextStatus }),
+    {
+      successMessage: (_data, _entry, nextStatus) => (nextStatus === 'active' ? '已启用' : '已禁用'),
+      onSuccess: reloadAll,
+    },
+  )
 
   const updateStatus = async (entry: KeywordEntry, nextStatus: string) => {
-    try {
-      await api.patch(`/keywords/${entry.id}`, { status: nextStatus })
-      message.success(nextStatus === 'active' ? '已启用' : '已禁用')
-      await Promise.all([loadEntries(page), loadLogs()])
-    } catch (error: unknown) {
-      message.error((error as Error).message)
-    }
+    await statusAction.run(entry, nextStatus)
   }
+
+  const deleteAction = useApiAction((entryId: number) => api.delete(`/keywords/${entryId}`), {
+    successMessage: (_data, entryId) => `关键词 #${entryId} 已删除`,
+    onSuccess: reloadAll,
+  })
 
   const deleteEntry = async (entryId: number) => {
-    try {
-      await api.delete(`/keywords/${entryId}`)
-      message.success(`关键词 #${entryId} 已删除`)
-      await Promise.all([loadEntries(page), loadLogs()])
-    } catch (error: unknown) {
-      message.error((error as Error).message)
-    }
+    await deleteAction.run(entryId)
   }
 
-  const loadAllFilteredIds = async () => {
-    try {
+  // 按当前筛选取出全部 ID 并全选
+  const allIdsAction = useApiAction(
+    () => {
       const params = new URLSearchParams({ skip: '0', limit: String(Math.max(total, pageSize, 500)) })
       if (query) {
         params.set('query', query)
@@ -246,13 +253,19 @@ export default function KeywordsPage() {
       if (statusFilter) {
         params.set('status', statusFilter)
       }
-      const response = await api.get<KeywordEntryListResponse>(`/keywords?${params.toString()}`)
-      const ids = (response.entries ?? []).map((item) => item.id)
-      setSelectedRowKeys(ids)
-      message.success(`已全选当前筛选结果，共 ${ids.length} 项`)
-    } catch (error: unknown) {
-      message.error((error as Error).message)
-    }
+      return api.get<KeywordEntryListResponse>(`/keywords?${params.toString()}`)
+        .then((response) => (response.entries ?? []).map((item) => item.id))
+    },
+    {
+      onSuccess: (ids) => {
+        setSelectedRowKeys(ids)
+        message.success(`已全选当前筛选结果，共 ${ids.length} 项`)
+      },
+    },
+  )
+
+  const loadAllFilteredIds = async () => {
+    await allIdsAction.run()
   }
 
   const appendMergeIds = () => {
@@ -273,6 +286,20 @@ export default function KeywordsPage() {
     message.success(mergedIds.length ? '已加入待合并 ID' : '没有可加入的条目')
   }
 
+  const mergeAction = useApiAction(
+    (canonicalId: number, mergeIds: number[]) => api.post('/keywords/merge', {
+      canonical_entry_id: canonicalId,
+      merge_entry_ids: mergeIds,
+    }),
+    {
+      onSuccess: async (_data, canonicalId) => {
+        message.success(`已合并到关键词 #${canonicalId}`)
+        resetKeywordSelection()
+        await reloadAll()
+      },
+    },
+  )
+
   const mergeKeywords = async () => {
     const mergeIds = mergeEntryIds
       .split(',')
@@ -284,18 +311,18 @@ export default function KeywordsPage() {
       return
     }
 
-    try {
-      await api.post('/keywords/merge', {
-        canonical_entry_id: canonicalEntryId,
-        merge_entry_ids: mergeIds,
-      })
-      message.success(`已合并到关键词 #${canonicalEntryId}`)
-      resetKeywordSelection()
-      await Promise.all([loadEntries(page), loadLogs()])
-    } catch (error: unknown) {
-      message.error((error as Error).message)
-    }
+    await mergeAction.run(canonicalEntryId, mergeIds)
   }
+
+  const similarAction = useApiAction(
+    (keywords: string[]) => api.post<SimilarKeywordPreviewResponse>('/keywords/similar-preview', {
+      keywords,
+      threshold: 0.75,
+      limit: 50,
+    }),
+    { onSuccess: (response) => setSimilarResult(response) },
+  )
+  const similarLoading = similarAction.loading
 
   const checkSimilar = async () => {
     const keywords = splitTextareaLines(similarKeywords)
@@ -304,19 +331,7 @@ export default function KeywordsPage() {
       return
     }
 
-    setSimilarLoading(true)
-    try {
-      const response = await api.post<SimilarKeywordPreviewResponse>('/keywords/similar-preview', {
-        keywords,
-        threshold: 0.75,
-        limit: 50,
-      })
-      setSimilarResult(response)
-    } catch (error: unknown) {
-      message.error((error as Error).message)
-    } finally {
-      setSimilarLoading(false)
-    }
+    await similarAction.run(keywords)
   }
 
   const columns: ColumnsType<KeywordEntry> = [
@@ -544,7 +559,7 @@ export default function KeywordsPage() {
                   value={statusFilter}
                   onChange={setStatusFilter}
                 />
-                <Button icon={<ReloadOutlined />} onClick={() => loadEntries(page)} loading={loading}>刷新</Button>
+                <Button icon={<ReloadOutlined />} onClick={() => void loadEntries()} loading={loading}>刷新</Button>
                 <Button onClick={loadAllFilteredIds}>全选当前筛选结果</Button>
                 <Text type="secondary">{`共 ${total} 条`}</Text>
               </DataToolbar>
@@ -564,7 +579,6 @@ export default function KeywordsPage() {
                 total,
                 onChange: (nextPage) => {
                   setPage(nextPage)
-                  loadEntries(nextPage)
                 },
                 showTotal: (value) => `共 ${value} 条`,
               }}

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import {
   Alert,
   Button,
@@ -36,6 +36,8 @@ import type {
   TreeImport,
 } from '@/api/types'
 import TimeText from '@/components/TimeText'
+import { useApiAction } from '@/hooks/useApiAction'
+import { useApiQuery } from '@/hooks/useApiQuery'
 
 const { Text } = Typography
 
@@ -47,19 +49,11 @@ export default function MagnetTasksPage() {
   const [targetCid, setTargetCid] = useState(DEFAULT_TARGET_CID)
   const [candidates, setCandidates] = useState<MagnetArticleCandidate[]>([])
   const [duplicateMap, setDuplicateMap] = useState<Record<number, MagnetDuplicateCheckItem>>({})
-  const [taskBatches, setTaskBatches] = useState<MagnetTaskBatchSummary[]>([])
   const [selectedRowKeys, setSelectedRowKeys] = useState<Array<string | number>>([])
-  const [searching, setSearching] = useState(false)
-  const [checking, setChecking] = useState(false)
-  const [submitting, setSubmitting] = useState(false)
-  const [loadingTasks, setLoadingTasks] = useState(false)
-  const [clearingTasks, setClearingTasks] = useState(false)
-  const [treeImports, setTreeImports] = useState<TreeImport[]>([])
   const [selectedTreeImportId, setSelectedTreeImportId] = useState<number | null>(null)
   const [remoteCid, setRemoteCid] = useState('')
   const [remotePathLabel, setRemotePathLabel] = useState('')
   const [remoteDepthLimit, setRemoteDepthLimit] = useState(3)
-  const [fetchingTree, setFetchingTree] = useState(false)
 
   const selectedCandidates = useMemo(
     () => candidates.filter((item) => selectedRowKeys.includes(item.source_tid)),
@@ -74,59 +68,68 @@ export default function MagnetTasksPage() {
     return false
   }
 
-  const loadTaskBatches = async () => {
-    setLoadingTasks(true)
-    try {
-      const response = await api.get<MagnetTaskBatchSummaryListResponse>('/magnet-tasks/batches?limit=20')
-      setTaskBatches(response.batches ?? [])
-    } catch (error: unknown) {
-      message.error((error as Error).message)
-    } finally {
-      setLoadingTasks(false)
-    }
-  }
+  // 最近磁力任务批次
+  const taskBatchesQuery = useApiQuery(
+    () => api.get<MagnetTaskBatchSummaryListResponse>('/magnet-tasks/batches?limit=20').then((response) => response.batches ?? []),
+    [],
+    { initialData: [] as MagnetTaskBatchSummary[] },
+  )
+  const taskBatches = taskBatchesQuery.data
+  const loadingTasks = taskBatchesQuery.loading
+  const loadTaskBatches = taskBatchesQuery.reload
+  const setTaskBatches = taskBatchesQuery.setData
 
-  const loadTreeImports = async () => {
-    try {
-      const response = await api.get<ImportListResponse>('/imports/data?limit=100')
-      setTreeImports(response.items ?? [])
-    } catch (error: unknown) {
-      message.error((error as Error).message)
-    }
-  }
+  // 目录树批次（去重匹配用）
+  const treeImportsQuery = useApiQuery(
+    () => api.get<ImportListResponse>('/imports/data?limit=100').then((response) => response.items ?? []),
+    [],
+    { initialData: [] as TreeImport[] },
+  )
+  const treeImports = treeImportsQuery.data
+  const loadTreeImports = treeImportsQuery.reload
+
+  // 拉取 115 目录树快照；成功后刷新批次列表并选中新批次
+  const fetchTreeAction = useApiAction(
+    (payload: RemoteFetchRequest) => api.post<TreeImport>('/imports/remote-fetch', payload),
+    {
+      successMessage: (result) => `目录树快照已创建，批次 #${result.id}`,
+      onSuccess: async (result) => {
+        await loadTreeImports()
+        setSelectedTreeImportId(result.id)
+      },
+    },
+  )
+  const fetchingTree = fetchTreeAction.loading
 
   const fetchRemoteTree = async () => {
     if (!remoteCid.trim()) {
       message.warning('请先输入 115 目录 CID')
       return
     }
-    setFetchingTree(true)
-    try {
-      const payload: RemoteFetchRequest = {
-        cid: remoteCid.trim(),
-        path_label: remotePathLabel.trim(),
-        depth_limit: remoteDepthLimit,
-        folders_only: true,
-      }
-      const result = await api.post<TreeImport>('/imports/remote-fetch', payload)
-      message.success(`目录树快照已创建，批次 #${result.id}`)
-      await loadTreeImports()
-      setSelectedTreeImportId(result.id)
-    } catch (error: unknown) {
-      message.error((error as Error).message)
-    } finally {
-      setFetchingTree(false)
-    }
+    await fetchTreeAction.run({
+      cid: remoteCid.trim(),
+      path_label: remotePathLabel.trim(),
+      depth_limit: remoteDepthLimit,
+      folders_only: true,
+    })
   }
 
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      void loadTaskBatches()
-      void loadTreeImports()
-    }, 0)
-
-    return () => window.clearTimeout(timer)
-  }, [])
+  const searchAction = useApiAction(
+    () => api.post<MagnetArticleSearchResponse>('/magnet-tasks/search', {
+      query: query.trim(),
+      keyword_entry_id: keywordEntryId,
+      limit: 30,
+    }),
+    {
+      onSuccess: (response) => {
+        setCandidates(response.candidates ?? [])
+        setDuplicateMap({})
+        setSelectedRowKeys([])
+        message.success(`搜索完成，共 ${response.total_candidates} 条候选`)
+      },
+    },
+  )
+  const searching = searchAction.loading
 
   const searchCandidates = async () => {
     if (!query.trim()) {
@@ -134,23 +137,29 @@ export default function MagnetTasksPage() {
       return
     }
 
-    setSearching(true)
-    try {
-      const response = await api.post<MagnetArticleSearchResponse>('/magnet-tasks/search', {
-        query: query.trim(),
-        keyword_entry_id: keywordEntryId,
-        limit: 30,
-      })
-      setCandidates(response.candidates ?? [])
-      setDuplicateMap({})
-      setSelectedRowKeys([])
-      message.success(`搜索完成，共 ${response.total_candidates} 条候选`)
-    } catch (error: unknown) {
-      message.error((error as Error).message)
-    } finally {
-      setSearching(false)
-    }
+    await searchAction.run()
   }
+
+  const checkAction = useApiAction(
+    () => api.post<MagnetDuplicateCheckResponse>('/magnet-tasks/duplicate-check', {
+      items: selectedCandidates.map((item) => ({
+        source_tid: item.source_tid,
+        source_title: item.source_title,
+        source_magnet: item.source_magnet,
+        matched_keyword: item.matched_keyword,
+        matched_alias: item.matched_alias,
+      })),
+      tree_import_id: selectedTreeImportId ?? null,
+    }),
+    {
+      onSuccess: (response) => {
+        setDuplicateMap(Object.fromEntries((response.items ?? []).map((item) => [item.source_tid, item])))
+        const duplicateCount = (response.items ?? []).filter((item) => item.duplicate_status !== 'clear').length
+        message.success(`去重检查完成，发现 ${duplicateCount} 条重复或已存在任务`)
+      },
+    },
+  )
+  const checking = checkAction.loading
 
   const checkDuplicates = async () => {
     if (!selectedCandidates.length) {
@@ -161,27 +170,33 @@ export default function MagnetTasksPage() {
       return
     }
 
-    setChecking(true)
-    try {
-      const response = await api.post<MagnetDuplicateCheckResponse>('/magnet-tasks/duplicate-check', {
-        items: selectedCandidates.map((item) => ({
-          source_tid: item.source_tid,
-          source_title: item.source_title,
-          source_magnet: item.source_magnet,
-          matched_keyword: item.matched_keyword,
-          matched_alias: item.matched_alias,
-        })),
-        tree_import_id: selectedTreeImportId ?? null,
-      })
-      setDuplicateMap(Object.fromEntries((response.items ?? []).map((item) => [item.source_tid, item])))
-      const duplicateCount = (response.items ?? []).filter((item) => item.duplicate_status !== 'clear').length
-      message.success(`去重检查完成，发现 ${duplicateCount} 条重复或已存在任务`)
-    } catch (error: unknown) {
-      message.error((error as Error).message)
-    } finally {
-      setChecking(false)
-    }
+    await checkAction.run()
   }
+
+  const submitAction = useApiAction(
+    () => api.post<MagnetTaskBatchResponse>('/magnet-tasks/submit', {
+      items: selectedCandidates.map((item) => ({
+        source_tid: item.source_tid,
+        source_title: item.source_title,
+        source_magnet: item.source_magnet,
+        source_detail_url: item.source_detail_url,
+        source_section: item.source_section,
+        matched_keyword: item.matched_keyword,
+        matched_alias: item.matched_alias,
+        match_score: item.match_score,
+        keyword_entry_id: keywordEntryId,
+      })),
+      target_cid: targetCid.trim() || null,
+      force_submit: false,
+      tree_import_id: selectedTreeImportId ?? null,
+    }),
+    {
+      successMessage: (response) =>
+        `已创建 ${response.created_count} 条任务，提交 ${response.submitted_count} 条，跳过 ${response.duplicate_skipped_count} 条`,
+      onSuccess: () => loadTaskBatches(),
+    },
+  )
+  const submitting = submitAction.loading
 
   const submitTasks = async () => {
     if (!selectedCandidates.length) {
@@ -192,46 +207,17 @@ export default function MagnetTasksPage() {
       return
     }
 
-    setSubmitting(true)
-    try {
-      const response = await api.post<MagnetTaskBatchResponse>('/magnet-tasks/submit', {
-        items: selectedCandidates.map((item) => ({
-          source_tid: item.source_tid,
-          source_title: item.source_title,
-          source_magnet: item.source_magnet,
-          source_detail_url: item.source_detail_url,
-          source_section: item.source_section,
-          matched_keyword: item.matched_keyword,
-          matched_alias: item.matched_alias,
-          match_score: item.match_score,
-          keyword_entry_id: keywordEntryId,
-        })),
-        target_cid: targetCid.trim() || null,
-        force_submit: false,
-        tree_import_id: selectedTreeImportId ?? null,
-      })
-      message.success(
-        `已创建 ${response.created_count} 条任务，提交 ${response.submitted_count} 条，跳过 ${response.duplicate_skipped_count} 条`,
-      )
-      await loadTaskBatches()
-    } catch (error: unknown) {
-      message.error((error as Error).message)
-    } finally {
-      setSubmitting(false)
-    }
+    await submitAction.run()
   }
 
+  const clearAction = useApiAction(() => api.delete<{ deleted_count: number }>('/magnet-tasks/history'), {
+    successMessage: (response) => `已清理 ${response.deleted_count} 条磁力任务记录`,
+    onSuccess: () => setTaskBatches([]),
+  })
+  const clearingTasks = clearAction.loading
+
   const clearTaskHistory = async () => {
-    setClearingTasks(true)
-    try {
-      const response = await api.delete<{ deleted_count: number }>('/magnet-tasks/history')
-      message.success(`已清理 ${response.deleted_count} 条磁力任务记录`)
-      setTaskBatches([])
-    } catch (error: unknown) {
-      message.error((error as Error).message)
-    } finally {
-      setClearingTasks(false)
-    }
+    await clearAction.run()
   }
 
   const candidateColumns: ColumnsType<MagnetArticleCandidate> = [

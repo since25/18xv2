@@ -1,11 +1,13 @@
-import { useEffect, useMemo, useState } from 'react'
-import { Alert, Button, Collapse, Drawer, Input, Segmented, Space, Table, Typography, message } from 'antd'
+import { useMemo, useState } from 'react'
+import { Alert, Button, Collapse, Drawer, Input, Segmented, Space, Table, Typography } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { getTaskDetail, retryDownloaderTask, type TaskDetail, type TaskFile } from '@/api/downloader'
 import BytesText from '@/components/BytesText'
 import StatusTag from '@/components/StatusTag'
 import { formatDuration } from '@/utils/format'
 import { downloaderErrorText } from '@/utils/statusText'
+import { useApiAction } from '@/hooks/useApiAction'
+import { useApiQuery } from '@/hooks/useApiQuery'
 
 type TaskInspectorProps = {
   taskId: string | null
@@ -17,36 +19,23 @@ type FileFilter = 'all' | 'failed' | 'success'
 
 const FAILED_FILE_STATUSES = new Set(['failed', 'download_failed', 'upload_failed'])
 
-function errorText(error: unknown) {
-  return error instanceof Error ? error.message : '请求失败'
-}
-
 export default function TaskInspector({ taskId, onClose, onChanged }: TaskInspectorProps) {
-  const [detail, setDetail] = useState<TaskDetail | null>(null)
   const [filename, setFilename] = useState('')
   const [fileFilter, setFileFilter] = useState<FileFilter>('all')
-  const [loading, setLoading] = useState(false)
 
-  useEffect(() => {
-    if (!taskId) {
-      const timer = window.setTimeout(() => setDetail(null), 0)
-      return () => window.clearTimeout(timer)
-    }
-    let cancelled = false
-    const timer = window.setTimeout(() => {
-      if (cancelled) return
-      setLoading(true)
-      void getTaskDetail(taskId).then((payload) => {
-        if (!cancelled) setDetail(payload)
-      }).catch((error) => message.error(errorText(error))).finally(() => {
-        if (!cancelled) setLoading(false)
-      })
-    }, 0)
-    return () => {
-      cancelled = true
-      window.clearTimeout(timer)
-    }
-  }, [taskId])
+  // 有任务编号时读取详情；切换任务期间保留上一份详情
+  const { data: detail, loading, setData: setDetail } = useApiQuery(
+    () => getTaskDetail(taskId as string) as Promise<TaskDetail | null>,
+    [taskId],
+    { enabled: Boolean(taskId), initialData: null },
+  )
+
+  // 抽屉关闭（任务编号清空）时清掉详情（渲染中按前值调整状态）
+  const [lastTaskId, setLastTaskId] = useState(taskId)
+  if (lastTaskId !== taskId) {
+    setLastTaskId(taskId)
+    if (!taskId) setDetail(null)
+  }
 
   const files = useMemo(() => {
     const source = detail?.files ?? []
@@ -58,14 +47,13 @@ export default function TaskInspector({ taskId, onClose, onChanged }: TaskInspec
     })
   }, [detail?.files, fileFilter, filename])
 
+  const retryAction = useApiAction((id: string) => retryDownloaderTask(id, { onlyFailed: true }), {
+    onSuccess: () => onChanged(),
+  })
+
   async function retryFailed() {
     if (!taskId) return
-    try {
-      await retryDownloaderTask(taskId, { onlyFailed: true })
-      onChanged()
-    } catch (error) {
-      message.error(errorText(error))
-    }
+    await retryAction.run(taskId)
   }
 
   const columns: ColumnsType<TaskFile> = [

@@ -15,6 +15,8 @@ import type {
 import DataToolbar from '@/layout/DataToolbar'
 import PageScaffold from '@/layout/PageScaffold'
 import StatusTag from '@/components/StatusTag'
+import { useApiAction } from '@/hooks/useApiAction'
+import { useApiQuery } from '@/hooks/useApiQuery'
 import {
   bulkDismissCandidates, dismissCandidate, getActiveJobs, listCandidates, restoreCandidate,
   startScanJob, startSubmitJob, subscribeJobProgress,
@@ -57,15 +59,27 @@ function errorStatus(error: unknown) {
   return undefined
 }
 
+// 读取出错时弹固定文字（保持原来的提示），401 交给全局登录过期处理；错误继续抛出给取数工具
+function failWith(text: string) {
+  return (error: unknown): never => {
+    if (errorStatus(error) !== 401) message.error(text)
+    throw error
+  }
+}
+
+// 操作出错时的提示：401 交给全局登录过期处理
+function showActionError(error: Error, fallback: string) {
+  if (errorStatus(error) === 401) return
+  message.error(errorMessage(error, fallback))
+}
+
 function summaryValue(summary: Record<string, number> | null, key: string) {
   return summary?.[key] ?? 0
 }
 
 export default function WhitelistBatchPage() {
   // —— 基础数据 ——
-  const [treeImports, setTreeImports] = useState<{ id: number; source_filename: string }[]>([])
   const [selectedTreeImportId, setSelectedTreeImportId] = useState<number | undefined>()
-  const [keywords, setKeywords] = useState<KeywordEntry[]>([])
   const [selectedKeywordIds, setSelectedKeywordIds] = useState<number[]>([])
   const [perKeywordLimit, setPerKeywordLimit] = useState(10)
 
@@ -74,8 +88,6 @@ export default function WhitelistBatchPage() {
   const [submitJob, setSubmitJob] = useState<JobFrame | null>(null)
 
   // —— 候选列表 ——
-  const [candidates, setCandidates] = useState<WhitelistCandidate[]>([])
-  const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(100)
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
@@ -87,21 +99,47 @@ export default function WhitelistBatchPage() {
   const [searchText, setSearchText] = useState('')
 
   // —— 加载基础数据 ——
-  useEffect(() => {
-    api.get<ImportListResponse>('/imports/data?limit=100')
+  // 目录树列表：首次取到且还没选时默认选第一个（出错弹固定文字）
+  const { data: treeImports } = useApiQuery(
+    () => api.get<ImportListResponse>('/imports/data?limit=100')
       .then((r) => {
-        setTreeImports(r.items ?? [])
         if ((r.items ?? []).length > 0 && selectedTreeImportId === undefined) {
           setSelectedTreeImportId(r.items[0].id)
         }
+        return (r.items ?? []) as { id: number; source_filename: string }[]
       })
-      .catch(() => message.error('加载目录树列表失败'))
+      .catch(failWith('加载目录树列表失败')),
+    [],
+    { silent: true, initialData: [] as { id: number; source_filename: string }[] },
+  )
 
-    api.get<KeywordEntryListResponse>('/keywords?keyword_type=whitelist&status=active&limit=5000')
-      .then((r) => setKeywords(r.entries ?? []))
-      .catch(() => message.error('加载白名单关键词失败'))
+  const { data: keywords } = useApiQuery(
+    () => api.get<KeywordEntryListResponse>('/keywords?keyword_type=whitelist&status=active&limit=5000')
+      .then((r) => r.entries ?? [])
+      .catch(failWith('加载白名单关键词失败')),
+    [],
+    { silent: true, initialData: [] as KeywordEntry[] },
+  )
 
-    // 接回进行中的 job
+  // —— 加载候选 ——（筛选、翻页变化时自动重新加载；出错弹固定文字）
+  const candidatesQuery = useApiQuery(
+    () => listCandidates({
+      lifecycle_status: filterLifecycle || undefined,
+      matched_keyword_entry_id: filterKeywordId,
+      duplicate_status: filterDuplicate || undefined,
+      search: searchText || undefined,
+      page, page_size: pageSize,
+    }).then((r) => ({ items: r.items, total: r.total }))
+      .catch(failWith('加载候选失败')),
+    [page, pageSize, filterLifecycle, filterKeywordId, filterDuplicate, searchText],
+    { silent: true, initialData: { items: [] as WhitelistCandidate[], total: 0 } },
+  )
+  const candidates = candidatesQuery.data.items
+  const total = candidatesQuery.data.total
+  const loadCandidates = candidatesQuery.reload
+
+  // 接回进行中的 job（进度推送订阅保留原写法）
+  useEffect(() => {
     getActiveJobs().then((data) => {
       if (data.scan) {
         setScanJob(data.scan)
@@ -118,110 +156,103 @@ export default function WhitelistBatchPage() {
         }, () => loadCandidates())
       }
     }).catch(() => { /* 无 active job，忽略 */ })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
-  // —— 加载候选 ——
-  useEffect(() => {
-    loadCandidates()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, pageSize, filterLifecycle, filterKeywordId, filterDuplicate, searchText])
-
-  function loadCandidates() {
-    listCandidates({
-      lifecycle_status: filterLifecycle || undefined,
-      matched_keyword_entry_id: filterKeywordId,
-      duplicate_status: filterDuplicate || undefined,
-      search: searchText || undefined,
-      page, page_size: pageSize,
-    }).then((r) => {
-      setCandidates(r.items)
-      setTotal(r.total)
-    }).catch(() => message.error('加载候选失败'))
-  }
+  }, [loadCandidates])
 
   // —— 启动扫描 ——
+  // 409 要单独提示，所以设为 silent，出错提示在下面自行处理
+  const scanAction = useApiAction(startScanJob, { silent: true })
+
   async function handleScan() {
     if (!selectedTreeImportId) {
       message.warning('请先选择目录树批次')
       return
     }
-    try {
-      const resp = await startScanJob({
-        tree_import_id: selectedTreeImportId,
-        keyword_entry_ids: selectedKeywordIds.length ? selectedKeywordIds : undefined,
-        per_keyword_limit: perKeywordLimit,
-      })
-      setScanJob(EMPTY_FRAME(resp.job_id, 'scan', 0))
-      subscribeJobProgress(resp.job_id, (frame) => {
-        if (!('job_id' in frame)) {
-          message.error(`SSE 错误：${frame.error}`)
-          return
-        }
-        setScanJob(frame)
-      }, (finalFrame) => {
-        if (finalFrame.error) {
-          message.error(`扫描失败：${finalFrame.error}`)
-        } else {
-          message.success('扫描完成')
-        }
-        loadCandidates()
-      })
-    } catch (error: unknown) {
-      if (errorStatus(error) === 409) message.warning('已有扫描任务在运行')
-      else message.error(errorMessage(error, '扫描启动失败'))
+    const result = await scanAction.run({
+      tree_import_id: selectedTreeImportId,
+      keyword_entry_ids: selectedKeywordIds.length ? selectedKeywordIds : undefined,
+      per_keyword_limit: perKeywordLimit,
+    })
+    if (!result.ok) {
+      if (errorStatus(result.error) === 409) message.warning('已有扫描任务在运行')
+      else showActionError(result.error, '扫描启动失败')
+      return
     }
+    const resp = result.data
+    setScanJob(EMPTY_FRAME(resp.job_id, 'scan', 0))
+    subscribeJobProgress(resp.job_id, (frame) => {
+      if (!('job_id' in frame)) {
+        message.error(`SSE 错误：${frame.error}`)
+        return
+      }
+      setScanJob(frame)
+    }, (finalFrame) => {
+      if (finalFrame.error) {
+        message.error(`扫描失败：${finalFrame.error}`)
+      } else {
+        message.success('扫描完成')
+      }
+      loadCandidates()
+    })
   }
 
   // —— 启动提交 ——
+  const submitAction = useApiAction(startSubmitJob, { silent: true })
+
   async function handleSubmit() {
     const ids = Array.from(selectedIds)
     if (ids.length === 0) {
       message.warning('请先勾选要提交的候选项')
       return
     }
-    try {
-      const resp = await startSubmitJob({ candidate_ids: ids })
-      setSubmitJob(EMPTY_FRAME(resp.job_id, 'submit', ids.length))
-      subscribeJobProgress(resp.job_id, (frame) => {
-        if (!('job_id' in frame)) return
-        setSubmitJob(frame)
-      }, (finalFrame) => {
-        if (finalFrame.error) {
-          message.error(`提交失败：${finalFrame.error}`)
-        } else {
-          const s = (finalFrame.summary || {}) as { submitted?: number; failed?: number; skipped?: number }
-          message.success(`提交完成：成功 ${s.submitted ?? 0}，失败 ${s.failed ?? 0}，跳过 ${s.skipped ?? 0}`)
-        }
-        setSelectedIds(new Set())
-        loadCandidates()
-      })
-    } catch (error: unknown) {
-      if (errorStatus(error) === 409) message.warning('已有提交任务在运行')
-      else message.error(errorMessage(error, '提交启动失败'))
+    const result = await submitAction.run({ candidate_ids: ids })
+    if (!result.ok) {
+      if (errorStatus(result.error) === 409) message.warning('已有提交任务在运行')
+      else showActionError(result.error, '提交启动失败')
+      return
     }
+    const resp = result.data
+    setSubmitJob(EMPTY_FRAME(resp.job_id, 'submit', ids.length))
+    subscribeJobProgress(resp.job_id, (frame) => {
+      if (!('job_id' in frame)) return
+      setSubmitJob(frame)
+    }, (finalFrame) => {
+      if (finalFrame.error) {
+        message.error(`提交失败：${finalFrame.error}`)
+      } else {
+        const s = (finalFrame.summary || {}) as { submitted?: number; failed?: number; skipped?: number }
+        message.success(`提交完成：成功 ${s.submitted ?? 0}，失败 ${s.failed ?? 0}，跳过 ${s.skipped ?? 0}`)
+      }
+      setSelectedIds(new Set())
+      loadCandidates()
+    })
   }
 
-  // —— 单行操作 ——
+  // —— 单行操作 ——（成功后刷新候选，不等待刷新完成）
+  const dismissAction = useApiAction((cand: WhitelistCandidate) => dismissCandidate(cand.id), {
+    successMessage: (_data, cand) => `已丢弃 ${cand.source_title}`,
+    onSuccess: () => { void loadCandidates() },
+  })
+
   async function handleDismiss(cand: WhitelistCandidate) {
-    try {
-      await dismissCandidate(cand.id)
-      message.success(`已丢弃 ${cand.source_title}`)
-      loadCandidates()
-    } catch (error: unknown) {
-      message.error(errorMessage(error, '丢弃失败'))
-    }
+    await dismissAction.run(cand)
   }
+
+  const restoreAction = useApiAction((cand: WhitelistCandidate) => restoreCandidate(cand.id), {
+    successMessage: '已恢复为 pending',
+    onSuccess: () => { void loadCandidates() },
+  })
 
   async function handleRestore(cand: WhitelistCandidate) {
-    try {
-      await restoreCandidate(cand.id)
-      message.success('已恢复为 pending')
-      loadCandidates()
-    } catch (error: unknown) {
-      message.error(errorMessage(error, '恢复失败'))
-    }
+    await restoreAction.run(cand)
   }
+
+  const bulkDismissAction = useApiAction((ids: number[]) => bulkDismissCandidates(ids), {
+    successMessage: (r) => `批量丢弃完成：${r.dismissed} 条已丢弃，${r.skipped} 条跳过`,
+    onSuccess: () => {
+      setSelectedIds(new Set())
+      void loadCandidates()
+    },
+  })
 
   async function handleBulkDismiss() {
     const ids = Array.from(selectedIds)
@@ -229,14 +260,7 @@ export default function WhitelistBatchPage() {
       message.warning('请先勾选要丢弃的候选项')
       return
     }
-    try {
-      const r = await bulkDismissCandidates(ids)
-      message.success(`批量丢弃完成：${r.dismissed} 条已丢弃，${r.skipped} 条跳过`)
-      setSelectedIds(new Set())
-      loadCandidates()
-    } catch (error: unknown) {
-      message.error(errorMessage(error, '批量丢弃失败'))
-    }
+    await bulkDismissAction.run(ids)
   }
 
   const columns: ColumnsType<WhitelistCandidate> = [
@@ -353,7 +377,7 @@ export default function WhitelistBatchPage() {
       <Card title="候选列表" className="soft-card"
             extra={
               <Space wrap>
-                <Button icon={<ReloadOutlined />} onClick={loadCandidates}>刷新</Button>
+                <Button icon={<ReloadOutlined />} onClick={() => void loadCandidates()}>刷新</Button>
                 <Popconfirm
                   title="批量丢弃"
                   description={`确认丢弃勾选的 ${selectedIds.size} 条？下次扫描不会再出现。已提交项会自动跳过。`}

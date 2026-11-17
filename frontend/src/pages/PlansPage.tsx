@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useState } from 'react'
 import {
   Table, Button, Tag, Space, Typography, Card, Select, message,
   Popconfirm, Checkbox, Input, Collapse, Descriptions,
@@ -17,6 +17,8 @@ import TimeText from '@/components/TimeText'
 import PageScaffold from '@/layout/PageScaffold'
 import DataToolbar from '@/layout/DataToolbar'
 import StatusTag from '@/components/StatusTag'
+import { useApiAction } from '@/hooks/useApiAction'
+import { useApiQuery } from '@/hooks/useApiQuery'
 
 const { Text } = Typography
 
@@ -30,9 +32,6 @@ const JOB_STATUS_OPTIONS = [
 export default function PlansPage() {
   const navigate = useNavigate()
 
-  const [plans, setPlans]             = useState<PlanSummary[]>([])
-  const [total, setTotal]             = useState(0)
-  const [loading, setLoading]         = useState(false)
   const [page, setPage]               = useState(1)
   const [pageSize, setPageSize]       = useState(30)
 
@@ -48,9 +47,6 @@ export default function PlansPage() {
   const [requestedBy, setRequestedBy]       = useState('')
   const [operatorNote, setOperatorNote]     = useState('')
 
-  // 批量操作历史
-  const [batchLogs, setBatchLogs]           = useState<BatchPlanOperationLog[]>([])
-
   const buildParams = useCallback((p: number) => {
     const params = new URLSearchParams({
       limit: String(pageSize),
@@ -63,42 +59,28 @@ export default function PlansPage() {
     return params
   }, [maxItems, minItems, pageSize, showCompleted, statusFilter])
 
-  const load = useCallback(async (p = page) => {
-    setLoading(true)
-    try {
-      const data = await api.get<PlanSummaryPage>(`/plans/data?${buildParams(p)}`)
-      setPlans(data.items)
-      setTotal(data.total)
-    } catch (e: unknown) {
-      message.error((e as Error).message)
-    } finally {
-      setLoading(false)
-    }
-  }, [buildParams, page])
+  // 筛选条件或每页条数变化时回到第 1 页（渲染中按前值调整状态，避免多发一次旧页码的请求）
+  const [lastBuildParams, setLastBuildParams] = useState(() => buildParams)
+  if (lastBuildParams !== buildParams) {
+    setLastBuildParams(() => buildParams)
+    setPage(1)
+  }
 
-  const loadBatchLogs = useCallback(async () => {
-    try {
-      const data = await api.get<BatchPlanOperationLog[]>('/plans/batch-logs?limit=10')
-      setBatchLogs(data)
-    } catch { /* silent */ }
-  }, [])
+  const { data: planPage, loading, reload: load } = useApiQuery(
+    () => api.get<PlanSummaryPage>(`/plans/data?${buildParams(page)}`)
+      .then((data) => ({ items: data.items, total: data.total })),
+    [buildParams, page],
+    { initialData: { items: [] as PlanSummary[], total: 0 } },
+  )
+  const plans = planPage.items
+  const total = planPage.total
 
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      setPage(1)
-      void load(1)
-    }, 0)
-
-    return () => window.clearTimeout(timer)
-  }, [load])
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      void loadBatchLogs()
-    }, 0)
-
-    return () => window.clearTimeout(timer)
-  }, [loadBatchLogs])
+  // 批量操作历史：出错时静默
+  const { data: batchLogs, reload: loadBatchLogs } = useApiQuery(
+    () => api.get<BatchPlanOperationLog[]>('/plans/batch-logs?limit=10'),
+    [],
+    { silent: true, initialData: [] as BatchPlanOperationLog[] },
+  )
 
   const execPayload = (dryRun: boolean) => ({
     dry_run: dryRun,
@@ -107,47 +89,59 @@ export default function PlansPage() {
     operator_note: operatorNote || undefined,
   })
 
+  const executeAction = useApiAction((planId: number, dryRun: boolean) =>
+    api.post<JobDetail>(`/plans/${planId}/execute`, execPayload(dryRun)))
+
   const executePlan = async (planId: number, dryRun: boolean) => {
     if (!dryRun && !confirmReal) { message.warning('请先勾选「确认真实执行」'); return }
-    try {
-      const job = await api.post<JobDetail>(`/plans/${planId}/execute`, execPayload(dryRun))
-      if (job.status === 'completed') {
-        message.success(dryRun ? `计划 #${planId} dry-run 完成` : `计划 #${planId} 执行完成`)
-      } else {
-        message.warning(`计划 #${planId} 执行结果：${job.status}`)
-      }
-      load()
-    } catch (e: unknown) { message.error((e as Error).message) }
+    const result = await executeAction.run(planId, dryRun)
+    if (!result.ok) return
+    const job = result.data
+    if (job.status === 'completed') {
+      message.success(dryRun ? `计划 #${planId} dry-run 完成` : `计划 #${planId} 执行完成`)
+    } else {
+      message.warning(`计划 #${planId} 执行结果：${job.status}`)
+    }
+    void load()
   }
+
+  const batchExecuteAction = useApiAction((dryRun: boolean) =>
+    api.post<BatchPlanOperationResponse>('/plans/batch-execute', {
+      plan_ids: selectedIds, ...execPayload(dryRun),
+    }))
 
   const batchExecute = async (dryRun: boolean) => {
     if (!selectedIds.length) { message.warning('请先勾选计划'); return }
     if (!dryRun && !confirmReal) { message.warning('请先勾选「确认真实执行」'); return }
-    try {
-      const res = await api.post<BatchPlanOperationResponse>('/plans/batch-execute', {
-        plan_ids: selectedIds, ...execPayload(dryRun),
-      })
-      const completedCount = (res.jobs ?? []).filter((job) => job.status === 'completed').length
-      const blockedCount = (res.jobs ?? []).filter((job) => job.status === 'blocked').length
-      const failedCount = (res.jobs ?? []).filter((job) => job.status === 'failed').length + (res.errors?.length ?? 0)
-      if (blockedCount || failedCount) {
-        message.warning(`批量执行：完成 ${completedCount}，blocked ${blockedCount}，失败 ${failedCount}`)
-      } else {
-        message.success(`批量执行：${completedCount} 个完成`)
-      }
-      setSelectedIds([])
-      load(); loadBatchLogs()
-    } catch (e: unknown) { message.error((e as Error).message) }
+    const result = await batchExecuteAction.run(dryRun)
+    if (!result.ok) return
+    const res = result.data
+    const completedCount = (res.jobs ?? []).filter((job) => job.status === 'completed').length
+    const blockedCount = (res.jobs ?? []).filter((job) => job.status === 'blocked').length
+    const failedCount = (res.jobs ?? []).filter((job) => job.status === 'failed').length + (res.errors?.length ?? 0)
+    if (blockedCount || failedCount) {
+      message.warning(`批量执行：完成 ${completedCount}，blocked ${blockedCount}，失败 ${failedCount}`)
+    } else {
+      message.success(`批量执行：${completedCount} 个完成`)
+    }
+    setSelectedIds([])
+    void load(); void loadBatchLogs()
   }
+
+  const batchDeleteAction = useApiAction(
+    () => api.post<BatchPlanOperationResponse>('/plans/batch-delete', { plan_ids: selectedIds }),
+    {
+      successMessage: (res) => `删除 ${res.processed_count} 个计划`,
+      onSuccess: () => {
+        setSelectedIds([])
+        void load(); void loadBatchLogs()
+      },
+    },
+  )
 
   const batchDelete = async () => {
     if (!selectedIds.length) return
-    try {
-      const res = await api.post<BatchPlanOperationResponse>('/plans/batch-delete', { plan_ids: selectedIds })
-      message.success(`删除 ${res.processed_count} 个计划`)
-      setSelectedIds([])
-      load(); loadBatchLogs()
-    } catch (e: unknown) { message.error((e as Error).message) }
+    await batchDeleteAction.run()
   }
 
   const columns: ColumnsType<PlanSummary> = [
@@ -266,11 +260,9 @@ export default function PlansPage() {
               if (size !== pageSize) {
                 setPageSize(size)
                 setPage(1)
-                void load(1)
                 return
               }
               setPage(p)
-              void load(p)
             },
           }}
         />

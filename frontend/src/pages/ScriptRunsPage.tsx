@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { Alert, Input, Space, Table, Tabs, Tag, Tooltip, Typography } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import {
@@ -16,6 +16,7 @@ import {
 import PageScaffold from '@/layout/PageScaffold'
 import SurfacePanel from '@/layout/SurfacePanel'
 import TimeText from '@/components/TimeText'
+import { useApiQuery } from '@/hooks/useApiQuery'
 
 const { Text } = Typography
 const PAGE_SIZE = 50
@@ -111,30 +112,26 @@ function RunItems({ run }: { run: ScriptRun }) {
   const [kind, setKind] = useState<ScriptRunItemKind | undefined>(undefined)
   const [q, setQ] = useState('')
   const [page, setPage] = useState(1)
-  const [data, setData] = useState<{ total: number; items: ScriptRunItem[] }>({ total: 0, items: [] })
   const [kindCounts, setKindCounts] = useState<Partial<Record<ScriptRunItemKind, number>> | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
 
   const available = KIND_LABELS.filter(([key]) => (kindCounts?.[key] ?? 0) > 0)
   // 第一次请求拿到各类数量后，默认选中第一个有内容的类别
   const activeKind = kind ?? available[0]?.[0]
 
-  useEffect(() => {
-    let cancelled = false
-    listScriptRunItems(run.id, { kind: activeKind, q: q || undefined, limit: PAGE_SIZE, offset: (page - 1) * PAGE_SIZE })
+  // 名单：出错不弹提示，错误文字显示在提示条里。
+  // 各类数量是整次运行的统计（与类别、搜索无关），取到后记下来决定默认类别
+  const itemsQuery = useApiQuery(
+    () => listScriptRunItems(run.id, { kind: activeKind, q: q || undefined, limit: PAGE_SIZE, offset: (page - 1) * PAGE_SIZE })
       .then((res) => {
-        if (cancelled) return
-        setData(res)
         setKindCounts(res.kind_counts)
-        setError(null)
-      })
-      .catch((err: unknown) => !cancelled && setError(err instanceof Error ? err.message : '加载失败'))
-      .finally(() => !cancelled && setLoading(false))
-    return () => {
-      cancelled = true
-    }
-  }, [run.id, activeKind, q, page])
+        return { total: res.total, items: res.items }
+      }),
+    [run.id, activeKind, q, page],
+    { silent: true, initialData: { total: 0, items: [] as ScriptRunItem[] } },
+  )
+  const data = itemsQuery.data
+  const loading = itemsQuery.loading
+  const error = itemsQuery.error ? itemsQuery.error.message : null
 
   if (error) return <Alert type="error" showIcon message={`名单加载失败：${error}`} />
   if (kindCounts && available.length === 0) return <Text type="secondary">这次运行没有名单</Text>
@@ -155,7 +152,6 @@ function RunItems({ run }: { run: ScriptRun }) {
         size="small"
         activeKey={activeKind}
         onChange={(key) => {
-          setLoading(true)
           setKind(key as ScriptRunItemKind)
           setPage(1)
         }}
@@ -166,7 +162,6 @@ function RunItems({ run }: { run: ScriptRun }) {
         placeholder="在当前类别里搜索路径"
         style={{ maxWidth: 360 }}
         onSearch={(value) => {
-          setLoading(true)
           setQ(value.trim())
           setPage(1)
         }}
@@ -183,7 +178,6 @@ function RunItems({ run }: { run: ScriptRun }) {
           total: data.total,
           showSizeChanger: false,
           onChange: (next) => {
-            setLoading(true)
             setPage(next)
           },
         }}
@@ -193,41 +187,24 @@ function RunItems({ run }: { run: ScriptRun }) {
 }
 
 export default function ScriptRunsPage() {
-  const [summary, setSummary] = useState<ScriptRunSummary | null>(null)
-  const [summaryError, setSummaryError] = useState<string | null>(null)
-  const [runs, setRuns] = useState<{ total: number; items: ScriptRun[] }>({ total: 0, items: [] })
-  const [runsError, setRunsError] = useState<string | null>(null)
-  const [runsLoading, setRunsLoading] = useState(true)
   const [page, setPage] = useState(1)
 
-  useEffect(() => {
-    let cancelled = false
-    getScriptRunSummary()
-      .then((res) => {
-        if (cancelled) return
-        setSummary(res)
-        setSummaryError(null)
-      })
-      .catch((err: unknown) => !cancelled && setSummaryError(err instanceof Error ? err.message : '加载失败'))
-    return () => {
-      cancelled = true
-    }
-  }, [])
+  // 统计与运行记录：出错都不弹提示，错误文字显示在各自的提示条里
+  const summaryQuery = useApiQuery(() => getScriptRunSummary() as Promise<ScriptRunSummary | null>, [], {
+    silent: true,
+    initialData: null,
+  })
+  const summary = summaryQuery.data
+  const summaryError = summaryQuery.error ? summaryQuery.error.message : null
 
-  useEffect(() => {
-    let cancelled = false
-    listScriptRuns({ limit: PAGE_SIZE, offset: (page - 1) * PAGE_SIZE })
-      .then((res) => {
-        if (cancelled) return
-        setRuns(res)
-        setRunsError(null)
-      })
-      .catch((err: unknown) => !cancelled && setRunsError(err instanceof Error ? err.message : '加载失败'))
-      .finally(() => !cancelled && setRunsLoading(false))
-    return () => {
-      cancelled = true
-    }
-  }, [page])
+  const runsQuery = useApiQuery(
+    () => listScriptRuns({ limit: PAGE_SIZE, offset: (page - 1) * PAGE_SIZE }),
+    [page],
+    { silent: true, initialData: { total: 0, items: [] as ScriptRun[] } },
+  )
+  const runs = runsQuery.data
+  const runsError = runsQuery.error ? runsQuery.error.message : null
+  const runsLoading = runsQuery.loading
 
   const columns: ColumnsType<ScriptRun> = [
     { title: '时间', dataIndex: 'started_at', width: 180, render: (value: string) => <TimeText value={value} /> },
@@ -290,7 +267,6 @@ export default function ScriptRunsPage() {
             total: runs.total,
             showSizeChanger: false,
             onChange: (next) => {
-              setRunsLoading(true)
               setPage(next)
             },
           }}

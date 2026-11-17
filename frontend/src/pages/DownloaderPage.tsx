@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from 'react'
-import { Alert, Segmented, message } from 'antd'
+import { useCallback } from 'react'
+import { Alert, Segmented } from 'antd'
 import { useSearchParams } from 'react-router-dom'
 import {
   getDownloaderStatus,
@@ -12,6 +12,7 @@ import CandidatesInbox from './downloader/CandidatesInbox'
 import DownloaderHeader from './downloader/DownloaderHeader'
 import TasksBoard from './downloader/TasksBoard'
 import TaskInspector from './downloader/TaskInspector'
+import { useApiQuery } from '@/hooks/useApiQuery'
 
 type DownloaderView = 'inbox' | 'tasks'
 
@@ -19,41 +20,41 @@ function parseView(value: string | null): DownloaderView {
   return value === 'tasks' ? 'tasks' : 'inbox'
 }
 
-function errorText(error: unknown) {
-  return error instanceof Error ? error.message : '请求失败'
+// 概览数据的初始值
+const EMPTY_OVERVIEW = {
+  status: null as DownloaderStatus | null,
+  counts: { candidates: 0, ignored: 0 },
+  activeCount: 0,
 }
 
 export default function DownloaderPage() {
   const [searchParams, setSearchParams] = useSearchParams()
-  const [status, setStatus] = useState<DownloaderStatus | null>(null)
-  const [counts, setCounts] = useState({ candidates: 0, ignored: 0 })
-  const [activeCount, setActiveCount] = useState(0)
-  const [loading, setLoading] = useState(true)
   const taskId = searchParams.get('task')
   const view = taskId ? 'tasks' : parseView(searchParams.get('view'))
 
-  const loadOverview = useCallback(async () => {
-    setLoading(true)
-    try {
-      const [statusPayload, inboxPayload, summaryPayload] = await Promise.all([
-        getDownloaderStatus(),
-        listInbox({ view: 'candidates' }),
-        getDownloaderSummary(),
-      ])
-      setStatus(statusPayload)
-      setCounts(inboxPayload.counts ?? { candidates: inboxPayload.total, ignored: 0 })
-      setActiveCount(summaryPayload.active_count ?? 0)
-    } catch (error) {
-      message.error(errorText(error))
-    } finally {
-      setLoading(false)
-    }
-  }, [])
+  // 概览：连接状态、收件箱计数、活跃任务数一次取回
+  const { data: overview, loading, reload: loadOverview, setData: setOverview } = useApiQuery(
+    () => Promise.all([
+      getDownloaderStatus(),
+      listInbox({ view: 'candidates' }),
+      getDownloaderSummary(),
+    ]).then(([statusPayload, inboxPayload, summaryPayload]) => ({
+      status: statusPayload as DownloaderStatus | null,
+      counts: inboxPayload.counts ?? { candidates: inboxPayload.total, ignored: 0 },
+      activeCount: summaryPayload.active_count ?? 0,
+    })),
+    [],
+    { initialData: EMPTY_OVERVIEW },
+  )
+  const { status, counts, activeCount } = overview
 
-  useEffect(() => {
-    const timer = window.setTimeout(() => { void loadOverview() }, 0)
-    return () => window.clearTimeout(timer)
-  }, [loadOverview])
+  // 子组件回传的计数直接写回概览数据（保持稳定引用，避免子组件重复请求）
+  const setCounts = useCallback((nextCounts: { candidates: number; ignored: number }) => {
+    setOverview((prev) => ({ ...(prev ?? EMPTY_OVERVIEW), counts: nextCounts }))
+  }, [setOverview])
+  const setActiveCount = useCallback((nextActiveCount: number) => {
+    setOverview((prev) => ({ ...(prev ?? EMPTY_OVERVIEW), activeCount: nextActiveCount }))
+  }, [setOverview])
 
   function changeView(value: string | number) {
     const next = parseView(String(value))

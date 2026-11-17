@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { DeleteOutlined, ReloadOutlined } from '@ant-design/icons'
 import { Button, Card, Checkbox, Descriptions, Input, Popconfirm, Select, Space, Table, Tabs, Typography, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
@@ -22,6 +22,8 @@ import PageScaffold from '@/layout/PageScaffold'
 import DataToolbar from '@/layout/DataToolbar'
 import StatusTag from '@/components/StatusTag'
 import TimeText from '@/components/TimeText'
+import { useApiAction } from '@/hooks/useApiAction'
+import { useApiQuery } from '@/hooks/useApiQuery'
 
 const { Text } = Typography
 const DELETE_SCOPE_OPTIONS: Array<{ label: string; value: EmbyDeleteScope }> = [
@@ -51,29 +53,56 @@ export default function EmbyMediaActionsPage() {
   const [planId, setPlanId] = useState('')
   const [candidateId, setCandidateId] = useState('')
   const [plan, setPlan] = useState<EmbyDeletePlan | null>(null)
-  const [recentPlans, setRecentPlans] = useState<EmbyDeletePlan[]>([])
-  const [candidateLists, setCandidateLists] = useState<Record<EmbyMetadataTargetList, EmbyMetadataCandidate[]>>({
-    emby_blacklist: [],
-    emby_whitelist: [],
-  })
   const [candidate, setCandidate] = useState<EmbyMetadataCandidate | null>(null)
   const [selectedScope, setSelectedScope] = useState<EmbyDeleteScope>('episode')
   const [selectedActors, setSelectedActors] = useState<string[]>([])
   const [manualActors, setManualActors] = useState('')
   const [note, setNote] = useState('')
-  const [planLoading, setPlanLoading] = useState(false)
-  const [recentLoading, setRecentLoading] = useState(false)
   const [deletingPlanId, setDeletingPlanId] = useState<number | null>(null)
-  const [scopeLoading, setScopeLoading] = useState(false)
-  const [confirmLoading, setConfirmLoading] = useState(false)
-  const [candidateLoading, setCandidateLoading] = useState(false)
   const [deletingCandidateId, setDeletingCandidateId] = useState<number | null>(null)
-  const [candidateListLoading, setCandidateListLoading] = useState<Record<EmbyMetadataTargetList, boolean>>({
-    emby_blacklist: false,
-    emby_whitelist: false,
-  })
-  const [applyLoading, setApplyLoading] = useState(false)
   const [messageApi, holder] = message.useMessage()
+
+  // 出错提示走本页的 messageApi；401 交给全局登录过期处理
+  const showError = (error: unknown, fallback: string) => {
+    if ((error as { status?: number } | null)?.status === 401) return
+    void messageApi.error(error instanceof Error ? error.message : fallback)
+  }
+
+  // 读取出错时提示后继续抛出，交给取数工具保留旧数据
+  const failWith = (fallback: string) => (error: unknown): never => {
+    showError(error, fallback)
+    throw error
+  }
+
+  const recentQuery = useApiQuery(
+    () => listEmbyDeletePlans().catch(failWith('加载最近删除计划失败')),
+    [],
+    { silent: true, initialData: [] as EmbyDeletePlan[] },
+  )
+  const { data: recentPlans, loading: recentLoading, reload: loadRecentPlans, setData: setRecentPlans } = recentQuery
+
+  // 黑名单、白名单候选各自加载，各自显示加载状态
+  const blacklistQuery = useApiQuery(
+    () => listEmbyMetadataCandidates('emby_blacklist')
+      .catch(failWith(`加载${candidateTargetLabel('emby_blacklist')}候选失败`)),
+    [],
+    { silent: true, initialData: [] as EmbyMetadataCandidate[] },
+  )
+  const whitelistQuery = useApiQuery(
+    () => listEmbyMetadataCandidates('emby_whitelist')
+      .catch(failWith(`加载${candidateTargetLabel('emby_whitelist')}候选失败`)),
+    [],
+    { silent: true, initialData: [] as EmbyMetadataCandidate[] },
+  )
+  const candidateQueries = { emby_blacklist: blacklistQuery, emby_whitelist: whitelistQuery }
+  const candidateLists: Record<EmbyMetadataTargetList, EmbyMetadataCandidate[]> = {
+    emby_blacklist: blacklistQuery.data,
+    emby_whitelist: whitelistQuery.data,
+  }
+  const candidateListLoading: Record<EmbyMetadataTargetList, boolean> = {
+    emby_blacklist: blacklistQuery.loading,
+    emby_whitelist: whitelistQuery.loading,
+  }
 
   const columns: ColumnsType<EmbyDeletePlanItem> = [
     { title: '分组', dataIndex: 'group', width: 130 },
@@ -173,67 +202,42 @@ export default function EmbyMediaActionsPage() {
     },
   ]
 
-  const loadRecentPlans = async () => {
-    setRecentLoading(true)
-    try {
-      setRecentPlans(await listEmbyDeletePlans())
-    } catch (error) {
-      void messageApi.error(error instanceof Error ? error.message : '加载最近删除计划失败')
-    } finally {
-      setRecentLoading(false)
-    }
-  }
-
-  const loadCandidateList = async (targetList: EmbyMetadataTargetList) => {
-    setCandidateListLoading((previous) => ({ ...previous, [targetList]: true }))
-    try {
-      const candidates = await listEmbyMetadataCandidates(targetList)
-      setCandidateLists((previous) => ({ ...previous, [targetList]: candidates }))
-    } catch (error) {
-      void messageApi.error(error instanceof Error ? error.message : `加载${candidateTargetLabel(targetList)}候选失败`)
-    } finally {
-      setCandidateListLoading((previous) => ({ ...previous, [targetList]: false }))
-    }
-  }
-
   const loadCandidateLists = async () => {
-    await Promise.all(METADATA_TARGET_TABS.map((item) => loadCandidateList(item.value)))
+    await Promise.all(METADATA_TARGET_TABS.map((item) => candidateQueries[item.value].reload()))
   }
 
-  useEffect(() => {
-    void loadRecentPlans()
-    void loadCandidateLists()
-  }, [])
+  // 以下操作的出错提示文字各不相同，统一设为 silent 后自行提示
+  const deletePlanAction = useApiAction(deleteEmbyDeletePlan, { silent: true })
 
   const removePlan = async (item: EmbyDeletePlan) => {
     setDeletingPlanId(item.id)
-    try {
-      await deleteEmbyDeletePlan(item.id)
-      setRecentPlans((plans) => plans.filter((planItem) => planItem.id !== item.id))
-      if (plan?.id === item.id) {
-        setPlan(null)
-        setPlanId('')
-      }
-      void messageApi.success(`已清除计划 #${item.id}`)
-    } catch (error) {
-      void messageApi.error(error instanceof Error ? error.message : '清除删除计划失败')
-    } finally {
-      setDeletingPlanId(null)
+    const result = await deletePlanAction.run(item.id)
+    setDeletingPlanId(null)
+    if (!result.ok) {
+      showError(result.error, '清除删除计划失败')
+      return
     }
+    setRecentPlans((plans = []) => plans.filter((planItem) => planItem.id !== item.id))
+    if (plan?.id === item.id) {
+      setPlan(null)
+      setPlanId('')
+    }
+    void messageApi.success(`已清除计划 #${item.id}`)
   }
 
+  const planAction = useApiAction(getEmbyDeletePlan, { silent: true })
+  const planLoading = planAction.loading
+
   const loadPlanById = async (id: number) => {
-    setPlanLoading(true)
-    try {
-      const nextPlan = await getEmbyDeletePlan(id)
-      setPlan(nextPlan)
-      setPlanId(String(nextPlan.id))
-      setSelectedScope(nextPlan.scope as EmbyDeleteScope)
-    } catch (error) {
-      void messageApi.error(error instanceof Error ? error.message : '加载删除计划失败')
-    } finally {
-      setPlanLoading(false)
+    const result = await planAction.run(id)
+    if (!result.ok) {
+      showError(result.error, '加载删除计划失败')
+      return
     }
+    const nextPlan = result.data
+    setPlan(nextPlan)
+    setPlanId(String(nextPlan.id))
+    setSelectedScope(nextPlan.scope as EmbyDeleteScope)
   }
 
   const loadPlan = async () => {
@@ -245,72 +249,78 @@ export default function EmbyMediaActionsPage() {
     await loadPlanById(id)
   }
 
+  // 执行后重新读取计划；两步任一出错都按“执行删除计划失败”提示
+  const confirmAction = useApiAction(async (id: number) => {
+    await confirmEmbyDeletePlan(id)
+    return getEmbyDeletePlan(id)
+  }, { silent: true })
+  const confirmLoading = confirmAction.loading
+
   const confirmPlan = async () => {
     if (!plan) return
-    setConfirmLoading(true)
-    try {
-      await confirmEmbyDeletePlan(plan.id)
-      setPlan(await getEmbyDeletePlan(plan.id))
-      void messageApi.success('删除计划已执行')
-    } catch (error) {
-      void messageApi.error(error instanceof Error ? error.message : '执行删除计划失败')
-    } finally {
-      setConfirmLoading(false)
+    const result = await confirmAction.run(plan.id)
+    if (!result.ok) {
+      showError(result.error, '执行删除计划失败')
+      return
     }
+    setPlan(result.data)
+    void messageApi.success('删除计划已执行')
   }
+
+  const scopeAction = useApiAction(createEmbyDeletePlanForScope, { silent: true })
+  const scopeLoading = scopeAction.loading
 
   const createScopedPlan = async () => {
     if (!plan) return
-    setScopeLoading(true)
-    try {
-      const nextPlan = await createEmbyDeletePlanForScope(plan.id, selectedScope)
-      setPlan(nextPlan)
-      setPlanId(String(nextPlan.id))
-      void messageApi.success('已生成新的范围删除计划')
-    } catch (error) {
-      void messageApi.error(error instanceof Error ? error.message : '生成范围删除计划失败')
-    } finally {
-      setScopeLoading(false)
+    const result = await scopeAction.run(plan.id, selectedScope)
+    if (!result.ok) {
+      showError(result.error, '生成范围删除计划失败')
+      return
     }
+    const nextPlan = result.data
+    setPlan(nextPlan)
+    setPlanId(String(nextPlan.id))
+    void messageApi.success('已生成新的范围删除计划')
   }
 
+  const candidateAction = useApiAction(getEmbyMetadataCandidate, { silent: true })
+  const candidateLoading = candidateAction.loading
+
   const loadCandidateById = async (id: number) => {
-    setCandidateLoading(true)
-    try {
-      const nextCandidate = await getEmbyMetadataCandidate(id)
-      setCandidate(nextCandidate)
-      setCandidateId(String(nextCandidate.id))
-      setSelectedActors(nextCandidate.snapshot_actors.map((actor) => actor.name))
-      setManualActors('')
-      setNote('')
-    } catch (error) {
-      void messageApi.error(error instanceof Error ? error.message : '加载名单候选失败')
-    } finally {
-      setCandidateLoading(false)
+    const result = await candidateAction.run(id)
+    if (!result.ok) {
+      showError(result.error, '加载名单候选失败')
+      return
     }
+    const nextCandidate = result.data
+    setCandidate(nextCandidate)
+    setCandidateId(String(nextCandidate.id))
+    setSelectedActors(nextCandidate.snapshot_actors.map((actor) => actor.name))
+    setManualActors('')
+    setNote('')
   }
+
+  const deleteCandidateAction = useApiAction(deleteEmbyMetadataCandidate, { silent: true })
 
   const removeCandidate = async (item: EmbyMetadataCandidate) => {
     setDeletingCandidateId(item.id)
-    try {
-      await deleteEmbyMetadataCandidate(item.id)
-      setCandidateLists((previous) => ({
-        emby_blacklist: previous.emby_blacklist.filter((candidateItem) => candidateItem.id !== item.id),
-        emby_whitelist: previous.emby_whitelist.filter((candidateItem) => candidateItem.id !== item.id),
-      }))
-      if (candidate?.id === item.id) {
-        setCandidate(null)
-        setCandidateId('')
-        setSelectedActors([])
-        setManualActors('')
-        setNote('')
-      }
-      void messageApi.success(`已清除候选 #${item.id}`)
-    } catch (error) {
-      void messageApi.error(error instanceof Error ? error.message : '清除名单候选失败')
-    } finally {
-      setDeletingCandidateId(null)
+    const result = await deleteCandidateAction.run(item.id)
+    setDeletingCandidateId(null)
+    if (!result.ok) {
+      showError(result.error, '清除名单候选失败')
+      return
     }
+    for (const query of [blacklistQuery, whitelistQuery]) {
+      query.setData((previous = []) => previous.filter((candidateItem) => candidateItem.id !== item.id))
+    }
+    if (candidate?.id === item.id) {
+      setCandidate(null)
+      setCandidateId('')
+      setSelectedActors([])
+      setManualActors('')
+      setNote('')
+    }
+    void messageApi.success(`已清除候选 #${item.id}`)
   }
 
   const loadCandidate = async () => {
@@ -322,6 +332,9 @@ export default function EmbyMediaActionsPage() {
     await loadCandidateById(id)
   }
 
+  const applyAction = useApiAction(applyEmbyMetadataCandidate, { silent: true })
+  const applyLoading = applyAction.loading
+
   const applyCandidate = async () => {
     if (!candidate) return
     const actors = candidate.snapshot_actors.length
@@ -331,22 +344,17 @@ export default function EmbyMediaActionsPage() {
       void messageApi.warning('请选择或输入至少一个演员')
       return
     }
-    setApplyLoading(true)
-    try {
-      const nextCandidate = await applyEmbyMetadataCandidate(candidate.id, actors, note || null)
-      setCandidate(nextCandidate)
-      setCandidateLists((previous) => ({
-        ...previous,
-        [nextCandidate.target_list as EmbyMetadataTargetList]: previous[nextCandidate.target_list as EmbyMetadataTargetList].map((item) =>
-          item.id === nextCandidate.id ? nextCandidate : item,
-        ),
-      }))
-      void messageApi.success('演员名单已写入')
-    } catch (error) {
-      void messageApi.error(error instanceof Error ? error.message : '写入演员名单失败')
-    } finally {
-      setApplyLoading(false)
+    const result = await applyAction.run(candidate.id, actors, note || null)
+    if (!result.ok) {
+      showError(result.error, '写入演员名单失败')
+      return
     }
+    const nextCandidate = result.data
+    setCandidate(nextCandidate)
+    candidateQueries[nextCandidate.target_list as EmbyMetadataTargetList].setData((previous = []) => previous.map((item) =>
+      item.id === nextCandidate.id ? nextCandidate : item,
+    ))
+    void messageApi.success('演员名单已写入')
   }
 
   return (

@@ -1,11 +1,12 @@
 import { useState } from 'react'
-import { Alert, Button, Card, Col, InputNumber, Row, Select, Space, Tag, Typography, message } from 'antd'
+import { Alert, Button, Card, Col, InputNumber, Row, Select, Space, Tag, Typography } from 'antd'
 import { MergeOutlined, SearchOutlined } from '@ant-design/icons'
 import { api } from '@/api/client'
 import type { KeywordDuplicatePair, KeywordDuplicateScanResponse } from '@/api/types'
 import PageScaffold from '@/layout/PageScaffold'
 import DataToolbar from '@/layout/DataToolbar'
 import StatusTag from '@/components/StatusTag'
+import { useApiAction } from '@/hooks/useApiAction'
 
 const { Text } = Typography
 
@@ -21,47 +22,48 @@ export default function KeywordDuplicatesPage() {
   const [keywordType, setKeywordType] = useState<string>('')
   const [threshold, setThreshold] = useState(0.85)
   const [pairs, setPairs] = useState<KeywordDuplicatePair[]>([])
-  const [loading, setLoading] = useState(false)
   const [mergingKey, setMergingKey] = useState<string | null>(null)
 
+  // 扫描由按钮触发，结果写入 pairs
+  const scan = useApiAction(
+    () => api.post<KeywordDuplicateScanResponse>('/keywords/duplicates/scan', {
+      keyword_type: keywordType || null,
+      threshold,
+    }),
+    { onSuccess: (response) => setPairs(response.pairs ?? []) },
+  )
+  const loading = scan.loading
+
   const loadPairs = async () => {
-    setLoading(true)
-    try {
-      const response = await api.post<KeywordDuplicateScanResponse>('/keywords/duplicates/scan', {
-        keyword_type: keywordType || null,
-        threshold,
-      })
-      setPairs(response.pairs ?? [])
-    } catch (error: unknown) {
-      message.error((error as Error).message)
-    } finally {
-      setLoading(false)
-    }
+    await scan.run()
   }
+
+  const merge = useApiAction(
+    (canonicalId: number, mergeId: number) => api.post('/keywords/merge', {
+      canonical_entry_id: canonicalId,
+      merge_entry_ids: [mergeId],
+    }),
+    {
+      successMessage: (_data, canonicalId) => `已合并到关键词 #${canonicalId}`,
+      onSuccess: (_data, canonicalId, mergeId) => {
+        setPairs((current) =>
+          current.filter(
+            (pair) =>
+              !(
+                (pair.keyword_1.id === canonicalId && pair.keyword_2.id === mergeId) ||
+                (pair.keyword_1.id === mergeId && pair.keyword_2.id === canonicalId)
+              ),
+          ),
+        )
+      },
+    },
+  )
 
   const mergePair = async (canonicalId: number, mergeId: number) => {
     const mergeKey = `${canonicalId}-${mergeId}`
     setMergingKey(mergeKey)
-    try {
-      await api.post('/keywords/merge', {
-        canonical_entry_id: canonicalId,
-        merge_entry_ids: [mergeId],
-      })
-      message.success(`已合并到关键词 #${canonicalId}`)
-      setPairs((current) =>
-        current.filter(
-          (pair) =>
-            !(
-              (pair.keyword_1.id === canonicalId && pair.keyword_2.id === mergeId) ||
-              (pair.keyword_1.id === mergeId && pair.keyword_2.id === canonicalId)
-            ),
-        ),
-      )
-    } catch (error: unknown) {
-      message.error((error as Error).message)
-    } finally {
-      setMergingKey(null)
-    }
+    await merge.run(canonicalId, mergeId)
+    setMergingKey(null)
   }
 
   return (

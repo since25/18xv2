@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom'
 import { Spin, Typography, message } from 'antd'
-import { ApiError, api } from './api/client'
+import { ApiError, api, setUnauthorizedHandler } from './api/client'
 import type { AuthMeResponse, LoginResponse } from './api/types'
 import AppShell from './layout/AppShell'
 import ImportsPage from './pages/ImportsPage'
@@ -50,6 +50,22 @@ function AppRoutes() {
   const [loginError, setLoginError] = useState<string | null>(null)
   const [messageApi, contextHolder] = message.useMessage()
 
+  // 已登录状态下注册登录过期处理：任一接口返回 401 时置为未登录，
+  // 由下方未登录路由跳到登录页并记住当前地址；同一次登录内多个请求同时 401 只处理一次
+  useEffect(() => {
+    if (auth.status !== 'authenticated') return
+    let handled = false
+    setUnauthorizedHandler(() => {
+      if (handled) return
+      handled = true
+      setAuth({ status: 'unauthenticated', username: null })
+      void messageApi.warning('登录已过期，请重新登录')
+    })
+    return () => {
+      setUnauthorizedHandler(null)
+    }
+  }, [auth.status, messageApi])
+
   useEffect(() => {
     let cancelled = false
 
@@ -77,16 +93,18 @@ function AppRoutes() {
     }
   }, [])
 
+  // 登录后跳回的地址（未登录跳转登录页时记在 state.from）
+  const redirectTo =
+    location.state && typeof location.state === 'object' && 'from' in location.state
+      ? String(location.state.from || '/imports')
+      : '/imports'
+
   const handleLogin = async (values: { username: string; password: string }) => {
     setSubmitting(true)
     setLoginError(null)
     try {
       const payload = await api.post<LoginResponse>('/auth/login', values)
       setAuth({ status: 'authenticated', username: payload.username })
-      const redirectTo =
-        location.state && typeof location.state === 'object' && 'from' in location.state
-          ? String(location.state.from || '/imports')
-          : '/imports'
       navigate(redirectTo, { replace: true })
     } catch (error) {
       setLoginError(error instanceof Error ? error.message : '登录失败')
@@ -131,7 +149,7 @@ function AppRoutes() {
               />
             }
           />
-          <Route path="*" element={<Navigate to="/login" replace state={{ from: location.pathname }} />} />
+          <Route path="*" element={<Navigate to="/login" replace state={{ from: location.pathname + location.search }} />} />
         </Routes>
       </>
     )
@@ -142,7 +160,7 @@ function AppRoutes() {
       {contextHolder}
       <AppShell username={auth.username} onLogout={() => void handleLogout()}>
         <Routes>
-          <Route path="/login" element={<Navigate to="/imports" replace />} />
+          <Route path="/login" element={<Navigate to={redirectTo} replace />} />
           <Route path="/" element={<Navigate to="/imports" replace />} />
           <Route path="/imports" element={<ImportsPage />} />
           <Route path="/nodes" element={<NodesPage />} />

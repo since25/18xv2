@@ -1,32 +1,25 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { Table, Tag, Button, Space, Card, Input, message } from 'antd'
+import { Table, Tag, Button, Space, Card, Input } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { api } from '@/api/client'
 import type { PlanDetail, PlanItem } from '@/api/types'
 import PageScaffold from '@/layout/PageScaffold'
 import DataToolbar from '@/layout/DataToolbar'
 import StatusTag from '@/components/StatusTag'
+import { useApiQuery } from '@/hooks/useApiQuery'
 
 export default function PlanDetailPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
-  const [plan, setPlan] = useState<PlanDetail | null>(null)
-  const [loading, setLoading] = useState(false)
   const [q, setQ] = useState('')
 
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      if (!id) return
-      setLoading(true)
-      api.get<PlanDetail>(`/plans/${id}`)
-        .then(setPlan)
-        .catch((e: Error) => message.error(e.message))
-        .finally(() => setLoading(false))
-    }, 0)
-
-    return () => window.clearTimeout(timer)
-  }, [id])
+  const { data, loading } = useApiQuery(
+    () => api.get<PlanDetail>(`/plans/${id}`),
+    [id],
+    { enabled: Boolean(id) },
+  )
+  const plan = data ?? null
 
   const items = plan?.items.filter((item) =>
     !q || item.source_path.includes(q) || item.suggested_target_path.includes(q)

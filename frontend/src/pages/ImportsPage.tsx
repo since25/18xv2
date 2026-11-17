@@ -1,5 +1,4 @@
-import { useEffect, useState } from 'react'
-import { Table, Button, Upload, message, Space, Card, Popconfirm } from 'antd'
+import { Table, Button, Upload, Space, Card, Popconfirm } from 'antd'
 import { UploadOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import { useNavigate } from 'react-router-dom'
@@ -9,57 +8,38 @@ import TimeText from '@/components/TimeText'
 import PageScaffold from '@/layout/PageScaffold'
 import DataToolbar from '@/layout/DataToolbar'
 import StatusTag from '@/components/StatusTag'
+import { useApiAction } from '@/hooks/useApiAction'
+import { useApiQuery } from '@/hooks/useApiQuery'
 
 export default function ImportsPage() {
   const navigate = useNavigate()
-  const [imports, setImports] = useState<TreeImport[]>([])
-  const [loading, setLoading] = useState(false)
-  const [uploading, setUploading] = useState(false)
 
-  const load = async () => {
-    setLoading(true)
-    try {
-      const data = await api.get<ImportListResponse>('/imports/data?limit=100')
-      setImports(data.items ?? [])
-    } catch (e: unknown) {
-      message.error((e as Error).message)
-    } finally {
-      setLoading(false)
-    }
-  }
+  const { data: imports, loading, reload } = useApiQuery(
+    () => api.get<ImportListResponse>('/imports/data?limit=100').then((data) => data.items ?? []),
+    [],
+    { initialData: [] as TreeImport[] },
+  )
 
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      void load()
-    }, 0)
-
-    return () => window.clearTimeout(timer)
-  }, [])
+  const upload = useApiAction((form: FormData) => api.postForm('/imports/tree', form), {
+    successMessage: '目录树上传成功',
+    onSuccess: () => { void reload() },
+  })
+  const uploading = upload.loading
 
   const handleUpload = async (file: File) => {
-    setUploading(true)
     const form = new FormData()
     form.append('file', file)
-    try {
-      await api.postForm('/imports/tree', form)
-      message.success('目录树上传成功')
-      load()
-    } catch (e: unknown) {
-      message.error((e as Error).message)
-    } finally {
-      setUploading(false)
-    }
+    await upload.run(form)
     return false
   }
 
+  const removeImport = useApiAction((importId: number) => api.delete<DeleteResponse>(`/imports/${importId}`), {
+    successMessage: (_data, importId) => `已删除批次 #${importId}`,
+    onSuccess: () => { void reload() },
+  })
+
   const deleteImport = async (importId: number) => {
-    try {
-      await api.delete<DeleteResponse>(`/imports/${importId}`)
-      message.success(`已删除批次 #${importId}`)
-      load()
-    } catch (e: unknown) {
-      message.error((e as Error).message)
-    }
+    await removeImport.run(importId)
   }
 
   const columns: ColumnsType<TreeImport> = [
@@ -112,7 +92,7 @@ export default function ImportsPage() {
         <Button onClick={() => navigate('/keywords')}>打开关键词台</Button>
         </Space>
       )} right={(
-        <Button onClick={load} loading={loading}>刷新</Button>
+        <Button onClick={() => void reload()} loading={loading}>刷新</Button>
       )} />
       <Card>
         <Table

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Button, Card, DatePicker, Input, Progress, Select, Segmented, Space, Table, Typography, message } from 'antd'
+import { Button, Card, DatePicker, Input, Progress, Select, Segmented, Space, Table, Typography } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { type Dayjs } from 'dayjs'
 import { SearchOutlined } from '@ant-design/icons'
@@ -20,6 +20,8 @@ import DataToolbar from '@/layout/DataToolbar'
 import MetricStrip from '@/layout/MetricStrip'
 import { formatBytes, formatDuration } from '@/utils/format'
 import { useSearchParams } from 'react-router-dom'
+import { useApiAction } from '@/hooks/useApiAction'
+import { useApiQuery } from '@/hooks/useApiQuery'
 
 type TasksBoardProps = {
   onActiveCountChange: (n: number) => void
@@ -47,19 +49,11 @@ function rangeSince(value: RangeValue) {
   return undefined
 }
 
-function errorText(error: unknown) {
-  return error instanceof Error ? error.message : '请求失败'
-}
+const EMPTY_SUMMARY: DownloaderSummary = { today_count: 0, today_bytes: 0, week_count: 0, week_bytes: 0, active_count: 0, week_failed_files: 0 }
 
 export default function TasksBoard({ onActiveCountChange, onOpenTask }: TasksBoardProps) {
   const [searchParams, setSearchParams] = useSearchParams()
-  const [tasks, setTasks] = useState<TaskRow[]>([])
-  const [total, setTotal] = useState(0)
-  const [summary, setSummary] = useState<DownloaderSummary>({ today_count: 0, today_bytes: 0, week_count: 0, week_bytes: 0, active_count: 0, week_failed_files: 0 })
-  const [channels, setChannels] = useState<string[]>([])
-  const [keywords, setKeywords] = useState<Array<{ id: number; canonical_name: string }>>([])
   const [customRange, setCustomRange] = useState<[Dayjs | null, Dayjs | null]>([null, null])
-  const [loading, setLoading] = useState(false)
 
   const statusParam = searchParams.get('status') ?? ''
   const status = useMemo(() => statusParam.split(',').filter(Boolean), [statusParam])
@@ -87,36 +81,25 @@ export default function TasksBoard({ onActiveCountChange, onOpenTask }: TasksBoa
     page,
   }), [channel, customRange, keywordEntryId, page, range, search, status])
 
-  const load = useCallback(async () => {
-    setLoading(true)
-    try {
-      const [taskPayload, summaryPayload] = await Promise.all([listTasks(filters), getDownloaderSummary()])
-      setTasks(taskPayload.items ?? [])
-      setTotal(taskPayload.total ?? 0)
-      setSummary(summaryPayload)
+  // 任务列表与汇总一起取；成功后把活跃数回传给上层
+  const { data: board, loading, reload: load } = useApiQuery(
+    () => Promise.all([listTasks(filters), getDownloaderSummary()]).then(([taskPayload, summaryPayload]) => {
       onActiveCountChange(summaryPayload.active_count ?? 0)
-    } catch (error) {
-      message.error(errorText(error))
-    } finally {
-      setLoading(false)
-    }
-  }, [filters, onActiveCountChange])
+      return { tasks: taskPayload.items ?? [], total: taskPayload.total ?? 0, summary: summaryPayload }
+    }),
+    [filters],
+    { initialData: { tasks: [] as TaskRow[], total: 0, summary: EMPTY_SUMMARY } },
+  )
+  const { tasks, total, summary } = board
 
-  useEffect(() => {
-    const timer = window.setTimeout(() => { void load() }, 0)
-    return () => window.clearTimeout(timer)
-  }, [load])
-
-  useEffect(() => {
-    let cancelled = false
-    void Promise.all([listDownloaderChannels(), listDownloaderKeywords()]).then(([nextChannels, nextKeywords]) => {
-      if (!cancelled) {
-        setChannels(nextChannels)
-        setKeywords(nextKeywords)
-      }
-    }).catch((error) => message.error(errorText(error)))
-    return () => { cancelled = true }
-  }, [])
+  // 频道与关键词筛选项，进页面取一次
+  const { data: options } = useApiQuery(
+    () => Promise.all([listDownloaderChannels(), listDownloaderKeywords()])
+      .then(([channels, keywords]) => ({ channels, keywords })),
+    [],
+    { initialData: { channels: [] as string[], keywords: [] as Array<{ id: number; canonical_name: string }> } },
+  )
+  const { channels, keywords } = options
 
   useEffect(() => {
     if (!summary.active_count) return undefined
@@ -139,14 +122,18 @@ export default function TasksBoard({ onActiveCountChange, onOpenTask }: TasksBoa
       if (timer !== null) window.clearInterval(timer)
       document.removeEventListener('visibilitychange', handleVisibility)
     }
-  }, [load, summary.active_count])
+    // filters 不在 effect 内使用，保留在依赖里是为了筛选变化时像原来一样重新开始 5 秒计时
+  }, [filters, load, summary.active_count])
+
+  const cancelAction = useApiAction((taskId: string) => cancelDownloaderTask(taskId), { onSuccess: () => load() })
+  const retryAction = useApiAction((taskId: string) => retryDownloaderTask(taskId), { onSuccess: () => load() })
 
   async function cancel(taskId: string) {
-    try { await cancelDownloaderTask(taskId); await load() } catch (error) { message.error(errorText(error)) }
+    await cancelAction.run(taskId)
   }
 
   async function retry(taskId: string) {
-    try { await retryDownloaderTask(taskId); await load() } catch (error) { message.error(errorText(error)) }
+    await retryAction.run(taskId)
   }
 
   const activeTasks = tasks.filter((task) => ACTIVE.has(task.status))

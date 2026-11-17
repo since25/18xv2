@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ReloadOutlined, ScanOutlined, SyncOutlined } from '@ant-design/icons'
 import { Alert, Button, Descriptions, Select, Space, Table, Tooltip, Typography, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
@@ -19,6 +19,8 @@ import {
 import PageScaffold from '@/layout/PageScaffold'
 import SurfacePanel from '@/layout/SurfacePanel'
 import TimeText from '@/components/TimeText'
+import { useApiAction } from '@/hooks/useApiAction'
+import { useApiQuery } from '@/hooks/useApiQuery'
 
 const { Text } = Typography
 const POLL_INTERVAL_MS = 3000
@@ -70,58 +72,45 @@ function JobSummary({ job }: { job: JellyfinJob | null }) {
 }
 
 export default function JellyfinPage() {
-  const [status, setStatus] = useState<JellyfinStatus | null>(null)
-  const [loadError, setLoadError] = useState<string | null>(null)
   const [runningJobs, setRunningJobs] = useState<Partial<Record<JobKind, string>>>({})
   const [source, setSource] = useState<JellyfinMediaSource | undefined>(undefined)
   const [state, setState] = useState<JellyfinUnmatchedState | undefined>(undefined)
   const [page, setPage] = useState(1)
-  const [unmatched, setUnmatched] = useState<{ total: number; items: JellyfinUnmatchedItem[] }>({ total: 0, items: [] })
-  const [unmatchedLoading, setUnmatchedLoading] = useState(true)
   // 任务完成后递增，用来触发未匹配列表和冲突列表重新加载
   const [reloadToken, setReloadToken] = useState(0)
-  const [conflicts, setConflicts] = useState<JellyfinConflictItem[]>([])
   const timers = useRef<Partial<Record<JobKind, ReturnType<typeof setInterval>>>>({})
 
-  const applyStatus = useCallback((promise: Promise<JellyfinStatus>) => {
-    promise
-      .then((res) => {
-        setStatus(res)
-        setLoadError(null)
-      })
-      .catch((err: unknown) => setLoadError(err instanceof Error ? err.message : '加载失败'))
-  }, [])
+  // 状态：出错不弹提示，错误文字显示在页面提示条里
+  const statusQuery = useApiQuery(() => getJellyfinStatus() as Promise<JellyfinStatus | null>, [], {
+    silent: true,
+    initialData: null,
+  })
+  const status = statusQuery.data
+  const loadError = statusQuery.error ? statusQuery.error.message : null
+  const reloadStatus = statusQuery.reload
+  const loadStatus = () => {
+    void reloadStatus({ silent: true })
+  }
 
-  const loadStatus = useCallback(() => applyStatus(getJellyfinStatus()), [applyStatus])
+  // 冲突列表：出错时静默清空
+  const { data: conflicts } = useApiQuery(
+    () => listJellyfinConflicts()
+      .then((res) => res.items)
+      .catch(() => [] as JellyfinConflictItem[]),
+    [reloadToken],
+    { initialData: [] as JellyfinConflictItem[] },
+  )
 
-  useEffect(() => {
-    applyStatus(getJellyfinStatus())
-  }, [applyStatus])
+  // 未匹配列表：出错时静默清空；筛选、翻页或任务完成时重新加载
+  const { data: unmatched, loading: unmatchedLoading } = useApiQuery(
+    () => listJellyfinUnmatched({ source, state, limit: PAGE_SIZE, offset: (page - 1) * PAGE_SIZE })
+      .catch(() => ({ total: 0, items: [] as JellyfinUnmatchedItem[] })),
+    [source, state, page, reloadToken],
+    { initialData: { total: 0, items: [] as JellyfinUnmatchedItem[] } },
+  )
 
-  useEffect(() => {
-    let cancelled = false
-    listJellyfinConflicts()
-      .then((res) => !cancelled && setConflicts(res.items))
-      .catch(() => !cancelled && setConflicts([]))
-    return () => {
-      cancelled = true
-    }
-  }, [reloadToken])
-
-  useEffect(() => {
-    let cancelled = false
-    listJellyfinUnmatched({ source, state, limit: PAGE_SIZE, offset: (page - 1) * PAGE_SIZE })
-      .then((res) => !cancelled && setUnmatched(res))
-      .catch(() => !cancelled && setUnmatched({ total: 0, items: [] }))
-      .finally(() => !cancelled && setUnmatchedLoading(false))
-    return () => {
-      cancelled = true
-    }
-  }, [source, state, page, reloadToken])
-
-  // 筛选或翻页时先显示加载状态，再由上面的 effect 拉取
+  // 筛选或翻页：依赖变化后自动进入加载状态并重新拉取
   const changeUnmatchedQuery = (update: () => void) => {
-    setUnmatchedLoading(true)
     update()
   }
 
@@ -156,7 +145,6 @@ export default function JellyfinPage() {
           message.success(kind === 'scan' ? '扫描完成' : '合集同步完成')
         }
         loadStatus()
-        setUnmatchedLoading(true)
         setReloadToken((token) => token + 1)
       } catch {
         stopPolling(kind)
@@ -164,15 +152,15 @@ export default function JellyfinPage() {
     }, POLL_INTERVAL_MS)
   }
 
+  const startAction = useApiAction((kind: JobKind) => (kind === 'scan' ? startJellyfinScan() : startJellyfinSync()))
+
   const startJob = async (kind: JobKind) => {
-    try {
-      const res = kind === 'scan' ? await startJellyfinScan() : await startJellyfinSync()
-      setRunningJobs((prev) => ({ ...prev, [kind]: res.job_id }))
-      message.info(kind === 'scan' ? '已开始扫描' : '已开始同步合集')
-      pollJob(kind, res.job_id)
-    } catch (err) {
-      message.error(err instanceof Error ? err.message : '启动失败')
-    }
+    const result = await startAction.run(kind)
+    if (!result.ok) return
+    const res = result.data
+    setRunningJobs((prev) => ({ ...prev, [kind]: res.job_id }))
+    message.info(kind === 'scan' ? '已开始扫描' : '已开始同步合集')
+    pollJob(kind, res.job_id)
   }
 
   const scanDisabledReason = status && !status.scan_enabled ? '未启用：需在 .env 中设置 JELLYFIN_ENABLED=true' : null

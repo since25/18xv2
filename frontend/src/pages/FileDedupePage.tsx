@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   Button,
   Card,
@@ -34,6 +34,8 @@ import type { ImportListResponse, TreeImport } from '../api/types'
 import DataToolbar from '@/layout/DataToolbar'
 import PageScaffold from '@/layout/PageScaffold'
 import StatusTag from '@/components/StatusTag'
+import { useApiAction } from '@/hooks/useApiAction'
+import { useApiQuery } from '@/hooks/useApiQuery'
 import {
   createDedupeDeletePlan,
   getDedupeActiveJobs,
@@ -120,6 +122,20 @@ function parseLines(value?: string) {
     .filter(Boolean)
 }
 
+// 出错弹错误信息；401 交给全局登录过期处理
+function showError(error: unknown) {
+  if ((error as { status?: number } | null)?.status === 401) return
+  message.error((error as Error).message)
+}
+
+// 读取出错时弹固定文字（保持原来的提示），401 交给全局登录过期处理；错误继续抛出给取数工具
+function failWith(text: string) {
+  return (error: unknown): never => {
+    if ((error as { status?: number } | null)?.status !== 401) message.error(text)
+    throw error
+  }
+}
+
 function parseExtensions(value?: string) {
   return (value ?? DEFAULT_EXTENSIONS)
     .split(',')
@@ -129,10 +145,7 @@ function parseExtensions(value?: string) {
 
 export default function FileDedupePage() {
   const [form] = Form.useForm()
-  const [imports, setImports] = useState<TreeImport[]>([])
   const [selectedImportId, setSelectedImportId] = useState<number>()
-  const [groups, setGroups] = useState<DedupeGroup[]>([])
-  const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(50)
   const [statusFilter, setStatusFilter] = useState('')
@@ -141,12 +154,9 @@ export default function FileDedupePage() {
   const [candidates, setCandidates] = useState<DedupeCandidate[]>([])
   const [candidateActions, setCandidateActions] = useState<Record<number, string>>({})
   const [reviewNote, setReviewNote] = useState('')
-  const [deletePlans, setDeletePlans] = useState<DedupeDeletePlan[]>([])
   const [scanJob, setScanJob] = useState<DedupeJobFrame | null>(null)
   const [confirmJob, setConfirmJob] = useState<DedupeJobFrame | null>(null)
   const [deleteJob, setDeleteJob] = useState<DedupeJobFrame | null>(null)
-  const [loadingGroups, setLoadingGroups] = useState(false)
-  const [loadingDetail, setLoadingDetail] = useState(false)
 
   const selectedDeleteIds = useMemo(
     () => candidates.filter((item) => candidateActions[item.id] === 'delete').map((item) => item.id),
@@ -161,37 +171,42 @@ export default function FileDedupePage() {
     [candidateActions, candidates],
   )
 
-  const loadGroups = useCallback(async () => {
-    setLoadingGroups(true)
-    try {
-      const body = await listDedupeGroups({
-        status: statusFilter || undefined,
-        confidence_level: confidenceFilter || undefined,
-        page,
-        page_size: pageSize,
+  // 候选组：筛选和翻页变化时自动重新加载
+  const groupsQuery = useApiQuery(
+    () => listDedupeGroups({
+      status: statusFilter || undefined,
+      confidence_level: confidenceFilter || undefined,
+      page,
+      page_size: pageSize,
+    }).then((body) => ({ items: body.items, total: body.total })),
+    [confidenceFilter, page, pageSize, statusFilter],
+    { initialData: { items: [] as DedupeGroup[], total: 0 } },
+  )
+  const { loading: loadingGroups, reload: loadGroups } = groupsQuery
+  const groups = groupsQuery.data.items
+  const total = groupsQuery.data.total
+
+  // 删除计划：读取失败时静默清空
+  const { data: deletePlans, reload: loadDeletePlans } = useApiQuery(
+    () => listDedupeDeletePlans().then((body) => body.items).catch(() => [] as DedupeDeletePlan[]),
+    [],
+    { silent: true, initialData: [] as DedupeDeletePlan[] },
+  )
+
+  // 目录树批次：首次取到且还没选时默认选第一个上传批次（出错弹固定文字）
+  const { data: imports } = useApiQuery(
+    () => api.get<ImportListResponse>('/imports/data?limit=100')
+      .then((body) => {
+        setSelectedImportId((current) => current ?? body.items.find((item) => item.source_type === 'file_upload')?.id ?? body.items[0]?.id)
+        return body.items
       })
-      setGroups(body.items)
-      setTotal(body.total)
-    } catch (error) {
-      message.error(error instanceof Error ? error.message : '加载候选组失败')
-    } finally {
-      setLoadingGroups(false)
-    }
-  }, [confidenceFilter, page, pageSize, statusFilter])
+      .catch(failWith('加载目录树批次失败')),
+    [],
+    { silent: true, initialData: [] as TreeImport[] },
+  )
 
-  const loadDeletePlans = useCallback(async () => {
-    try {
-      const body = await listDedupeDeletePlans()
-      setDeletePlans(body.items)
-    } catch {
-      setDeletePlans([])
-    }
-  }, [])
-
-  const loadGroupDetail = useCallback(async (groupId: number) => {
-    setLoadingDetail(true)
-    try {
-      const detail = await getDedupeGroup(groupId)
+  const { run: loadGroupDetail, loading: loadingDetail } = useApiAction(getDedupeGroup, {
+    onSuccess: (detail) => {
       setSelectedGroup(detail.group)
       setCandidates(detail.candidates)
       setReviewNote(detail.group.review_note ?? '')
@@ -201,37 +216,8 @@ export default function FileDedupePage() {
           item.user_action !== 'undecided' ? item.user_action : item.suggested_action,
         ]),
       ))
-    } catch (error) {
-      message.error(error instanceof Error ? error.message : '加载候选详情失败')
-    } finally {
-      setLoadingDetail(false)
-    }
-  }, [])
-
-  useEffect(() => {
-    let cancelled = false
-    api.get<ImportListResponse>('/imports/data?limit=100')
-      .then((body) => {
-        if (cancelled) return
-        setImports(body.items)
-        setSelectedImportId((current) => current ?? body.items.find((item) => item.source_type === 'file_upload')?.id ?? body.items[0]?.id)
-      })
-      .catch(() => message.error('加载目录树批次失败'))
-    const timer = window.setTimeout(() => {
-      if (!cancelled) void loadDeletePlans()
-    }, 0)
-    return () => {
-      cancelled = true
-      window.clearTimeout(timer)
-    }
-  }, [loadDeletePlans])
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      void loadGroups()
-    }, 0)
-    return () => window.clearTimeout(timer)
-  }, [loadGroups])
+    },
+  })
 
   useEffect(() => {
     const unsubscribers: Array<() => void> = []
@@ -266,6 +252,12 @@ export default function FileDedupePage() {
     }
   }, [loadDeletePlans, loadGroupDetail, loadGroups, selectedGroup])
 
+  const scanAction = useApiAction(startDedupeScanJob)
+  const reviewAction = useApiAction(reviewDedupeGroup, { silent: true })
+  const confirmStartAction = useApiAction(startDedupeConfirmJob)
+  const createPlanAction = useApiAction(createDedupeDeletePlan)
+  const deleteStartAction = useApiAction(startDedupeDeleteJob)
+
   async function handleScan(values: {
     scope_path_prefix?: string
     included_extensions?: string
@@ -278,44 +270,44 @@ export default function FileDedupePage() {
       message.warning('请先选择目录树批次')
       return
     }
-    try {
-      const response = await startDedupeScanJob({
-        tree_import_id: selectedImportId,
-        scope_path_prefix: values.scope_path_prefix?.trim() || null,
-        included_extensions: parseExtensions(values.included_extensions),
-        candidate_threshold: values.candidate_threshold ?? 0.82,
-        high_confidence_threshold: values.high_confidence_threshold ?? 0.92,
-        noise_words: parseLines(values.noise_words),
-        regex_patterns: parseLines(values.regex_patterns),
-      })
-      setScanJob(emptyFrame(response.job_id, 'scan'))
-      subscribeDedupeJob(response.job_id, (frame) => {
-        if (!('job_id' in frame)) {
-          message.error(`SSE 错误：${frame.error}`)
-          return
-        }
-        setScanJob(frame)
-      }, (finalFrame) => {
-        if (finalFrame.error) message.error(`扫描失败：${finalFrame.error}`)
-        else message.success('本地扫描完成')
-        void loadGroups()
-      })
-    } catch (error) {
-      message.error(error instanceof Error ? error.message : '扫描启动失败')
-    }
+    const result = await scanAction.run({
+      tree_import_id: selectedImportId,
+      scope_path_prefix: values.scope_path_prefix?.trim() || null,
+      included_extensions: parseExtensions(values.included_extensions),
+      candidate_threshold: values.candidate_threshold ?? 0.82,
+      high_confidence_threshold: values.high_confidence_threshold ?? 0.92,
+      noise_words: parseLines(values.noise_words),
+      regex_patterns: parseLines(values.regex_patterns),
+    })
+    if (!result.ok) return
+    const response = result.data
+    setScanJob(emptyFrame(response.job_id, 'scan'))
+    subscribeDedupeJob(response.job_id, (frame) => {
+      if (!('job_id' in frame)) {
+        message.error(`SSE 错误：${frame.error}`)
+        return
+      }
+      setScanJob(frame)
+    }, (finalFrame) => {
+      if (finalFrame.error) message.error(`扫描失败：${finalFrame.error}`)
+      else message.success('本地扫描完成')
+      void loadGroups()
+    })
   }
 
-  async function saveReview() {
-    if (!selectedGroup) return false
-    await reviewDedupeGroup(selectedGroup.id, {
+  // 保存审批；失败时不在这里提示，由调用方决定（单独点「保存审批」时原来就不提示）
+  async function saveReview(): Promise<{ ok: boolean; error?: Error }> {
+    if (!selectedGroup) return { ok: false }
+    const result = await reviewAction.run(selectedGroup.id, {
       keep_candidate_ids: selectedKeepIds,
       delete_candidate_ids: selectedDeleteIds,
       note: reviewNote || null,
     })
+    if (!result.ok) return result
     message.success('审批已保存')
     await loadGroupDetail(selectedGroup.id)
     await loadGroups()
-    return true
+    return { ok: true }
   }
 
   async function handleConfirmRemote() {
@@ -324,22 +316,23 @@ export default function FileDedupePage() {
       message.warning('请先选择保留或删除项')
       return
     }
-    try {
-      const saved = await saveReview()
-      if (!saved) return
-      const response = await startDedupeConfirmJob({ candidate_ids: reviewableIds })
-      setConfirmJob(emptyFrame(response.job_id, 'confirm', reviewableIds.length))
-      subscribeDedupeJob(response.job_id, (frame) => {
-        if ('job_id' in frame) setConfirmJob(frame)
-      }, (finalFrame) => {
-        if (finalFrame.error) message.error(`远端确认失败：${finalFrame.error}`)
-        else message.success('远端确认完成')
-        void loadGroupDetail(selectedGroup.id)
-        void loadGroups()
-      })
-    } catch (error) {
-      message.error(error instanceof Error ? error.message : '远端确认启动失败')
+    const saved = await saveReview()
+    if (!saved.ok) {
+      if (saved.error) showError(saved.error)
+      return
     }
+    const result = await confirmStartAction.run({ candidate_ids: reviewableIds })
+    if (!result.ok) return
+    const response = result.data
+    setConfirmJob(emptyFrame(response.job_id, 'confirm', reviewableIds.length))
+    subscribeDedupeJob(response.job_id, (frame) => {
+      if ('job_id' in frame) setConfirmJob(frame)
+    }, (finalFrame) => {
+      if (finalFrame.error) message.error(`远端确认失败：${finalFrame.error}`)
+      else message.success('远端确认完成')
+      void loadGroupDetail(selectedGroup.id)
+      void loadGroups()
+    })
   }
 
   async function handleCreatePlan() {
@@ -348,36 +341,34 @@ export default function FileDedupePage() {
       message.warning('请先标记待删除项')
       return
     }
-    try {
-      const saved = await saveReview()
-      if (!saved) return
-      const response = await createDedupeDeletePlan({
-        name: `去重删除计划 #${selectedGroup.id}`,
-        candidate_ids: selectedDeleteIds,
-        rate_limit_seconds: 2,
-      })
-      message.success(`删除计划已创建：#${response.plan_id}`)
-      await loadDeletePlans()
-      await loadGroups()
-    } catch (error) {
-      message.error(error instanceof Error ? error.message : '创建删除计划失败')
+    const saved = await saveReview()
+    if (!saved.ok) {
+      if (saved.error) showError(saved.error)
+      return
     }
+    const result = await createPlanAction.run({
+      name: `去重删除计划 #${selectedGroup.id}`,
+      candidate_ids: selectedDeleteIds,
+      rate_limit_seconds: 2,
+    })
+    if (!result.ok) return
+    message.success(`删除计划已创建：#${result.data.plan_id}`)
+    await loadDeletePlans()
+    await loadGroups()
   }
 
   async function handleExecutePlan(planId: number) {
-    try {
-      const response = await startDedupeDeleteJob(planId, { confirm: true })
-      setDeleteJob(emptyFrame(response.job_id, 'delete'))
-      subscribeDedupeJob(response.job_id, (frame) => {
-        if ('job_id' in frame) setDeleteJob(frame)
-      }, (finalFrame) => {
-        if (finalFrame.error) message.error(`删除计划执行失败：${finalFrame.error}`)
-        else message.success('删除计划执行完成')
-        void loadDeletePlans()
-      })
-    } catch (error) {
-      message.error(error instanceof Error ? error.message : '删除计划启动失败')
-    }
+    const result = await deleteStartAction.run(planId, { confirm: true })
+    if (!result.ok) return
+    const response = result.data
+    setDeleteJob(emptyFrame(response.job_id, 'delete'))
+    subscribeDedupeJob(response.job_id, (frame) => {
+      if ('job_id' in frame) setDeleteJob(frame)
+    }, (finalFrame) => {
+      if (finalFrame.error) message.error(`删除计划执行失败：${finalFrame.error}`)
+      else message.success('删除计划执行完成')
+      void loadDeletePlans()
+    })
   }
 
   const groupColumns: ColumnsType<DedupeGroup> = [

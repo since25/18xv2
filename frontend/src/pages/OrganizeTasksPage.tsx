@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useState } from 'react'
 import {
   Table, Select, Button, Tag, Space, Typography, Card, message,
   Collapse, Modal, Form, Input, Popconfirm, Switch, Alert, Radio,
@@ -19,35 +19,29 @@ import DataToolbar from '@/layout/DataToolbar'
 import StatusTag from '@/components/StatusTag'
 import BytesText from '@/components/BytesText'
 import TimeText from '@/components/TimeText'
+import { useApiAction } from '@/hooks/useApiAction'
+import { useApiQuery } from '@/hooks/useApiQuery'
 
 const { Text } = Typography
 
 export default function OrganizeTasksPage() {
-  const [imports, setImports]           = useState<TreeImport[]>([])
   const [importId, setImportId]         = useState<number | null>(null)
   const [statusFilter, setStatusFilter] = useState<string | null>(null)
-  const [tasks, setTasks]               = useState<OrganizeTask[]>([])
-  const [loading, setLoading]           = useState(false)
 
   // 重复目标冲突
   const [dupConflicts, setDupConflicts] = useState<DupConflictListResponse | null>(null)
-  const [dupLoading, setDupLoading]     = useState(false)
   // 第一层：节点详情 { taskId: NodeDetailItem }
   const [nodeDetails, setNodeDetails]   = useState<Record<number, NodeDetailItem>>({})
   const [nodeDetailsLoading, setNodeDetailsLoading] = useState<Record<number, boolean>>({})
   // 第二层：115 文件信息 { cid: FileInfoItem }
   const [fileInfo, setFileInfo]         = useState<Record<string, FileInfoItem>>({})
-  const [fileInfoLoading, setFileInfoLoading] = useState(false)
   // 重复冲突裁决：{ [target_path]: { keepId, deleteFrom115 } }
   const [dupSelections, setDupSelections] = useState<Record<string, { keepId: number; deleteFrom115: boolean }>>({})
-  const [dupSubmitting, setDupSubmitting] = useState(false)
 
   // 歧义冲突内联
   const [ambigConflicts, setAmbigConflicts] = useState<AmbiguousConflictListResponse | null>(null)
-  const [ambigLoading, setAmbigLoading]     = useState(false)
   // 用户裁决：{ [source_path]: keyword_entry_id }
   const [ambigSelections, setAmbigSelections] = useState<Record<string, number>>({})
-  const [ambigSubmitting, setAmbigSubmitting] = useState(false)
 
   // 手动生成任务
   const [manualKwId, setManualKwId]     = useState('')
@@ -60,213 +54,242 @@ export default function OrganizeTasksPage() {
   const [editTask, setEditTask]         = useState<OrganizeTask | null>(null)
   const [editForm]                      = Form.useForm()
 
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      api.get<ImportListResponse>('/imports/data?limit=100')
-        .then((d) => setImports(d.items ?? []))
-        .catch(() => {})
-    }, 0)
+  // 批次列表：出错时静默
+  const { data: imports } = useApiQuery(
+    () => api.get<ImportListResponse>('/imports/data?limit=100').then((d) => d.items ?? []),
+    [],
+    { silent: true, initialData: [] as TreeImport[] },
+  )
 
-    return () => window.clearTimeout(timer)
-  }, [])
-
-  const loadTasks = useCallback(async () => {
-    if (!importId) return
-    setLoading(true)
-    try {
+  // 任务列表：选定批次后按批次和状态自动加载；未选批次时不请求
+  const tasksQuery = useApiQuery(
+    () => {
       const params = new URLSearchParams({ import_id: String(importId) })
       if (statusFilter) params.set('status', statusFilter)
-      const data = await api.get<OrganizeTask[]>(`/organize-tasks?${params}`)
-      setTasks(data)
-    } catch (e: unknown) {
-      message.error((e as Error).message)
-    } finally {
-      setLoading(false)
-    }
-  }, [importId, statusFilter])
+      return api.get<OrganizeTask[]>(`/organize-tasks?${params}`)
+    },
+    [importId, statusFilter],
+    { enabled: !!importId, initialData: [] as OrganizeTask[] },
+  )
+  const { data: tasks, reload: loadTasks } = tasksQuery
 
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      void loadTasks()
-    }, 0)
-
-    return () => window.clearTimeout(timer)
-  }, [loadTasks])
+  const rebuildAction = useApiAction(
+    (id: number) => api.post<TaskBatchResponse>('/organize-tasks/generate-from-import', {
+      import_id: id, replace_existing: true,
+    }),
+    {
+      successMessage: (res) => `重建完成：新建 ${res.created_count} 条，跳过歧义 ${res.skipped_ambiguous_count} 条`,
+      onSuccess: () => {
+        setSelectedIds([])
+        void loadTasks()
+      },
+    },
+  )
+  // 列表加载和重建任务共用一个加载状态（与原来一致）
+  const loading = tasksQuery.loading || rebuildAction.loading
 
   const rebuildTasks = async () => {
     if (!importId) return
-    setLoading(true)
-    try {
-      const res = await api.post<TaskBatchResponse>('/organize-tasks/generate-from-import', {
-        import_id: importId, replace_existing: true,
-      })
-      message.success(`重建完成：新建 ${res.created_count} 条，跳过歧义 ${res.skipped_ambiguous_count} 条`)
-      setSelectedIds([])
-      loadTasks()
-    } catch (e: unknown) {
-      message.error((e as Error).message)
-    } finally {
-      setLoading(false)
-    }
+    await rebuildAction.run(importId)
   }
+
+  const keywordGenerateAction = useApiAction(
+    (payload: { import_id: number; keyword_entry_id: number; target_root: string; replace_existing: boolean }) =>
+      api.post<TaskBatchResponse>('/organize-tasks/generate-from-keyword', payload),
+    {
+      successMessage: (res) => `按关键词生成完成：新建 ${res.created_count} 条`,
+      onSuccess: () => { void loadTasks() },
+    },
+  )
 
   const generateFromKeyword = async () => {
     if (!importId) { message.warning('请先选择批次'); return }
     const kwId = parseInt(manualKwId)
     if (!kwId) { message.warning('请输入关键词 ID'); return }
     if (!manualTarget.trim()) { message.warning('请输入目标根目录'); return }
-    try {
-      const res = await api.post<TaskBatchResponse>('/organize-tasks/generate-from-keyword', {
-        import_id: importId,
-        keyword_entry_id: kwId,
-        target_root: manualTarget.trim(),
-        replace_existing: true,
-      })
-      message.success(`按关键词生成完成：新建 ${res.created_count} 条`)
-      loadTasks()
-    } catch (e: unknown) {
-      message.error((e as Error).message)
-    }
+    await keywordGenerateAction.run({
+      import_id: importId,
+      keyword_entry_id: kwId,
+      target_root: manualTarget.trim(),
+      replace_existing: true,
+    })
   }
 
   // ── 歧义冲突内联 ─────────────────────────────────────────────
 
+  // 点击才加载，结果放在页面自己的状态里
+  const ambigAction = useApiAction(
+    (id: number) => api.get<AmbiguousConflictListResponse>(`/organize-tasks/ambiguous-conflicts?import_id=${id}`),
+    {
+      onSuccess: (res) => {
+        setAmbigConflicts(res)
+        // 默认预选每条路径的第一个关键词
+        const defaults: Record<string, number> = {}
+        for (const item of res.items) {
+          if (item.keyword_options.length > 0) defaults[item.source_path] = item.keyword_options[0].id
+        }
+        setAmbigSelections(defaults)
+      },
+    },
+  )
+  const ambigLoading = ambigAction.loading
+
   const loadAmbigConflicts = async () => {
     if (!importId) return
-    setAmbigLoading(true)
-    try {
-      const res = await api.get<AmbiguousConflictListResponse>(`/organize-tasks/ambiguous-conflicts?import_id=${importId}`)
-      setAmbigConflicts(res)
-      // 默认预选每条路径的第一个关键词
-      const defaults: Record<string, number> = {}
-      for (const item of res.items) {
-        if (item.keyword_options.length > 0) defaults[item.source_path] = item.keyword_options[0].id
-      }
-      setAmbigSelections(defaults)
-    } catch (e: unknown) { message.error((e as Error).message) }
-    finally { setAmbigLoading(false) }
+    await ambigAction.run(importId)
   }
+
+  const ambigResolveAction = useApiAction(
+    (payload: { import_id: number; resolutions: Array<{ source_path: string; keyword_entry_id: number }>; replace_existing: boolean }) =>
+      api.post<AmbiguousResolveResponse>('/organize-tasks/ambiguous-conflicts/resolve', payload),
+    {
+      successMessage: (res) => `歧义裁决完成：新建 ${res.created_count} 条，替换 ${res.replaced_count} 条`,
+      onSuccess: () => {
+        void loadTasks()
+        setAmbigConflicts(null)
+      },
+    },
+  )
+  const ambigSubmitting = ambigResolveAction.loading
 
   const submitAmbigResolutions = async () => {
     if (!importId || !ambigConflicts) return
-    setAmbigSubmitting(true)
-    try {
-      const resolutions = ambigConflicts.items
-        .filter(item => ambigSelections[item.source_path] != null)
-        .map(item => ({ source_path: item.source_path, keyword_entry_id: ambigSelections[item.source_path] }))
-      const res = await api.post<AmbiguousResolveResponse>('/organize-tasks/ambiguous-conflicts/resolve', {
-        import_id: importId, resolutions, replace_existing: true,
-      })
-      message.success(`歧义裁决完成：新建 ${res.created_count} 条，替换 ${res.replaced_count} 条`)
-      loadTasks()
-      setAmbigConflicts(null)
-    } catch (e: unknown) { message.error((e as Error).message) }
-    finally { setAmbigSubmitting(false) }
+    const resolutions = ambigConflicts.items
+      .filter(item => ambigSelections[item.source_path] != null)
+      .map(item => ({ source_path: item.source_path, keyword_entry_id: ambigSelections[item.source_path] }))
+    await ambigResolveAction.run({ import_id: importId, resolutions, replace_existing: true })
   }
 
   // ── 重复目标冲突三层懒加载 ─────────────────────────────────────
 
+  const dupAction = useApiAction(
+    (id: number) => api.get<DupConflictListResponse>(`/organize-tasks/duplicate-conflicts?import_id=${id}`),
+    { onSuccess: (res) => setDupConflicts(res) },
+  )
+  const dupLoading = dupAction.loading
+
   const loadDupConflicts = async () => {
     if (!importId) return
-    setDupLoading(true)
-    try {
-      const res = await api.get<DupConflictListResponse>(`/organize-tasks/duplicate-conflicts?import_id=${importId}`)
-      setDupConflicts(res)
-    } catch (e: unknown) {
-      message.error((e as Error).message)
-    } finally {
-      setDupLoading(false)
-    }
+    await dupAction.run(importId)
   }
+
+  const nodeDetailsAction = useApiAction(
+    (taskIds: number[]) => api.post<NodeDetailResponse>('/organize-tasks/node-details', { task_ids: taskIds }),
+  )
 
   // 第一层：按组懒加载节点详情，跳过已缓存的
   const loadNodeDetails = async (taskIds: number[]) => {
     const missing = taskIds.filter(id => !(id in nodeDetails))
     if (!missing.length) return
     setNodeDetailsLoading(prev => Object.fromEntries([...Object.entries(prev), ...missing.map(id => [id, true])]))
-    try {
-      const res = await api.post<NodeDetailResponse>('/organize-tasks/node-details', { task_ids: missing })
+    const result = await nodeDetailsAction.run(missing)
+    if (result.ok) {
       setNodeDetails(prev => {
         const next = { ...prev }
-        for (const [k, v] of Object.entries(res.details)) next[Number(k)] = v
+        for (const [k, v] of Object.entries(result.data.details)) next[Number(k)] = v
         return next
       })
-    } catch (e: unknown) { message.error((e as Error).message) }
-    finally {
-      setNodeDetailsLoading(prev => Object.fromEntries(Object.keys(prev).map(k => [k, false])))
     }
+    setNodeDetailsLoading(prev => Object.fromEntries(Object.keys(prev).map(k => [k, false])))
   }
+
+  const fileInfoAction = useApiAction(
+    (cids: string[]) => api.post<FileInfoResponse>('/115/file-info', { cids }),
+    { onSuccess: (res) => setFileInfo(prev => ({ ...prev, ...res.results })) },
+  )
+  const fileInfoLoading = fileInfoAction.loading
 
   // 第二层：按 cid 懒加载 115 文件信息，跳过已缓存的
   const loadFileInfo = async (cids: string[]) => {
     const missing = cids.filter(c => !(c in fileInfo))
     if (!missing.length) return
-    setFileInfoLoading(true)
-    try {
-      const res = await api.post<FileInfoResponse>('/115/file-info', { cids: missing })
-      setFileInfo(prev => ({ ...prev, ...res.results }))
-    } catch (e: unknown) { message.error((e as Error).message) }
-    finally { setFileInfoLoading(false) }
+    await fileInfoAction.run(missing)
   }
+
+  const dupResolveAction = useApiAction(
+    (resolutions: Array<{ target_path: string; keep_task_id: number; skip_task_ids: number[]; delete_from_115: boolean }>) =>
+      api.post<DuplicateResolveResponse>('/organize-tasks/resolve-duplicate-conflicts', { resolutions }),
+    {
+      successMessage: (res) => {
+        const errMsg = res.errors.length ? `，${res.errors.length} 个错误: ${res.errors.slice(0, 2).join(' | ')}` : ''
+        return `处理完成：${res.resolved_count} 组冲突已解决，删除 ${res.deleted_from_115_count} 个${errMsg}`
+      },
+      onSuccess: () => {
+        setDupConflicts(null)
+        setDupSelections({})
+        void loadTasks()
+      },
+    },
+  )
+  const dupSubmitting = dupResolveAction.loading
 
   const submitDupResolutions = async () => {
     if (!dupConflicts) return
-    setDupSubmitting(true)
-    try {
-      const resolutions = dupConflicts.groups
-        .filter(g => dupSelections[g.target_path]?.keepId != null)
-        .map(g => {
-          const { keepId, deleteFrom115 } = dupSelections[g.target_path]
-          return {
-            target_path: g.target_path,
-            keep_task_id: keepId,
-            skip_task_ids: g.tasks.filter(t => t.id !== keepId).map(t => t.id),
-            delete_from_115: deleteFrom115,
-          }
-        })
-      if (!resolutions.length) { message.warning('请先选择要保留的任务'); return }
-      const res = await api.post<DuplicateResolveResponse>('/organize-tasks/resolve-duplicate-conflicts', { resolutions })
-      const errMsg = res.errors.length ? `，${res.errors.length} 个错误: ${res.errors.slice(0, 2).join(' | ')}` : ''
-      message.success(`处理完成：${res.resolved_count} 组冲突已解决，删除 ${res.deleted_from_115_count} 个${errMsg}`)
-      setDupConflicts(null)
-      setDupSelections({})
-      loadTasks()
-    } catch (e: unknown) { message.error((e as Error).message) }
-    finally { setDupSubmitting(false) }
+    const resolutions = dupConflicts.groups
+      .filter(g => dupSelections[g.target_path]?.keepId != null)
+      .map(g => {
+        const { keepId, deleteFrom115 } = dupSelections[g.target_path]
+        return {
+          target_path: g.target_path,
+          keep_task_id: keepId,
+          skip_task_ids: g.tasks.filter(t => t.id !== keepId).map(t => t.id),
+          delete_from_115: deleteFrom115,
+        }
+      })
+    if (!resolutions.length) { message.warning('请先选择要保留的任务'); return }
+    await dupResolveAction.run(resolutions)
   }
 
   // ── 任务列表操作 ──────────────────────────────────────────────
 
-  const skipTask = async (id: number) => {
-    try {
-      await api.patch(`/organize-tasks/${id}`, { status: 'skipped' })
-      message.success(`任务 #${id} 已跳过`)
-      loadTasks()
-      if (dupConflicts) loadDupConflicts()
-    } catch (e: unknown) { message.error((e as Error).message) }
+  // 改动任务后刷新列表；已打开重复冲突时一并刷新
+  const reloadAfterTaskChange = () => {
+    void loadTasks()
+    if (dupConflicts) void loadDupConflicts()
   }
 
-  const saveTaskTarget = async (id: number, target_path: string) => {
-    try {
-      await api.patch(`/organize-tasks/${id}`, { target_path })
-      message.success('目标路径已更新')
-      setEditTask(null)
-      loadTasks()
-      if (dupConflicts) loadDupConflicts()
-    } catch (e: unknown) { message.error((e as Error).message) }
+  const skipAction = useApiAction(
+    (id: number) => api.patch(`/organize-tasks/${id}`, { status: 'skipped' }),
+    {
+      successMessage: (_data, id) => `任务 #${id} 已跳过`,
+      onSuccess: reloadAfterTaskChange,
+    },
+  )
+
+  const skipTask = async (id: number) => {
+    await skipAction.run(id)
   }
+
+  const saveTargetAction = useApiAction(
+    (id: number, target_path: string) => api.patch(`/organize-tasks/${id}`, { target_path }),
+    {
+      successMessage: '目标路径已更新',
+      onSuccess: () => {
+        setEditTask(null)
+        reloadAfterTaskChange()
+      },
+    },
+  )
+
+  const saveTaskTarget = async (id: number, target_path: string) => {
+    await saveTargetAction.run(id, target_path)
+  }
+
+  const generatePlanAction = useApiAction(
+    (id: number, taskIds: number[]) => api.post<PlanBatchResponse>('/plans/generate-from-tasks', {
+      import_id: id,
+      task_ids: taskIds,
+      dry_run: true,
+    }),
+    {
+      successMessage: (res) => `生成 ${res.total} 个计划，首个 ID: #${res.plans[0]?.id}，请到「整理计划」页执行`,
+      onSuccess: () => setSelectedIds([]),
+    },
+  )
 
   const generatePlan = async () => {
     if (!importId || !selectedIds.length) { message.warning('请先勾选任务'); return }
-    try {
-      const res = await api.post<PlanBatchResponse>('/plans/generate-from-tasks', {
-        import_id: importId,
-        task_ids: [...selectedIds].sort((a, b) => a - b),
-        dry_run: true,
-      })
-      message.success(`生成 ${res.total} 个计划，首个 ID: #${res.plans[0]?.id}，请到「整理计划」页执行`)
-      setSelectedIds([])
-    } catch (e: unknown) { message.error((e as Error).message) }
+    await generatePlanAction.run(importId, [...selectedIds].sort((a, b) => a - b))
   }
 
   const taskCols: ColumnsType<OrganizeTask> = [

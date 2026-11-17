@@ -7,33 +7,22 @@ import PageScaffold from '@/layout/PageScaffold'
 import TimeText from '@/components/TimeText'
 import StatusTag from '@/components/StatusTag'
 import DataToolbar from '@/layout/DataToolbar'
+import { useApiAction } from '@/hooks/useApiAction'
+import { useApiQuery } from '@/hooks/useApiQuery'
 
 const { Text } = Typography
 
 export default function OpenAuthPage() {
-  const [records, setRecords] = useState<OpenAuthRecord[]>([])
   const [session, setSession] = useState<OpenAuthSession | null>(null)
-  const [creatingSession, setCreatingSession] = useState(false)
-  const [loadingRecords, setLoadingRecords] = useState(false)
 
-  const loadRecords = async () => {
-    setLoadingRecords(true)
-    try {
-      const response = await api.get<OpenAuthRecordsResponse>('/tools/open-auth/records')
-      setRecords(response.records ?? [])
-    } catch (error: unknown) {
-      message.error((error as Error).message)
-    } finally {
-      setLoadingRecords(false)
-    }
-  }
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      void loadRecords()
-    }, 0)
-    return () => window.clearTimeout(timer)
-  }, [])
+  const recordsQuery = useApiQuery(
+    () => api.get<OpenAuthRecordsResponse>('/tools/open-auth/records').then((response) => response.records ?? []),
+    [],
+    { initialData: [] as OpenAuthRecord[] },
+  )
+  const records = recordsQuery.data
+  const loadingRecords = recordsQuery.loading
+  const loadRecords = recordsQuery.reload
 
   const isTerminal = useMemo(() => {
     if (!session) {
@@ -67,19 +56,18 @@ export default function OpenAuthPage() {
     return () => {
       window.clearInterval(timer)
     }
-  }, [isPolling, session])
+  }, [isPolling, loadRecords, session])
 
-  const createSession = async () => {
-    setCreatingSession(true)
-    try {
-      const response = await api.post<OpenAuthSession>('/tools/open-auth/sessions')
+  const createAction = useApiAction(() => api.post<OpenAuthSession>('/tools/open-auth/sessions'), {
+    onSuccess: (response) => {
       setSession(response)
       message.success('Open API 扫码二维码已生成')
-    } catch (error: unknown) {
-      message.error((error as Error).message)
-    } finally {
-      setCreatingSession(false)
-    }
+    },
+  })
+  const creatingSession = createAction.loading
+
+  const createSession = async () => {
+    await createAction.run()
   }
 
   return (

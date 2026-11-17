@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { Timeline, Tag, Select, Button, Typography, Card, message, Space, Spin, theme } from 'antd'
+import { useState } from 'react'
+import { Timeline, Tag, Select, Button, Typography, Card, Space, Spin, theme } from 'antd'
 import { CheckCircleOutlined, CloseCircleOutlined, MinusCircleOutlined } from '@ant-design/icons'
 import { api } from '@/api/client'
 import type { JobDetail, ExecutionLog, PlanSummaryPage, PlanSummary } from '@/api/types'
@@ -7,32 +7,31 @@ import PageScaffold from '@/layout/PageScaffold'
 import DataToolbar from '@/layout/DataToolbar'
 import StatusTag from '@/components/StatusTag'
 import { formatShortDateTime } from '@/utils/format'
+import { useApiAction } from '@/hooks/useApiAction'
+import { useApiQuery } from '@/hooks/useApiQuery'
 
 const { Text } = Typography
 
 export default function ExecutorPage() {
   const { token } = theme.useToken()
-  const [plans, setPlans] = useState<PlanSummary[]>([])
   const [planId, setPlanId] = useState<number | null>(null)
   const [job, setJob] = useState<JobDetail | null>(null)
-  const [loading, setLoading] = useState(false)
 
-  useEffect(() => {
-    api.get<PlanSummaryPage>('/plans/data?limit=100')
-      .then((d: PlanSummaryPage) => setPlans(d.items ?? []))
-      .catch(() => {})
-  }, [])
+  // 计划列表：出错时静默
+  const { data: plans } = useApiQuery(
+    () => api.get<PlanSummaryPage>('/plans/data?limit=100').then((d: PlanSummaryPage) => d.items ?? []),
+    [],
+    { silent: true, initialData: [] as PlanSummary[] },
+  )
+
+  // 按需读取某次执行的日志（选择计划或点刷新时触发），结果写入 job
+  const jobLoader = useApiAction((jid: number) => api.get<JobDetail>(`/jobs/${jid}`), {
+    onSuccess: (data) => setJob(data),
+  })
+  const loading = jobLoader.loading
 
   const loadJob = async (jid: number) => {
-    setLoading(true)
-    try {
-      const data = await api.get<JobDetail>(`/jobs/${jid}`)
-      setJob(data)
-    } catch (e: unknown) {
-      message.error((e as Error).message)
-    } finally {
-      setLoading(false)
-    }
+    await jobLoader.run(jid)
   }
 
   const handleSelectPlan = async (pid: number) => {

@@ -78,6 +78,36 @@ npm install
 npm run dev
 ```
 
+### 3.4 前端页面取数约定
+
+新页面不再手写“加载中 / 出错提示 / 刷新”，统一用 `frontend/src/hooks/` 下的两个工具：
+
+- `useApiQuery`：读取。挂载和依赖变化时自动请求，只采用最后一次请求的结果，组件卸载后不再更新状态；返回 `data`、`loading`、`error`、`reload()`、`setData()`。
+- `useApiAction`：操作（提交、删除等）。`run(...)` 永不抛异常，返回 `{ ok: true, data }` 或 `{ ok: false, error }`；执行期间 `loading` 为真。
+
+```tsx
+// 列表读取：筛选或页码变化时自动重新加载
+const { data, loading, reload } = useApiQuery(
+  () => api.get<ItemPage>(`/items?page=${page}`).then((d) => ({ items: d.items ?? [], total: d.total })),
+  [page],
+  { initialData: { items: [] as Item[], total: 0 } },
+)
+
+// 操作：成功提示后刷新列表
+const removeAction = useApiAction((id: number) => api.delete(`/items/${id}`), {
+  successMessage: '已删除',
+  onSuccess: () => { void reload() },
+})
+```
+
+约定：
+
+- 出错默认用 `message.error` 弹服务器返回的错误信息。原来就不提示的请求加 `silent: true`；读取失败要清空数据的，在取数函数里 `.catch(() => 空值)`。
+- 需要弹固定文字而不是服务器信息的，设 `silent: true`，在取数函数里 `.catch(failWith('固定文字'))`（写法见 `WhitelistBatchPage.tsx`）；按结果分支提示或有 409 等特殊分支的操作也设 `silent`，根据 `run` 的返回值自己提示。
+- 登录过期（401）由 `App.tsx` 全局处理：提示一次并回到登录页，登录后回到原页面。页面自己弹错误时要跳过 401，判断用 `(error as { status?: number }).status === 401`，不要用 `instanceof ApiError`。
+- 页面自带 `message.useMessage()` 的，操作设 `silent`，提示继续走页面的 `messageApi`。
+- 定时轮询和进度推送（SSE 订阅）保留在页面里，机制不变；其中的刷新调用 `reload()`（轮询可用 `reload({ silent: true })` 不切换加载状态），会自动使用最新的筛选条件。
+
 ---
 
 ## 四、配置与数据

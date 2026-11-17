@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import {
   Button,
   Card,
@@ -30,6 +30,8 @@ import DataToolbar from '@/layout/DataToolbar'
 import PageScaffold from '@/layout/PageScaffold'
 import StatusTag from '@/components/StatusTag'
 import { statusMeta } from '@/utils/statusText'
+import { useApiAction } from '@/hooks/useApiAction'
+import { useApiQuery } from '@/hooks/useApiQuery'
 import {
   batchApproveReviewIntakeItems,
   batchDeleteReviewIntakeItems,
@@ -131,6 +133,16 @@ function bucketLabel(bucket: ReviewBucket) {
   return '关键词'
 }
 
+// 三个列表和顶部统计放在同一份数据里，批量操作后可以就地改
+interface ReviewItemsData {
+  whitelist: ReviewIntakeItem[]
+  blacklist: ReviewIntakeItem[]
+  keyword: ReviewIntakeItem[]
+  summary: ReviewIntakeSummary | null
+}
+
+const EMPTY_ITEMS: ReviewItemsData = { whitelist: [], blacklist: [], keyword: [], summary: null }
+
 function errorMessage(error: unknown, fallback: string) {
   return error instanceof Error ? error.message : fallback
 }
@@ -143,10 +155,6 @@ export default function ReviewIntakePage() {
   const [activeBucket, setActiveBucket] = useState<ReviewBucket>('whitelist')
   const [status, setStatus] = useState<ReviewStatus | ''>('pending')
   const [search, setSearch] = useState('')
-  const [summary, setSummary] = useState<ReviewIntakeSummary | null>(null)
-  const [whitelistItems, setWhitelistItems] = useState<ReviewIntakeItem[]>([])
-  const [blacklistItems, setBlacklistItems] = useState<ReviewIntakeItem[]>([])
-  const [keywordItems, setKeywordItems] = useState<ReviewIntakeItem[]>([])
   const [keywordDrafts, setKeywordDrafts] = useState<Record<number, string>>({})
   const [selectedIds, setSelectedIds] = useState<number[]>([])
   const [failures, setFailures] = useState<Record<number, string>>({})
@@ -155,9 +163,54 @@ export default function ReviewIntakePage() {
   const [editingText, setEditingText] = useState('')
   const [ignorePickerOpen, setIgnorePickerOpen] = useState(false)
   const [ignorePicks, setIgnorePicks] = useState<string[]>([])
-  const [loading, setLoading] = useState(false)
-  const [batching, setBatching] = useState(false)
-  const [submitting, setSubmitting] = useState(false)
+
+  // 出错提示走本页的 messageApi；401 交给全局登录过期处理
+  function showError(error: unknown, fallback: string) {
+    if ((error as { status?: number } | null)?.status === 401) return
+    void messageApi.error(errorMessage(error, fallback))
+  }
+
+  function seedDrafts(items: ReviewIntakeItem[]) {
+    setKeywordDrafts((current) => {
+      const next = { ...current }
+      for (const item of items) {
+        if (next[item.id] === undefined) {
+          next[item.id] = defaultKeyword(item)
+        }
+      }
+      return next
+    })
+  }
+
+  // 三个列表和顶部统计一起加载；状态筛选或搜索词变化时自动重新加载
+  const itemsQuery = useApiQuery(
+    () => Promise.all([
+      listReviewIntakeItems({ bucket: 'whitelist', status, search: search || undefined, page_size: 200 }),
+      listReviewIntakeItems({ bucket: 'blacklist', status, search: search || undefined, page_size: 200 }),
+      listReviewIntakeItems({ bucket: 'keyword', status, search: search || undefined, page_size: 200 }),
+      getReviewIntakeSummary(),
+    ]).then(([white, black, keyword, nextSummary]): ReviewItemsData => {
+      setSelectedIds([])
+      setFailures({})
+      seedDrafts([...white.items, ...black.items, ...keyword.items])
+      return {
+        whitelist: white.items,
+        blacklist: black.items,
+        keyword: keyword.items,
+        summary: nextSummary,
+      }
+    }).catch((error: unknown) => {
+      showError(error, '加载待审核列表失败')
+      throw error
+    }),
+    [status, search],
+    { silent: true, initialData: EMPTY_ITEMS },
+  )
+  const { loading, reload: loadItems, setData: setItemsData } = itemsQuery
+  const whitelistItems = itemsQuery.data.whitelist
+  const blacklistItems = itemsQuery.data.blacklist
+  const keywordItems = itemsQuery.data.keyword
+  const summary = itemsQuery.data.summary
 
   const stats = useMemo(() => [
     { key: 'white-pending', label: '白待审', value: summary?.whitelist_pending ?? 0 },
@@ -195,75 +248,48 @@ export default function ReviewIntakePage() {
     return [...words]
   }, [activeItems, activeSelectedIds, hiddenWords])
 
-  function seedDrafts(items: ReviewIntakeItem[]) {
-    setKeywordDrafts((current) => {
-      const next = { ...current }
-      for (const item of items) {
-        if (next[item.id] === undefined) {
-          next[item.id] = defaultKeyword(item)
-        }
-      }
-      return next
-    })
-  }
-
-  async function loadItems(nextSearch = search) {
-    setLoading(true)
-    try {
-      const [white, black, keyword, nextSummary] = await Promise.all([
-        listReviewIntakeItems({ bucket: 'whitelist', status, search: nextSearch || undefined, page_size: 200 }),
-        listReviewIntakeItems({ bucket: 'blacklist', status, search: nextSearch || undefined, page_size: 200 }),
-        listReviewIntakeItems({ bucket: 'keyword', status, search: nextSearch || undefined, page_size: 200 }),
-        getReviewIntakeSummary(),
-      ])
-      setWhitelistItems(white.items)
-      setBlacklistItems(black.items)
-      setKeywordItems(keyword.items)
-      setSummary(nextSummary)
-      setSelectedIds([])
-      setFailures({})
-      seedDrafts([...white.items, ...black.items, ...keyword.items])
-    } catch (error) {
-      void messageApi.error(errorMessage(error, '加载待审核列表失败'))
-    } finally {
-      setLoading(false)
-    }
-  }
-
   // 批量成功后只刷新顶部统计，列表靠本地增删，避免整页重拉造成闪烁和跳位
-  async function refreshSummary() {
-    try {
-      setSummary(await getReviewIntakeSummary())
-    } catch {
-      // 统计刷新失败不影响主流程
-    }
+  // 统计刷新失败不影响主流程（静默）
+  const summaryAction = useApiAction(getReviewIntakeSummary, {
+    silent: true,
+    onSuccess: (nextSummary) => setItemsData((prev = EMPTY_ITEMS) => ({ ...prev, summary: nextSummary })),
+  })
+
+  function refreshSummary() {
+    return summaryAction.run()
   }
 
-  useEffect(() => {
-    void loadItems()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status])
+  // 搜索词没变时也要重新加载（与原来点搜索即重拉一致）
+  function handleSearch(value: string) {
+    if (value === search) {
+      void loadItems()
+      return
+    }
+    setSearch(value)
+  }
+
+  // 投递成功后等列表刷新完再结束按钮加载态
+  const createAction = useApiAction(createReviewIntakeItem, {
+    silent: true,
+    onSuccess: async (item) => {
+      void messageApi.success(`已加入${itemLabel(item)}待审`)
+      setRawPath('')
+      await loadItems()
+    },
+  })
+  const submitting = createAction.loading
 
   async function handleCreate() {
     if (!rawPath.trim()) {
       void messageApi.warning('请先粘贴路径')
       return
     }
-    setSubmitting(true)
-    try {
-      const item = await createReviewIntakeItem({
-        bucket,
-        raw_path: rawPath,
-        source: 'manual_web',
-      })
-      void messageApi.success(`已加入${itemLabel(item)}待审`)
-      setRawPath('')
-      await loadItems()
-    } catch (error) {
-      void messageApi.error(errorMessage(error, '投递失败'))
-    } finally {
-      setSubmitting(false)
-    }
+    const result = await createAction.run({
+      bucket,
+      raw_path: rawPath,
+      source: 'manual_web',
+    })
+    if (!result.ok) showError(result.error, '投递失败')
   }
 
   // 填词和勾选是同一个动作：有词就自动勾上，清空就自动取消
@@ -310,34 +336,42 @@ export default function ReviewIntakePage() {
     setEditingId(null)
   }
 
+  // 单个加词出错由调用方决定怎么提示（单个弹错误，批量只计数）
+  const ignoreWordAction = useApiAction(createIgnoreKeyword, { silent: true })
+
   async function handleIgnoreWord(word: string) {
-    try {
-      await createIgnoreKeyword(word)
-      // 候选的状态色是投递那一刻算好存下来的，重新拉列表不会让它变灰，
-      // 所以这里直接在本地把所有同名标签隐藏掉。
-      setHiddenWords((current) => [...current, normalizeWord(word)])
-      void messageApi.success(`已把「${word}」加入忽略库`)
-    } catch (error) {
-      void messageApi.error(errorMessage(error, '加入忽略库失败'))
+    const result = await ignoreWordAction.run(word)
+    if (!result.ok) {
+      showError(result.error, '加入忽略库失败')
+      return
     }
+    // 候选的状态色是投递那一刻算好存下来的，重新拉列表不会让它变灰，
+    // 所以这里直接在本地把所有同名标签隐藏掉。
+    setHiddenWords((current) => [...current, normalizeWord(word)])
+    void messageApi.success(`已把「${word}」加入忽略库`)
   }
+
+  // 批量加入忽略库：逐个提交，失败的只计数，结束后统一提示
+  const batchIgnoreAction = useApiAction(async (words: string[]) => {
+    let failed = 0
+    for (const word of words) {
+      const result = await ignoreWordAction.run(word)
+      if (result.ok) {
+        setHiddenWords((current) => [...current, normalizeWord(word)])
+      } else {
+        failed += 1
+      }
+    }
+    return failed
+  }, { silent: true })
 
   async function handleBatchIgnoreWords() {
     if (!ignorePicks.length) {
       void messageApi.warning('请先选择要忽略的词')
       return
     }
-    setBatching(true)
-    let failed = 0
-    for (const word of ignorePicks) {
-      try {
-        await createIgnoreKeyword(word)
-        setHiddenWords((current) => [...current, normalizeWord(word)])
-      } catch {
-        failed += 1
-      }
-    }
-    setBatching(false)
+    const result = await batchIgnoreAction.run(ignorePicks)
+    const failed = result.ok ? result.data : 0
     setIgnorePickerOpen(false)
     setIgnorePicks([])
     if (failed) {
@@ -374,8 +408,7 @@ export default function ReviewIntakePage() {
         .filter((item) => !removeIds.has(item.id))
         .map((item) => replacements.get(item.id) ?? item)
 
-    setWhitelistItems(apply)
-    setBlacklistItems(apply)
+    setItemsData((prev = EMPTY_ITEMS) => ({ ...prev, whitelist: apply(prev.whitelist), blacklist: apply(prev.blacklist) }))
     setSelectedIds((current) =>
       current.filter((id) => !removeIds.has(id) && !replacements.has(id)),
     )
@@ -397,43 +430,41 @@ export default function ReviewIntakePage() {
     }
   }
 
+  // 批量操作的出错提示文字各不相同，统一设为 silent 后自行提示
+  const approveAction = useApiAction(batchApproveReviewIntakeItems, { silent: true })
+  const dismissAction = useApiAction(batchDismissReviewIntakeItems, { silent: true })
+  const deleteAction = useApiAction(batchDeleteReviewIntakeItems, { silent: true })
+  const batching = approveAction.loading || dismissAction.loading || deleteAction.loading
+    || batchIgnoreAction.loading
+
   async function runBatchApprove(entries: Array<{ id: number; keyword: string }>) {
-    setBatching(true)
-    try {
-      const response = await batchApproveReviewIntakeItems(entries)
-      applyBatchResults(response.results)
-      reportBatch(response.succeeded, response.failed, '批准')
-    } catch (error) {
-      void messageApi.error(errorMessage(error, '批准失败'))
-    } finally {
-      setBatching(false)
+    const result = await approveAction.run(entries)
+    if (!result.ok) {
+      showError(result.error, '批准失败')
+      return
     }
+    applyBatchResults(result.data.results)
+    reportBatch(result.data.succeeded, result.data.failed, '批准')
   }
 
   async function runBatchDismiss(ids: number[]) {
-    setBatching(true)
-    try {
-      const response = await batchDismissReviewIntakeItems(ids)
-      applyBatchResults(response.results)
-      reportBatch(response.succeeded, response.failed, '忽略')
-    } catch (error) {
-      void messageApi.error(errorMessage(error, '忽略失败'))
-    } finally {
-      setBatching(false)
+    const result = await dismissAction.run(ids)
+    if (!result.ok) {
+      showError(result.error, '忽略失败')
+      return
     }
+    applyBatchResults(result.data.results)
+    reportBatch(result.data.succeeded, result.data.failed, '忽略')
   }
 
   async function runBatchDelete(ids: number[]) {
-    setBatching(true)
-    try {
-      const response = await batchDeleteReviewIntakeItems(ids)
-      applyBatchResults(response.results, true)
-      reportBatch(response.succeeded, response.failed, '删除')
-    } catch (error) {
-      void messageApi.error(errorMessage(error, '删除失败'))
-    } finally {
-      setBatching(false)
+    const result = await deleteAction.run(ids)
+    if (!result.ok) {
+      showError(result.error, '删除失败')
+      return
     }
+    applyBatchResults(result.data.results, true)
+    reportBatch(result.data.succeeded, result.data.failed, '删除')
   }
 
   async function handleApprove(item: ReviewIntakeItem) {
@@ -445,14 +476,16 @@ export default function ReviewIntakePage() {
     await runBatchApprove([{ id: item.id, keyword }])
   }
 
+  const restoreAction = useApiAction(restoreReviewIntakeItem, { silent: true })
+
   async function handleRestore(item: ReviewIntakeItem) {
-    try {
-      const restored = await restoreReviewIntakeItem(item.id)
-      applyBatchResults([{ id: item.id, ok: true, item: restored, error: null }])
-      void messageApi.success('已恢复为待审核')
-    } catch (error) {
-      void messageApi.error(errorMessage(error, '恢复失败'))
+    const result = await restoreAction.run(item.id)
+    if (!result.ok) {
+      showError(result.error, '恢复失败')
+      return
     }
+    applyBatchResults([{ id: item.id, ok: true, item: result.data, error: null }])
+    void messageApi.success('已恢复为待审核')
   }
 
   function handleBatchApprove() {
@@ -731,10 +764,7 @@ export default function ReviewIntakePage() {
                 allowClear
                 placeholder="搜索路径/关键词"
                 style={{ width: 260 }}
-                onSearch={(value) => {
-                  setSearch(value)
-                  void loadItems(value)
-                }}
+                onSearch={handleSearch}
               />
             </DataToolbar>
             <Input.TextArea

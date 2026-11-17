@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useState } from 'react'
 import {
   Alert,
   Button,
@@ -40,6 +40,8 @@ import TimeText from '@/components/TimeText'
 import PageScaffold from '@/layout/PageScaffold'
 import DataToolbar from '@/layout/DataToolbar'
 import StatusTag from '@/components/StatusTag'
+import { useApiAction } from '@/hooks/useApiAction'
+import { useApiQuery } from '@/hooks/useApiQuery'
 
 const { Text } = Typography
 
@@ -47,9 +49,7 @@ type KeywordListType = 'whitelist' | 'ignore' | 'blacklist'
 
 export default function KeywordExtractorPage() {
   const [searchParams] = useSearchParams()
-  const [imports, setImports] = useState<TreeImport[]>([])
   const [importId, setImportId] = useState<number | null>(null)
-  const [uploadingTree, setUploadingTree] = useState(false)
   const [manualKeywords, setManualKeywords] = useState('')
   const [manualLimit, setManualLimit] = useState(100)
   const [manualPath, setManualPath] = useState('')
@@ -59,99 +59,66 @@ export default function KeywordExtractorPage() {
   const [regexMinCount, setRegexMinCount] = useState(1)
   const [regexLimit, setRegexLimit] = useState(100)
   const [keywordFilter, setKeywordFilter] = useState('')
-  const [keywordsLoading, setKeywordsLoading] = useState(false)
-  const [previewLoading, setPreviewLoading] = useState(false)
-  const [libraryLoading, setLibraryLoading] = useState(false)
   const [savingListType, setSavingListType] = useState<KeywordListType | null>(null)
   const [summary, setSummary] = useState<ExtractedKeywordListResponse | null>(null)
   const [activeSource, setActiveSource] = useState<'manual' | 'regex' | 'manual_path_regex'>('manual')
   const [preview, setPreview] = useState<RegexExtractPreviewResponse | null>(null)
   const [selectedKeywords, setSelectedKeywords] = useState<Array<string | number>>([])
-  const [libraryEntries, setLibraryEntries] = useState<KeywordEntry[]>([])
-  const [similarLoading, setSimilarLoading] = useState(false)
-  const [similarSuggestions, setSimilarSuggestions] = useState<SimilarKeywordPreviewResponse | null>(null)
 
-  const loadImports = useCallback(async (preferredId?: number | null) => {
-    try {
-      const response = await api.get<ImportListResponse>('/imports/data?limit=100')
-      const items = response.items ?? []
-      const importIdFromQuery = Number(searchParams.get('import_id') || '') || null
-      setImports(items)
-      setImportId((current) => {
-        if (importIdFromQuery && items.some((item) => item.id === importIdFromQuery)) {
-          return importIdFromQuery
-        }
-        if (preferredId && items.some((item) => item.id === preferredId)) {
-          return preferredId
-        }
-        if (current && items.some((item) => item.id === current)) {
-          return current
-        }
-        return items[0]?.id ?? null
-      })
-    } catch (error: unknown) {
-      message.error((error as Error).message)
-    }
-  }, [searchParams])
-
-  const loadLibrary = async () => {
-    setLibraryLoading(true)
-    try {
-      const response = await api.get<KeywordEntryListResponse>('/keywords?limit=5000')
-      setLibraryEntries(response.entries ?? [])
-    } catch (error: unknown) {
-      message.error((error as Error).message)
-    } finally {
-      setLibraryLoading(false)
-    }
+  // 读取导入批次，并按“地址参数 > 指定批次 > 当前批次 > 第一个”选定当前批次
+  const fetchImports = async (preferredId?: number | null) => {
+    const response = await api.get<ImportListResponse>('/imports/data?limit=100')
+    const items = response.items ?? []
+    const importIdFromQuery = Number(searchParams.get('import_id') || '') || null
+    setImportId((current) => {
+      if (importIdFromQuery && items.some((item) => item.id === importIdFromQuery)) {
+        return importIdFromQuery
+      }
+      if (preferredId && items.some((item) => item.id === preferredId)) {
+        return preferredId
+      }
+      if (current && items.some((item) => item.id === current)) {
+        return current
+      }
+      return items[0]?.id ?? null
+    })
+    return items
   }
 
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      void loadImports()
-      void loadLibrary()
-    }, 0)
+  // 打开页面和地址参数变化时加载批次
+  const importsQuery = useApiQuery(() => fetchImports(), [searchParams], { initialData: [] as TreeImport[] })
+  const { data: imports, reload: loadImports, setData: setImports } = importsQuery
 
-    return () => window.clearTimeout(timer)
-  }, [loadImports])
+  // 上传后重新读取批次并优先选中新批次
+  const importsWithPreferredAction = useApiAction(
+    (preferredId: number) => fetchImports(preferredId),
+    { onSuccess: (items) => setImports(items) },
+  )
 
-  useEffect(() => {
-    const keywords = selectedKeywords.map(String)
-    let cancelled = false
-    const timer = window.setTimeout(() => {
-      if (!keywords.length) {
-        setSimilarSuggestions(null)
-        return
-      }
+  // 关键词库：与原来一致，地址参数变化时也一并刷新
+  const libraryQuery = useApiQuery(
+    () => api.get<KeywordEntryListResponse>('/keywords?limit=5000').then((response) => response.entries ?? []),
+    [searchParams],
+    { initialData: [] as KeywordEntry[] },
+  )
+  const { data: libraryEntries, loading: libraryLoading, reload: loadLibrary } = libraryQuery
 
-      void (async () => {
-        setSimilarLoading(true)
-        try {
-          const response = await api.post<SimilarKeywordPreviewResponse>('/keywords/similar-preview', {
-            keywords,
-            threshold: 0.75,
-            limit: 50,
-          })
-          if (!cancelled) {
-            setSimilarSuggestions(response)
-          }
-        } catch (error: unknown) {
-          if (!cancelled) {
-            message.error((error as Error).message)
-          }
-        } finally {
-          if (!cancelled) {
-            setSimilarLoading(false)
-          }
-        }
-      })()
-    }, 0)
-
-    return () => {
-      cancelled = true
-      window.clearTimeout(timer)
-    }
-  }, [selectedKeywords])
+  // 勾选变化时自动查相似词；没有勾选时清空结果
+  const similarQuery = useApiQuery(
+    () => {
+      const keywords = selectedKeywords.map(String)
+      if (!keywords.length) return Promise.resolve(null)
+      return api.post<SimilarKeywordPreviewResponse>('/keywords/similar-preview', {
+        keywords,
+        threshold: 0.75,
+        limit: 50,
+      })
+    },
+    [selectedKeywords],
+    { initialData: null as SimilarKeywordPreviewResponse | null },
+  )
+  const similarSuggestions = similarQuery.data
+  const similarLoading = similarQuery.loading
 
   const importOptions = imports.map((item) => ({
     value: item.id,
@@ -174,19 +141,19 @@ export default function KeywordExtractorPage() {
     return accumulator
   }, {})
 
+  // 上传成功后等批次列表刷新完再结束按钮加载态
+  const uploadTreeAction = useApiAction((form: FormData) => api.postForm<TreeImport>('/imports/tree', form), {
+    successMessage: (response) => `目录树导入完成，批次 #${response.id}`,
+    onSuccess: async (response) => {
+      await importsWithPreferredAction.run(response.id)
+    },
+  })
+  const uploadingTree = uploadTreeAction.loading
+
   const handleUploadTree = async (file: File) => {
-    setUploadingTree(true)
-    try {
-      const form = new FormData()
-      form.append('file', file)
-      const response = await api.postForm<TreeImport>('/imports/tree', form)
-      message.success(`目录树导入完成，批次 #${response.id}`)
-      await loadImports(response.id)
-    } catch (error: unknown) {
-      message.error((error as Error).message)
-    } finally {
-      setUploadingTree(false)
-    }
+    const form = new FormData()
+    form.append('file', file)
+    await uploadTreeAction.run(form)
     return false
   }
 
@@ -202,6 +169,19 @@ export default function KeywordExtractorPage() {
     return false
   }
 
+  const manualAction = useApiAction(
+    (payload: { import_id: number; keywords: string[]; limit: number }) =>
+      api.post<ExtractedKeywordListResponse>('/extractor/keywords/manual', payload),
+    {
+      onSuccess: (response) => {
+        setSummary(response)
+        setActiveSource('manual')
+        setSelectedKeywords([])
+        message.success('手动关键词匹配完成')
+      },
+    },
+  )
+
   const runManualKeywords = async () => {
     if (!importId) {
       message.warning('请先选择导入批次')
@@ -214,22 +194,7 @@ export default function KeywordExtractorPage() {
       return
     }
 
-    setKeywordsLoading(true)
-    try {
-      const response = await api.post<ExtractedKeywordListResponse>('/extractor/keywords/manual', {
-        import_id: importId,
-        keywords,
-        limit: manualLimit,
-      })
-      setSummary(response)
-      setActiveSource('manual')
-      setSelectedKeywords([])
-      message.success('手动关键词匹配完成')
-    } catch (error: unknown) {
-      message.error((error as Error).message)
-    } finally {
-      setKeywordsLoading(false)
-    }
+    await manualAction.run({ import_id: importId, keywords, limit: manualLimit })
   }
 
   const generateManualKeywordCandidates = () => {
@@ -287,81 +252,83 @@ export default function KeywordExtractorPage() {
     return api.post<ExtractedKeywordListResponse>('/extractor/keywords/regex', buildRegexPayload())
   }
 
-  const previewRegex = async () => {
-    if (!importId) {
-      message.warning('请先选择导入批次')
-      return
-    }
-
-    setPreviewLoading(true)
-    try {
-      const previewResponse = await api.post<RegexExtractPreviewResponse>(
-        '/extractor/keywords/regex-preview',
-        buildRegexPayload(),
-      )
-      const summaryResponse = await fetchRegexSummary()
+  // 先预览再汇总，两步任一出错都只弹一次错误
+  const previewAction = useApiAction(async () => {
+    const previewResponse = await api.post<RegexExtractPreviewResponse>(
+      '/extractor/keywords/regex-preview',
+      buildRegexPayload(),
+    )
+    const summaryResponse = await fetchRegexSummary()
+    return { previewResponse, summaryResponse }
+  }, {
+    onSuccess: ({ previewResponse, summaryResponse }) => {
       setPreview(previewResponse)
       setSummary(summaryResponse)
       setActiveSource('regex')
       setSelectedKeywords([])
       message.success('正则预览完成')
-    } catch (error: unknown) {
-      message.error((error as Error).message)
-    } finally {
-      setPreviewLoading(false)
+    },
+  })
+
+  const previewRegex = async () => {
+    if (!importId) {
+      message.warning('请先选择导入批次')
+      return
     }
+    await previewAction.run()
   }
+
+  const regexSummaryAction = useApiAction(fetchRegexSummary, {
+    onSuccess: (response) => {
+      setSummary(response)
+      setActiveSource('regex')
+      setSelectedKeywords([])
+      message.success('正则汇总完成')
+    },
+  })
 
   const runRegexExtraction = async () => {
     if (!importId) {
       message.warning('请先选择导入批次')
       return
     }
-
-    setKeywordsLoading(true)
-    try {
-      const response = await fetchRegexSummary()
-      setSummary(response)
-      setActiveSource('regex')
-      setSelectedKeywords([])
-      message.success('正则汇总完成')
-    } catch (error: unknown) {
-      message.error((error as Error).message)
-    } finally {
-      setKeywordsLoading(false)
-    }
+    await regexSummaryAction.run()
   }
+
+  const manualPathAction = useApiAction(async (payload: ManualPathRegexExtractPayload) => {
+    const [previewResponse, summaryResponse] = await Promise.all([
+      api.post<RegexExtractPreviewResponse>('/extractor/keywords/manual-path-regex', payload),
+      api.post<ExtractedKeywordListResponse>('/extractor/keywords/manual-path-regex/summary', payload),
+    ])
+    return { previewResponse, summaryResponse }
+  }, {
+    onSuccess: ({ previewResponse, summaryResponse }) => {
+      setPreview(previewResponse)
+      setSummary(summaryResponse)
+      setActiveSource('manual_path_regex')
+      setSelectedKeywords([])
+      message.success('手工路径提取完成')
+    },
+  })
 
   const runManualPathExtraction = async () => {
     if (!manualPath.trim()) {
       message.warning('请先粘贴手工路径')
       return
     }
-
-    setPreviewLoading(true)
-    setKeywordsLoading(true)
-    try {
-      const payload = buildManualPathRegexPayload()
-      const [previewResponse, summaryResponse] = await Promise.all([
-        api.post<RegexExtractPreviewResponse>('/extractor/keywords/manual-path-regex', payload),
-        api.post<ExtractedKeywordListResponse>('/extractor/keywords/manual-path-regex/summary', payload),
-      ])
-      setPreview(previewResponse)
-      setSummary(summaryResponse)
-      setActiveSource('manual_path_regex')
-      setSelectedKeywords([])
-      message.success('手工路径提取完成')
-    } catch (error: unknown) {
-      message.error((error as Error).message)
-    } finally {
-      setPreviewLoading(false)
-      setKeywordsLoading(false)
-    }
+    await manualPathAction.run(buildManualPathRegexPayload())
   }
+
+  // 结果表和预览表的加载状态由几个操作共用
+  const keywordsLoading = manualAction.loading || regexSummaryAction.loading || manualPathAction.loading
+  const previewLoading = previewAction.loading || manualPathAction.loading
 
   const selectVisibleKeywords = () => {
     setSelectedKeywords(filteredKeywords.map((item) => item.keyword))
   }
+
+  const saveAction = useApiAction((payload: KeywordEntryBatchImportPayload) =>
+    api.post<DeleteResponse & { created_count: number; existing_count: number }>('/keywords/import', payload))
 
   const saveKeywords = async (keywords: string[], listType: KeywordListType) => {
     if (!keywords.length) {
@@ -371,63 +338,60 @@ export default function KeywordExtractorPage() {
 
     setSavingListType(listType)
 
-    try {
-      const keywordObjects = (summary?.keywords ?? []).filter((item) => keywords.includes(item.keyword))
-      const payload: KeywordEntryBatchImportPayload = {
-        keywords,
-        keyword_type: listType,
-        merge_policy: 'normal',
-        import_id: importId,
-        source: activeSource,
-        pattern: activeSource === 'manual' ? null : regexPattern,
-        flags: activeSource === 'manual' ? null : regexFlags.trim(),
-        examples_by_keyword: Object.fromEntries(keywordObjects.map((item) => [item.keyword, item.examples])),
-        source_folder_name_by_keyword: Object.fromEntries(
-          keywordObjects.map((item) => [
-            item.keyword,
-            item.examples[0] ? item.examples[0].split('/').filter(Boolean).slice(-1)[0] : item.keyword,
-          ]),
-        ),
-      }
-
-      const response = await api.post<DeleteResponse & { created_count: number; existing_count: number }>(
-        '/keywords/import',
-        payload,
-      )
-
-      const saved = new Set(keywords)
-      setSummary((current) =>
-        current
-          ? {
-              ...current,
-              total_keywords: Math.max(0, current.total_keywords - saved.size),
-              total_actionable_keywords: Math.max(0, current.total_actionable_keywords - saved.size),
-              total_similar_keywords: current.keywords.filter(
-                (item) => !saved.has(item.keyword) && item.match_status === 'similar',
-              ).length,
-              keywords: current.keywords.filter((item) => !saved.has(item.keyword)),
-            }
-          : current,
-      )
-      setPreview((current) =>
-        current
-          ? {
-              ...current,
-              total_actionable_matches: current.preview.filter(
-                (item) => !saved.has(item.extracted_keyword),
-              ).length,
-              preview: current.preview.filter((item) => !saved.has(item.extracted_keyword)),
-            }
-          : current,
-      )
-      setSelectedKeywords((current) => current.filter((item) => !saved.has(String(item))))
-      await loadLibrary()
-      message.success(`已保存到 ${listType}，新增 ${response.created_count} 条，已存在 ${response.existing_count} 条`)
-    } catch (error: unknown) {
-      message.error((error as Error).message)
-    } finally {
-      setSavingListType(null)
+    const keywordObjects = (summary?.keywords ?? []).filter((item) => keywords.includes(item.keyword))
+    const payload: KeywordEntryBatchImportPayload = {
+      keywords,
+      keyword_type: listType,
+      merge_policy: 'normal',
+      import_id: importId,
+      source: activeSource,
+      pattern: activeSource === 'manual' ? null : regexPattern,
+      flags: activeSource === 'manual' ? null : regexFlags.trim(),
+      examples_by_keyword: Object.fromEntries(keywordObjects.map((item) => [item.keyword, item.examples])),
+      source_folder_name_by_keyword: Object.fromEntries(
+        keywordObjects.map((item) => [
+          item.keyword,
+          item.examples[0] ? item.examples[0].split('/').filter(Boolean).slice(-1)[0] : item.keyword,
+        ]),
+      ),
     }
+
+    const result = await saveAction.run(payload)
+    if (!result.ok) {
+      setSavingListType(null)
+      return
+    }
+    const response = result.data
+
+    const saved = new Set(keywords)
+    setSummary((current) =>
+      current
+        ? {
+            ...current,
+            total_keywords: Math.max(0, current.total_keywords - saved.size),
+            total_actionable_keywords: Math.max(0, current.total_actionable_keywords - saved.size),
+            total_similar_keywords: current.keywords.filter(
+              (item) => !saved.has(item.keyword) && item.match_status === 'similar',
+            ).length,
+            keywords: current.keywords.filter((item) => !saved.has(item.keyword)),
+          }
+        : current,
+    )
+    setPreview((current) =>
+      current
+        ? {
+            ...current,
+            total_actionable_matches: current.preview.filter(
+              (item) => !saved.has(item.extracted_keyword),
+            ).length,
+            preview: current.preview.filter((item) => !saved.has(item.extracted_keyword)),
+          }
+        : current,
+    )
+    setSelectedKeywords((current) => current.filter((item) => !saved.has(String(item))))
+    await loadLibrary()
+    message.success(`已保存到 ${listType}，新增 ${response.created_count} 条，已存在 ${response.existing_count} 条`)
+    setSavingListType(null)
   }
 
   const keywordColumns: ColumnsType<ExtractedKeyword> = [
@@ -602,7 +566,7 @@ export default function KeywordExtractorPage() {
                   onChange={(value) => setImportId(value)}
                   allowClear
                 />
-                <Button icon={<ReloadOutlined />} onClick={() => loadImports(importId)}>刷新批次</Button>
+                <Button icon={<ReloadOutlined />} onClick={() => void loadImports()}>刷新批次</Button>
               </Space.Compact>
               <Alert
                 type={importId ? 'success' : 'info'}
@@ -739,7 +703,7 @@ export default function KeywordExtractorPage() {
                   <Col span={12}><Statistic title="忽略名单" value={keywordCounts.ignore ?? 0} /></Col>
                   <Col span={12}><Statistic title="标签" value={keywordCounts.tag ?? 0} /></Col>
                 </Row>
-                <Button onClick={loadLibrary} loading={libraryLoading} style={{ marginBottom: 12 }}>
+                <Button onClick={() => void loadLibrary()} loading={libraryLoading} style={{ marginBottom: 12 }}>
                   刷新关键词库
                 </Button>
                 <Table
