@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import json
 
 import pytest
@@ -47,47 +46,74 @@ def client(tmp_path, monkeypatch):
 
     _main.app.dependency_overrides[deps.get_db] = override_get_db
 
-    # 重置模块级状态，防止测试间污染（不 reload，直接清理状态避免模块引用分裂）
-    _imports._progress.clear()
-    # 若上一个测试留下锁定状态，强制重置
-    if _imports._import_lock.locked():
-        _imports._import_lock = asyncio.Lock()
+    # 进度推送和后台任务在运行时取 SessionLocal，指向测试库
+    monkeypatch.setattr("app.db.session.SessionLocal", Factory)
 
-    yield TestClient(_main.app, raise_server_exceptions=False)
+    # 默认不真正起后台线程（避免真实 115 调用），只记录提交的任务
+    submitted: list[tuple[str, object]] = []
+
+    def fake_submit_job(job_id, work):
+        submitted.append((job_id, work))
+
+    monkeypatch.setattr(_imports, "submit_job", fake_submit_job)
+
+    test_client = TestClient(_main.app, raise_server_exceptions=False)
+    test_client.submitted = submitted
+    test_client.session_factory = Factory
+    yield test_client
     _main.app.dependency_overrides.clear()
     get_settings.cache_clear()
 
 
-def test_remote_fetch_returns_import_id_immediately(client, monkeypatch):
+def _seed_job(client, job_id: str, *, done: bool, stage: str, current: int = 0, total: int = 0) -> None:
+    """往测试库 background_jobs 表插一条目录导入任务记录。"""
+    from datetime import UTC, datetime
+
+    from app.models.background_jobs import BackgroundJob
+
+    now = datetime.now(UTC)
+    with client.session_factory() as db:
+        db.add(BackgroundJob(
+            job_id=job_id, job_type="remote_import", stage=stage, current=current, total=total,
+            done=done, started_at=now, updated_at=now, finished_at=now if done else None,
+        ))
+        db.commit()
+
+
+def _count_imports(client) -> int:
+    from sqlalchemy import func, select
+
+    from app.models.tree import TreeImport
+
+    with client.session_factory() as db:
+        return int(db.scalar(select(func.count()).select_from(TreeImport)) or 0)
+
+
+_PAYLOAD = {"cid": "12345", "path_label": "测试目录", "depth_limit": 2, "folders_only": True}
+
+
+def test_remote_fetch_returns_import_id_immediately(client):
     """POST /imports/remote-fetch 应立即返回 {import_id, status: pending}，不阻塞。"""
-    from app.api.routes import imports as _imports
-
-    # 让后台任务立即完成，避免真实 115 调用
-    async def fake_run_import(import_id, payload):
-        _imports._progress[import_id] = {
-            "stage": "完成", "current": 1, "total": 1, "done": True, "error": None
-        }
-
-    monkeypatch.setattr(_imports, "_run_import", fake_run_import)
-
-    resp = client.post("/imports/remote-fetch", json={
-        "cid": "12345",
-        "path_label": "测试目录",
-        "depth_limit": 2,
-        "folders_only": True,
-    })
+    resp = client.post("/imports/remote-fetch", json=_PAYLOAD)
     assert resp.status_code == 200
     data = resp.json()
     assert "import_id" in data
     assert data["status"] == "pending"
+    # 任务编号沿用导入批次编号，已交给后台执行
+    assert [job_id for job_id, _ in client.submitted] == [str(data["import_id"])]
+    from app.models.tree import TreeImport
+    from app.services.background_job_service import BackgroundJobService
+
+    with client.session_factory() as db:
+        assert db.get(TreeImport, data["import_id"]).status == "pending"
+        state = BackgroundJobService.get(db, str(data["import_id"]))
+    assert state["job_type"] == "remote_import"
+    assert state["done"] is False
 
 
-def test_remote_fetch_returns_409_when_lock_held(client, monkeypatch):
-    """并发第二次 POST 应返回 409。"""
-    from app.api.routes import imports as _imports
-
-    # monkeypatch locked() 方法返回 True，避免 event loop 跨越问题
-    monkeypatch.setattr(_imports._import_lock, "locked", lambda: True)
+def test_remote_fetch_returns_409_when_lock_held(client):
+    """已有导入任务在运行时，第二次 POST 应返回 409。"""
+    _seed_job(client, "running-import", done=False, stage="下载目录树")
 
     resp = client.post("/imports/remote-fetch", json={
         "cid": "99",
@@ -96,17 +122,51 @@ def test_remote_fetch_returns_409_when_lock_held(client, monkeypatch):
         "folders_only": True,
     })
     assert resp.status_code == 409
+    assert resp.json()["detail"] == "已有导入任务在运行，请稍后再试"
 
 
-def test_sse_progress_endpoint_streams_done(client, monkeypatch):
-    """GET /imports/{id}/progress 应推送至少一帧，done=True 后结束。"""
+def test_remote_fetch_conflict_leaves_no_pending_import(client):
+    """判重失败时不留下状态为 pending 的导入批次记录，也不提交后台任务。"""
+    _seed_job(client, "running-import", done=False, stage="下载目录树")
+    before = _count_imports(client)
+
+    resp = client.post("/imports/remote-fetch", json=_PAYLOAD)
+
+    assert resp.status_code == 409
+    assert _count_imports(client) == before
+    assert client.submitted == []
+
+
+def test_remote_fetch_failure_marks_import_failed(client, monkeypatch):
+    """后台抓取失败时导入批次置为 failed，任务记录为失败且已结束。"""
     from app.api.routes import imports as _imports
+    from app.models.tree import TreeImport
+    from app.services.background_job_service import BackgroundJobService
+    from app.services.job_runner import run_job
 
+    def fail_fetch(self, **_kwargs):
+        raise RuntimeError("虚构抓取失败")
+
+    monkeypatch.setattr(_imports.RemoteTreeFetchService, "fetch_subtree", fail_fetch)
+    monkeypatch.setattr(_imports, "submit_job", lambda job_id, work: run_job(job_id, work))
+
+    resp = client.post("/imports/remote-fetch", json=_PAYLOAD)
+
+    assert resp.status_code == 200
+    import_id = resp.json()["import_id"]
+    with client.session_factory() as db:
+        assert db.get(TreeImport, import_id).status == "failed"
+        state = BackgroundJobService.get(db, str(import_id))
+    assert state["done"] is True
+    assert state["stage"] == "失败"
+    assert state["error"] == "虚构抓取失败"
+
+
+def test_sse_progress_endpoint_streams_done(client):
+    """GET /imports/{id}/progress 应推送至少一帧，done=True 后结束。"""
     # 预置进度为已完成状态
     import_id = 999
-    _imports._progress[import_id] = {
-        "stage": "完成", "current": 5, "total": 5, "done": True, "error": None
-    }
+    _seed_job(client, str(import_id), done=True, stage="完成", current=5, total=5)
 
     with client.stream("GET", f"/imports/{import_id}/progress") as resp:
         assert resp.status_code == 200
@@ -124,9 +184,6 @@ def test_sse_progress_endpoint_streams_done(client, monkeypatch):
 
 def test_sse_progress_returns_error_for_unknown_import_id(client):
     """未知 import_id 应推送 error: not found 并结束。"""
-    from app.api.routes import imports as _imports
-    _imports._progress.clear()
-
     with client.stream("GET", "/imports/88888/progress") as resp:
         frames = []
         for line in resp.iter_lines():

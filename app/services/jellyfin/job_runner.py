@@ -3,16 +3,15 @@ from __future__ import annotations
 import asyncio
 from datetime import date, datetime
 import logging
-import threading
-import uuid
 
 from app.core.config import Settings, get_settings
 from app.db.session import SessionLocal
-from app.services.background_job_service import BackgroundJobService
 from app.services.jellyfin.client import JellyfinClient
 from app.services.jellyfin.collection_sync_service import CollectionSyncService
 from app.services.jellyfin.cover_service import CoverService
 from app.services.jellyfin.scan_service import MediaScanService
+# JobAlreadyRunning 从统一启动器重新导出，保证路由和每日循环捕获的是同一个类
+from app.services.job_runner import JobAlreadyRunning, JobWork, create_job, run_job  # noqa: F401
 
 
 logger = logging.getLogger(__name__)
@@ -20,12 +19,6 @@ logger = logging.getLogger(__name__)
 JOB_SCAN = "jellyfin:scan"
 JOB_SYNC = "jellyfin:sync"
 JOB_COVERS = "jellyfin:covers"
-
-_job_start_lock = threading.Lock()
-
-
-class JobAlreadyRunning(Exception):
-    """同类型 Jellyfin 任务已经在运行。"""
 
 
 def jellyfin_scan_enabled(settings: Settings) -> bool:
@@ -48,104 +41,76 @@ def jellyfin_cover_enabled(settings: Settings) -> bool:
 
 
 def start_job(db, job_type: str) -> str:
-    """检查同类型运行任务后创建一个新的后台任务。"""
-    with _job_start_lock:
-        if BackgroundJobService.list_active(db, job_type):
-            raise JobAlreadyRunning(job_type)
-        job_id = str(uuid.uuid4())
-        BackgroundJobService.create(db, job_id, job_type)
-        return job_id
+    """检查同类型运行任务后创建一个新的后台任务（判重由统一启动器负责）。"""
+    return create_job(db, job_type)
 
 
-def _mark_success(db, job_id: str, summary: dict) -> None:
-    BackgroundJobService.update(
-        db,
-        job_id,
-        stage="完成",
-        current=1,
-        total=1,
-        done=True,
-        error=None,
-        summary=summary,
-        finished_at=datetime.now().astimezone(),
+def scan_work(job_id: str) -> JobWork:
+    """返回扫描任务的干活函数；扫描服务需要任务编号标记本轮见到的条目。"""
+
+    def work(db, progress):
+        progress("扫描中", 0, 0)
+        settings = get_settings()
+        summary = MediaScanService().scan(
+            db,
+            local_roots=list(getattr(settings, "media_library_local_roots", []) or []),
+            strm_roots=list(getattr(settings, "media_library_strm_roots", []) or []),
+            job_id=job_id,
+        )
+        progress("完成", 1, 1)
+        return summary
+
+    return work
+
+
+def sync_work(db, progress) -> dict:
+    """合集同步任务的干活函数。"""
+    progress("同步中", 0, 0)
+    settings = get_settings()
+    if not jellyfin_sync_enabled(settings):
+        raise RuntimeError("Jellyfin 同步未启用或缺少地址/API Key")
+    client = JellyfinClient(
+        settings.jellyfin_base_url,
+        settings.jellyfin_api_key,
+        settings.jellyfin_timeout_seconds,
+        settings.jellyfin_page_size,
     )
+    # with 块保证成功或失败都会关闭客户端
+    with client:
+        summary = CollectionSyncService().sync(db, client)
+    progress("完成", 1, 1)
+    return summary
 
 
-def _mark_failure(db, job_id: str, error: Exception) -> None:
-    BackgroundJobService.update(
+def cover_work(db, progress) -> dict:
+    """本地视频封面任务的干活函数。"""
+    progress("生成封面中", 0, 0)
+    settings = get_settings()
+    if not jellyfin_cover_enabled(settings):
+        raise RuntimeError("Jellyfin 封面任务未启用或缺少上线时间")
+    summary = CoverService().run(
         db,
-        job_id,
-        stage="失败",
-        done=True,
-        error=str(error),
-        finished_at=datetime.now().astimezone(),
+        local_roots=list(getattr(settings, "media_library_local_roots", []) or []),
+        since=settings.jellyfin_cover_since,
+        deadline_minute=int(getattr(settings, "jellyfin_cover_deadline_minute", 25)),
     )
+    progress("完成", 1, 1)
+    return summary
 
 
 def run_scan_job(job_id: str) -> None:
     """在独立数据库会话中运行一次扫描并记录结果。"""
-    with SessionLocal() as db:
-        BackgroundJobService.update(db, job_id, stage="扫描中")
-        try:
-            settings = get_settings()
-            summary = MediaScanService().scan(
-                db,
-                local_roots=list(getattr(settings, "media_library_local_roots", []) or []),
-                strm_roots=list(getattr(settings, "media_library_strm_roots", []) or []),
-                job_id=job_id,
-            )
-            _mark_success(db, job_id, summary)
-        except Exception as exc:  # noqa: BLE001 - 失败写入任务，不让后台线程抛出
-            db.rollback()
-            _mark_failure(db, job_id, exc)
-            logger.exception("Jellyfin 扫描任务失败: %s", job_id)
+    run_job(job_id, scan_work(job_id))
 
 
 def run_sync_job(job_id: str) -> None:
     """在独立数据库会话中运行一次合集同步并记录结果。"""
-    with SessionLocal() as db:
-        BackgroundJobService.update(db, job_id, stage="同步中")
-        client = None
-        try:
-            settings = get_settings()
-            if not jellyfin_sync_enabled(settings):
-                raise RuntimeError("Jellyfin 同步未启用或缺少地址/API Key")
-            client = JellyfinClient(
-                settings.jellyfin_base_url,
-                settings.jellyfin_api_key,
-                settings.jellyfin_timeout_seconds,
-                settings.jellyfin_page_size,
-            )
-            with client:
-                summary = CollectionSyncService().sync(db, client)
-            _mark_success(db, job_id, summary)
-        except Exception as exc:  # noqa: BLE001 - 失败写入任务，不让后台线程抛出
-            db.rollback()
-            if client is not None:
-                client.close()
-            _mark_failure(db, job_id, exc)
-            logger.exception("Jellyfin 同步任务失败: %s", job_id)
+    run_job(job_id, sync_work)
 
 
 def run_cover_job(job_id: str) -> None:
     """在独立数据库会话中生成本地视频封面并记录结果。"""
-    with SessionLocal() as db:
-        BackgroundJobService.update(db, job_id, stage="生成封面中")
-        try:
-            settings = get_settings()
-            if not jellyfin_cover_enabled(settings):
-                raise RuntimeError("Jellyfin 封面任务未启用或缺少上线时间")
-            summary = CoverService().run(
-                db,
-                local_roots=list(getattr(settings, "media_library_local_roots", []) or []),
-                since=settings.jellyfin_cover_since,
-                deadline_minute=int(getattr(settings, "jellyfin_cover_deadline_minute", 25)),
-            )
-            _mark_success(db, job_id, summary)
-        except Exception as exc:  # noqa: BLE001 - 失败写入任务，不让后台线程抛出
-            db.rollback()
-            _mark_failure(db, job_id, exc)
-            logger.exception("Jellyfin 封面任务失败: %s", job_id)
+    run_job(job_id, cover_work)
 
 
 async def jellyfin_daily_loop(settings: Settings) -> None:

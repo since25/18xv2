@@ -31,7 +31,8 @@ def test_run_scan_job_records_failure(db_session, monkeypatch):
     def fail_scan(*_args, **_kwargs):
         raise MediaScanError("虚构媒体根目录不可读")
 
-    monkeypatch.setattr(job_runner, "SessionLocal", SessionFactory())
+    # 统一启动器在运行时从 app.db.session 取 SessionLocal
+    monkeypatch.setattr("app.db.session.SessionLocal", SessionFactory())
     monkeypatch.setattr(job_runner.MediaScanService, "scan", fail_scan)
     job_runner.run_scan_job(job_id)
 
@@ -54,7 +55,8 @@ def test_run_cover_job_records_summary(db_session, monkeypatch):
         media_library_local_roots=[],
         jellyfin_cover_deadline_minute=25,
     )
-    monkeypatch.setattr(job_runner, "SessionLocal", SessionFactory())
+    # 统一启动器在运行时从 app.db.session 取 SessionLocal
+    monkeypatch.setattr("app.db.session.SessionLocal", SessionFactory())
     monkeypatch.setattr(job_runner, "get_settings", lambda: settings)
     monkeypatch.setattr(
         job_runner.CoverService,

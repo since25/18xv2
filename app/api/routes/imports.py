@@ -1,10 +1,6 @@
 from __future__ import annotations
 
-import asyncio
-import json
 import logging
-import time
-from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
@@ -24,32 +20,10 @@ from app.schemas.imports import (
 )
 from app.services.importer.import_service import TreeImportService
 from app.services.importer.remote_tree_service import RemoteTreeFetchService
+from app.services.job_runner import JobAlreadyRunning, create_job, job_event_stream, submit_job
 
 router = APIRouter(prefix="/imports", tags=["imports"])
 logger = logging.getLogger(__name__)
-
-# 并发保护：同时最多 1 个 remote-fetch 任务
-# 注意：locked() 检查和 create_task 之间不是真正原子的，但在单用户场景下
-# FastAPI 的单线程事件循环使并发 POST 极少，锁本身在 _run_import 中保证串行
-_import_lock = asyncio.Lock()
-# 进度快照：import_id → {stage, current, total, done, error, finished_at}；
-# 正常由 SSE 在 done 后 5s 回收，但客户端不订阅进度时条目会永久残留，
-# 因此启动新任务前再做一次兜底清理。
-_progress: dict[int, dict] = {}
-_PROGRESS_RETENTION_SECONDS = 600
-
-
-def _prune_progress() -> None:
-    now = time.monotonic()
-    expired = [
-        key
-        for key, state in _progress.items()
-        if state.get("done") and state.get("finished_at") is not None
-        and now - state["finished_at"] > _PROGRESS_RETENTION_SECONDS
-    ]
-    for key in expired:
-        _progress.pop(key, None)
-
 
 @router.get("/data", response_model=TreeImportPageResponse)
 def list_imports(
@@ -140,14 +114,10 @@ async def import_tree(
 
 
 @router.post("/remote-fetch")
-async def remote_fetch_tree(  # 必须是 async def，asyncio.create_task 需要运行中的 event loop
+async def remote_fetch_tree(
     payload: RemoteFetchRequest,
     db: Session = Depends(get_db),
 ) -> dict:
-    if _import_lock.locked():
-        raise HTTPException(status_code=409, detail="已有导入任务在运行，请稍后再试")
-
-    _prune_progress()
     BackgroundJobService.purge_expired(db)
     tree_import = TreeImport(
         status="pending",
@@ -156,88 +126,48 @@ async def remote_fetch_tree(  # 必须是 async def，asyncio.create_task 需要
         note=f"cid={payload.cid} depth_limit={payload.depth_limit}",
     )
     db.add(tree_import)
-    db.commit()
-    db.refresh(tree_import)
+    db.flush()
     import_id = tree_import.id
 
-    BackgroundJobService.create(db, str(import_id), "remote_import")
-    _progress[import_id] = {
-        "job_id": str(import_id), "job_type": "remote_import",
-        "stage": "等待开始", "current": 0, "total": 0, "done": False, "error": None, "summary": None,
-        "started_at": datetime.now(UTC).isoformat(), "finished_at": None,
-    }
-    asyncio.create_task(_run_import(import_id, payload))
-    return {"import_id": import_id, "status": "pending"}
-
-
-async def _run_import(import_id: int, payload: RemoteFetchRequest) -> None:
-    async with _import_lock:
-        await asyncio.to_thread(_blocking_import, import_id, payload)
-
-
-def _blocking_import(import_id: int, payload: RemoteFetchRequest) -> None:
-    from app.db.session import SessionLocal
-
-    session = SessionLocal()
-
-    def cb(stage: str, current: int, total: int) -> None:
-        BackgroundJobService.update(session, str(import_id), stage=stage, current=current, total=total)
-        if import_id in _progress:
-            _progress[import_id].update(stage=stage, current=current, total=total)
-
+    # 任务编号沿用导入批次编号；判重失败时回滚，不留下 pending 的导入批次
     try:
-        RemoteTreeFetchService(session).fetch_subtree(
-            cid=payload.cid,
-            path_label=payload.path_label,
-            depth_limit=payload.depth_limit,
-            folders_only=payload.folders_only,
-            import_id=import_id,
-            progress_cb=cb,
-        )
-        BackgroundJobService.update(session, str(import_id), stage="完成", done=True, finished_at=datetime.now(UTC))
-        if import_id in _progress:
-            _progress[import_id].update(stage="完成", done=True)
-    except Exception as exc:
+        create_job(db, "remote_import", job_id=str(import_id))
+    except JobAlreadyRunning:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="已有导入任务在运行，请稍后再试")
+
+    def work(session, cb):
         try:
-            from app.models.tree import TreeImport as TI
-            rec = session.get(TI, import_id)
-            if rec:
-                rec.status = "failed"
-                session.commit()
-        except Exception as inner:
-            logger.warning("导入失败后更新 DB 状态出错 import_id=%d: %s", import_id, inner)
-        BackgroundJobService.update(session, str(import_id), stage="失败", error=str(exc), done=True, finished_at=datetime.now(UTC))
-        if import_id in _progress:
-            _progress[import_id].update(stage="失败", error=str(exc), done=True)
-    finally:
-        progress_state = _progress.get(import_id)
-        if progress_state is not None:
-            progress_state["finished_at"] = time.monotonic()
-        session.close()
+            RemoteTreeFetchService(session).fetch_subtree(
+                cid=payload.cid,
+                path_label=payload.path_label,
+                depth_limit=payload.depth_limit,
+                folders_only=payload.folders_only,
+                import_id=import_id,
+                progress_cb=cb,
+            )
+            # 与改造前一致：导入任务不写摘要
+            return None
+        except Exception:
+            # 导入批次置为失败；这一步自身出错只记 warning，原异常继续交给启动器收尾
+            try:
+                session.rollback()
+                rec = session.get(TreeImport, import_id)
+                if rec:
+                    rec.status = "failed"
+                    session.commit()
+            except Exception as inner:  # noqa: BLE001
+                logger.warning("导入失败后更新 DB 状态出错 import_id=%d: %s", import_id, inner)
+            raise
+
+    submit_job(str(import_id), work)
+    return {"import_id": import_id, "status": "pending"}
 
 
 @router.get("/{import_id}/progress")
 async def import_progress(import_id: int) -> StreamingResponse:
-    """SSE 接口：每秒推送导入进度，done=True 后 5 秒结束并回收内存条目。"""
-    async def event_stream():
-        while True:
-            from app.db.session import SessionLocal
-            with SessionLocal() as session:
-                state = BackgroundJobService.get(session, str(import_id))
-            # 保留内存 fallback，兼容旧客户端/测试手动注入的进度快照。
-            if state is None:
-                state = _progress.get(import_id)
-            if state is None:
-                yield f"data: {json.dumps({'error': 'not found'})}\n\n"
-                break
-            yield f"data: {json.dumps(state)}\n\n"
-            if state["done"]:
-                await asyncio.sleep(5)
-                _progress.pop(import_id, None)
-                break
-            await asyncio.sleep(1)
-
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+    """SSE 接口：每秒推送导入进度，done 后再推一帧断开。"""
+    return StreamingResponse(job_event_stream(str(import_id)), media_type="text/event-stream")
 
 
 @router.delete("/{import_id}")

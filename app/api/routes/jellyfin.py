@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
@@ -23,10 +23,11 @@ from app.services.jellyfin.job_runner import (
     JobAlreadyRunning,
     jellyfin_scan_enabled,
     jellyfin_sync_enabled,
-    run_scan_job,
-    run_sync_job,
+    scan_work,
     start_job,
+    sync_work,
 )
+from app.services.job_runner import submit_job
 
 
 router = APIRouter(prefix="/jellyfin", tags=["jellyfin"])
@@ -105,7 +106,7 @@ def jellyfin_status(db: Session = Depends(get_db)) -> dict:
 
 
 @router.post("/scan", status_code=status.HTTP_202_ACCEPTED)
-def trigger_scan(background_tasks: BackgroundTasks, db: Session = Depends(get_db)) -> dict[str, str]:
+def trigger_scan(db: Session = Depends(get_db)) -> dict[str, str]:
     settings = get_settings()
     if not jellyfin_scan_enabled(settings):
         raise HTTPException(status_code=409, detail="Jellyfin 扫描未启用")
@@ -113,12 +114,12 @@ def trigger_scan(background_tasks: BackgroundTasks, db: Session = Depends(get_db
         job_id = start_job(db, JOB_SCAN)
     except JobAlreadyRunning as exc:
         raise HTTPException(status_code=409, detail="Jellyfin 扫描任务正在运行") from exc
-    background_tasks.add_task(run_scan_job, job_id)
+    submit_job(job_id, scan_work(job_id))
     return {"job_id": job_id}
 
 
 @router.post("/sync", status_code=status.HTTP_202_ACCEPTED)
-def trigger_sync(background_tasks: BackgroundTasks, db: Session = Depends(get_db)) -> dict[str, str]:
+def trigger_sync(db: Session = Depends(get_db)) -> dict[str, str]:
     settings = get_settings()
     if not jellyfin_sync_enabled(settings):
         raise HTTPException(status_code=409, detail="Jellyfin 同步未启用或缺少地址/API Key")
@@ -126,7 +127,7 @@ def trigger_sync(background_tasks: BackgroundTasks, db: Session = Depends(get_db
         job_id = start_job(db, JOB_SYNC)
     except JobAlreadyRunning as exc:
         raise HTTPException(status_code=409, detail="Jellyfin 同步任务正在运行") from exc
-    background_tasks.add_task(run_sync_job, job_id)
+    submit_job(job_id, sync_work)
     return {"job_id": job_id}
 
 

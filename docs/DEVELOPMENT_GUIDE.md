@@ -231,6 +231,18 @@ python scripts/migrate_sqlite_to_postgres.py \
   --postgres-url postgresql+psycopg://postgres:postgres@127.0.0.1:5432/organizer
 ```
 
+### 8.1 后台长任务（background_jobs）
+
+- 目录导入、白名单批处理、文件去重、Jellyfin 的后台长任务统一走 `app/services/job_runner.py`，进度只记在 `background_jobs` 表，不再有内存副本。
+- 新增一个长任务三步：
+  1. 路由里 `job_id = create_job(db, "<命名空间>:<类型>")`，捕获 `JobAlreadyRunning` 转成 409（同类型同时只跑一个）；
+  2. `submit_job(job_id, work)`，`work(session, progress_cb)` 只写具体干什么，返回摘要（dict / pydantic 模型 / dataclass / None），成败收尾由启动器负责；
+  3. 进度接口返回 `StreamingResponse(job_event_stream(job_id), media_type="text/event-stream")`。
+- 需要 115 客户端时，路由用依赖 `get_115_client` 取全局单例传进 `work`，不要在后台任务里新建 `Real115Client()`。
+- 常驻循环（如 Jellyfin 每日任务）在自己的线程里用 `create_job` + `run_job` 同步执行。
+- 完成超过 10 分钟的记录由 `app/main.py` 启动的唯一清理循环 `sweep_expired_jobs` 删除；服务重启时未完成任务被标记为“服务重启，中断”。
+- 前提是单进程运行（`--workers 1`）。
+
 ---
 
 ## 九、关键词命中重建说明

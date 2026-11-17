@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import uuid
 
 import pytest
@@ -44,40 +43,47 @@ def client(tmp_path, monkeypatch):
             db.close()
 
     _main.app.dependency_overrides[deps.get_db] = override_get_db
+    # 不走 lifespan，app.state 上没有 115 客户端，注入一个哨兵对象代替全局单例
+    _main.app.dependency_overrides[deps.get_115_client] = lambda: _SENTINEL_115_CLIENT
+    # 进度推送、active 查询和后台任务都在运行时取 SessionLocal，指向测试库
+    monkeypatch.setattr("app.db.session.SessionLocal", factory)
 
-    try:
-        from app.api.routes import dedupe as _dedupe
-    except ImportError:
-        _dedupe = None
-    if _dedupe is not None:
-        _dedupe._jobs.clear()
-        if _dedupe._scan_lock.locked():
-            _dedupe._scan_lock = asyncio.Lock()
-        if hasattr(_dedupe, "_confirm_lock") and _dedupe._confirm_lock.locked():
-            _dedupe._confirm_lock = asyncio.Lock()
-        if hasattr(_dedupe, "_delete_lock") and _dedupe._delete_lock.locked():
-            _dedupe._delete_lock = asyncio.Lock()
+    from app.api.routes import dedupe as _dedupe
 
-        async def fake_run_scan_job(job_id, payload):
-            _dedupe._jobs[job_id].update(stage="完成", done=True)
+    # 默认不真正起后台线程，只记录提交的任务；需要执行时由用例自己替换
+    submitted: list[tuple[str, object]] = []
 
-        monkeypatch.setattr(_dedupe, "_run_scan_job", fake_run_scan_job)
-        if hasattr(_dedupe, "_run_confirm_job"):
-            async def fake_run_confirm_job(job_id, payload):
-                _dedupe._jobs[job_id].update(stage="完成", done=True)
+    def fake_submit_job(job_id, work):
+        submitted.append((job_id, work))
 
-            monkeypatch.setattr(_dedupe, "_run_confirm_job", fake_run_confirm_job)
-        if hasattr(_dedupe, "_run_delete_job"):
-            async def fake_run_delete_job(job_id, plan_id):
-                _dedupe._jobs[job_id].update(stage="完成", done=True)
+    monkeypatch.setattr(_dedupe, "submit_job", fake_submit_job)
 
-            monkeypatch.setattr(_dedupe, "_run_delete_job", fake_run_delete_job)
-
-    yield TestClient(_main.app, raise_server_exceptions=False)
+    test_client = TestClient(_main.app, raise_server_exceptions=False)
+    test_client.submitted = submitted
+    test_client.session_factory = factory
+    yield test_client
 
     _main.app.dependency_overrides.clear()
     get_settings.cache_clear()
     engine.dispose()
+
+
+_SENTINEL_115_CLIENT = object()
+
+
+def _seed_running_job(client, job_id: str, job_type: str) -> None:
+    """往测试库 background_jobs 表插一条未完成的任务记录。"""
+    from datetime import UTC, datetime
+
+    from app.models.background_jobs import BackgroundJob
+
+    now = datetime.now(UTC)
+    with client.session_factory() as db:
+        db.add(BackgroundJob(
+            job_id=job_id, job_type=job_type, stage="运行中", current=0, total=0,
+            done=False, started_at=now, updated_at=now,
+        ))
+        db.commit()
 
 
 def _db_session_from_client(client):
@@ -234,6 +240,7 @@ def test_scan_job_endpoint_returns_uuid(client):
     body = resp.json()
     assert body["status"] == "pending"
     uuid.UUID(body["job_id"])
+    assert [job_id for job_id, _ in client.submitted] == [body["job_id"]]
 
 
 def test_confirm_job_endpoint_returns_uuid(client):
@@ -243,6 +250,7 @@ def test_confirm_job_endpoint_returns_uuid(client):
     body = resp.json()
     assert body["status"] == "pending"
     uuid.UUID(body["job_id"])
+    assert [job_id for job_id, _ in client.submitted] == [body["job_id"]]
 
 
 def test_list_groups_returns_page_shape(client):
@@ -317,6 +325,7 @@ def test_execute_delete_plan_job_requires_confirm(client):
     resp = client.post(f"/dedupe/delete-plans/{plan['plan_id']}/execute-jobs", json={"confirm": False})
 
     assert resp.status_code == 400
+    assert client.submitted == []
 
 
 def test_execute_delete_plan_job_endpoint_returns_uuid(client):
@@ -332,3 +341,106 @@ def test_execute_delete_plan_job_endpoint_returns_uuid(client):
     body = resp.json()
     assert body["status"] == "pending"
     uuid.UUID(body["job_id"])
+    assert [job_id for job_id, _ in client.submitted] == [body["job_id"]]
+
+
+def test_start_jobs_return_409_when_same_type_running(client):
+    """库里已有同类型未完成任务时，三个启动接口都返回 409 且不提交新任务。"""
+    _seed_running_job(client, "scan-running", "dedupe:scan")
+    _seed_running_job(client, "confirm-running", "dedupe:confirm")
+    _seed_running_job(client, "delete-running", "dedupe:delete")
+
+    scan = client.post("/dedupe/scan-jobs", json={"tree_import_id": 1})
+    confirm = client.post("/dedupe/confirm-jobs", json={"candidate_ids": [1]})
+    delete = client.post("/dedupe/delete-plans/1/execute-jobs", json={"confirm": True})
+
+    assert (scan.status_code, scan.json()["detail"]) == (409, "已有去重扫描任务在运行")
+    assert (confirm.status_code, confirm.json()["detail"]) == (409, "已有去重确认任务在运行")
+    assert (delete.status_code, delete.json()["detail"]) == (409, "已有去重删除任务在运行")
+    assert client.submitted == []
+
+
+def test_confirm_and_delete_jobs_use_singleton_115_client(client, monkeypatch):
+    """后台确认/删除任务拿到的是全局 115 客户端，而不是新建实例；进度和摘要照旧落库。"""
+    from app.api.routes import dedupe as _dedupe
+    from app.services.background_job_service import BackgroundJobService
+    from app.services.dedupe.confirmation_service import DedupeConfirmationSummary
+    from app.services.dedupe.delete_plan_service import DedupeDeletePlanSummary
+    from app.services.job_runner import run_job
+
+    seen_clients: dict[str, object] = {}
+
+    class FakeConfirmationService:
+        def __init__(self, db, client):
+            seen_clients["confirm"] = client
+
+        def confirm_candidates(self, candidate_ids):
+            return DedupeConfirmationSummary(requested=len(candidate_ids), resolved=len(candidate_ids), failed=0)
+
+    class FakeDeletePlanService:
+        def __init__(self, db, client):
+            seen_clients["delete"] = client
+
+        def execute_plan(self, plan_id, *, confirm):
+            assert confirm is True
+            return DedupeDeletePlanSummary(plan_id=plan_id, total=3, deleted=3, failed=0, skipped=0)
+
+    monkeypatch.setattr(_dedupe, "DedupeConfirmationService", FakeConfirmationService)
+    monkeypatch.setattr(_dedupe, "DedupeDeletePlanService", FakeDeletePlanService)
+    # 同步执行，便于断言
+    monkeypatch.setattr(_dedupe, "submit_job", lambda job_id, work: run_job(job_id, work))
+
+    confirm = client.post("/dedupe/confirm-jobs", json={"candidate_ids": [1, 2]})
+    delete = client.post("/dedupe/delete-plans/7/execute-jobs", json={"confirm": True})
+
+    assert confirm.status_code == 200
+    assert delete.status_code == 200
+    assert seen_clients == {"confirm": _SENTINEL_115_CLIENT, "delete": _SENTINEL_115_CLIENT}
+    with client.session_factory() as db:
+        confirm_state = BackgroundJobService.get(db, confirm.json()["job_id"])
+        delete_state = BackgroundJobService.get(db, delete.json()["job_id"])
+    assert confirm_state["done"] is True
+    assert confirm_state["stage"] == "完成"
+    assert (confirm_state["current"], confirm_state["total"]) == (2, 2)
+    assert confirm_state["summary"] == {"requested": 2, "resolved": 2, "failed": 0}
+    assert delete_state["done"] is True
+    assert (delete_state["current"], delete_state["total"]) == (3, 3)
+    assert delete_state["summary"]["plan_id"] == 7
+
+
+def test_active_jobs_and_progress_read_background_jobs(client):
+    """active 和进度推送只查 background_jobs 表，对外任务类型去掉 dedupe: 前缀。"""
+    import json
+
+    _seed_running_job(client, "confirm-running", "dedupe:confirm")
+
+    active = client.get("/dedupe/jobs/active")
+    assert active.status_code == 200
+    body = active.json()
+    assert body["scan"] is None
+    assert body["delete"] is None
+    assert body["confirm"]["job_id"] == "confirm-running"
+    assert body["confirm"]["job_type"] == "confirm"
+
+    # 进度推送对未完成任务不会自行结束，这里用已完成任务验证（推完两帧后断开）
+    from app.services.background_job_service import BackgroundJobService
+
+    with client.session_factory() as db:
+        BackgroundJobService.update(db, "confirm-running", stage="完成", done=True)
+    with client.stream("GET", "/dedupe/jobs/confirm-running/progress") as resp:
+        assert resp.status_code == 200
+        frames = [
+            json.loads(line[len("data:"):].strip())
+            for line in resp.iter_lines()
+            if line.startswith("data:")
+        ]
+    assert len(frames) == 2
+    assert all(frame["job_id"] == "confirm-running" for frame in frames)
+    assert all(frame["job_type"] == "confirm" for frame in frames)
+    assert all(frame["done"] is True for frame in frames)
+
+    with client.stream("GET", "/dedupe/jobs/no-such-job/progress") as resp:
+        for line in resp.iter_lines():
+            if line.startswith("data:"):
+                assert json.loads(line[len("data:"):].strip()) == {"error": "not found"}
+                break

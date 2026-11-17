@@ -129,14 +129,10 @@ async def lifespan(app: FastAPI):
                 interrupted_background_jobs,
             )
 
-    # 启动白名单 job sweeper
-    from app.api.routes.whitelist_batch import _sweep_jobs as _sweep_whitelist_jobs
-    app.state.whitelist_job_sweeper = asyncio.create_task(_sweep_whitelist_jobs())
-    logger.info("白名单 sweeper 已启动")
-
-    from app.api.routes.dedupe import _sweep_jobs as _sweep_dedupe_jobs
-    app.state.dedupe_job_sweeper = asyncio.create_task(_sweep_dedupe_jobs())
-    logger.info("文件去重 sweeper 已启动")
+    # 启动后台任务记录清理循环（所有长任务共用一个）
+    from app.services.job_runner import sweep_expired_jobs
+    app.state.job_sweeper = asyncio.create_task(sweep_expired_jobs())
+    logger.info("后台任务清理循环已启动")
 
     downloader_sweepers: list[asyncio.Task] = []
     if _downloader_integration_enabled(settings):
@@ -167,12 +163,9 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    sweeper = getattr(app.state, "whitelist_job_sweeper", None)
+    sweeper = getattr(app.state, "job_sweeper", None)
     if sweeper is not None:
         sweeper.cancel()
-    dedupe_sweeper = getattr(app.state, "dedupe_job_sweeper", None)
-    if dedupe_sweeper is not None:
-        dedupe_sweeper.cancel()
     for downloader_sweeper in downloader_sweepers:
         downloader_sweeper.cancel()
     await asyncio.gather(*downloader_sweepers, return_exceptions=True)

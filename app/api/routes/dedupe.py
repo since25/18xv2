@@ -1,18 +1,13 @@
 from __future__ import annotations
 
-import asyncio
-from dataclasses import asdict
-from datetime import UTC, datetime
-import json
 import logging
-import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_db
+from app.api.deps import get_115_client, get_db
 from app.models.dedupe import DedupeCandidate, DedupeDeletePlan, DedupeDeletePlanItem, DedupeGroup
 from app.schemas.dedupe import (
     DedupeActiveJobsResponse,
@@ -32,28 +27,17 @@ from app.schemas.dedupe import (
     DedupeScanJobRequest,
 )
 from app.services.background_job_service import BackgroundJobService
+from app.services.client_115.client import Real115Client
 from app.services.dedupe.normalization import DedupeRuleSet
 from app.services.dedupe.confirmation_service import DedupeConfirmationService
 from app.services.dedupe.delete_plan_service import DedupeDeletePlanService
 from app.services.dedupe.scan_service import DedupeScanOptions, DedupeScanService
+from app.services.job_runner import JobAlreadyRunning, create_job, job_event_stream, submit_job
 
 router = APIRouter(prefix="/dedupe", tags=["dedupe"])
 logger = logging.getLogger(__name__)
 
-_scan_lock = asyncio.Lock()
-_confirm_lock = asyncio.Lock()
-_delete_lock = asyncio.Lock()
-_JOB_RETENTION_SECONDS = 600
-_SWEEP_INTERVAL_SECONDS = 60
-# 兼容旧测试/旧进程的内存 fallback；正式状态以 background_jobs 表为准。
-_jobs: dict[str, dict] = {}
-
-
-def _new_job(job_type: str, db: Session) -> str:
-    job_id = str(uuid.uuid4())
-    state = BackgroundJobService.create(db, job_id, f"dedupe:{job_type}")
-    _jobs[job_id] = state
-    return job_id
+# 任务状态只认 background_jobs 表；库里任务类型带 dedupe: 前缀，对外展示时去掉。
 
 
 def _public_state(state: dict | None) -> dict | None:
@@ -69,26 +53,14 @@ def _public_state(state: dict | None) -> dict | None:
 
 @router.post("/scan-jobs")
 async def start_scan_job(payload: DedupeScanJobRequest, db: Session = Depends(get_db)) -> dict:
-    if _scan_lock.locked():
-        raise HTTPException(status_code=409, detail="已有去重扫描任务在运行")
-    job_id = _new_job("scan", db)
-    asyncio.create_task(_run_scan_job(job_id, payload))
-    return {"job_id": job_id, "status": "pending"}
-
-
-async def _run_scan_job(job_id: str, payload: DedupeScanJobRequest) -> None:
-    async with _scan_lock:
-        await asyncio.to_thread(_blocking_scan, job_id, payload)
-
-
-def _blocking_scan(job_id: str, payload: DedupeScanJobRequest) -> None:
-    from app.db.session import SessionLocal
-
-    session = SessionLocal()
     try:
-        BackgroundJobService.update(session, job_id, stage="本地文件名扫描", current=0, total=0)
-        service = DedupeScanService(session)
-        summary = service.scan(
+        job_id = create_job(db, "dedupe:scan")
+    except JobAlreadyRunning:
+        raise HTTPException(status_code=409, detail="已有去重扫描任务在运行")
+
+    def work(session, cb):
+        cb("本地文件名扫描", 0, 0)
+        summary = DedupeScanService(session).scan(
             DedupeScanOptions(
                 tree_import_id=payload.tree_import_id,
                 scope_path_prefix=payload.scope_path_prefix,
@@ -101,50 +73,32 @@ def _blocking_scan(job_id: str, payload: DedupeScanJobRequest) -> None:
                 ),
             )
         )
-        BackgroundJobService.update(
-            session, job_id, stage="完成", current=summary.total_files,
-            total=summary.total_files, done=True, summary=asdict(summary),
-            finished_at=datetime.now(UTC),
-        )
-    except Exception as exc:
-        logger.exception("dedupe scan job %s failed", job_id)
-        BackgroundJobService.update(session, job_id, stage="失败", error=str(exc), done=True, finished_at=datetime.now(UTC))
-    finally:
-        session.close()
+        cb("完成", summary.total_files, summary.total_files)
+        return summary
 
-
-@router.post("/confirm-jobs")
-async def start_confirm_job(payload: DedupeConfirmJobRequest, db: Session = Depends(get_db)) -> dict:
-    if _confirm_lock.locked():
-        raise HTTPException(status_code=409, detail="已有去重确认任务在运行")
-    job_id = _new_job("confirm", db)
-    asyncio.create_task(_run_confirm_job(job_id, payload))
+    submit_job(job_id, work)
     return {"job_id": job_id, "status": "pending"}
 
 
-async def _run_confirm_job(job_id: str, payload: DedupeConfirmJobRequest) -> None:
-    async with _confirm_lock:
-        await asyncio.to_thread(_blocking_confirm, job_id, payload)
-
-
-def _blocking_confirm(job_id: str, payload: DedupeConfirmJobRequest) -> None:
-    from app.db.session import SessionLocal
-    from app.services.client_115.client import Real115Client
-
-    session = SessionLocal()
+@router.post("/confirm-jobs")
+async def start_confirm_job(
+    payload: DedupeConfirmJobRequest,
+    db: Session = Depends(get_db),
+    client: Real115Client = Depends(get_115_client),
+) -> dict:
     try:
-        BackgroundJobService.update(session, job_id, stage="远端确认", current=0, total=len(payload.candidate_ids))
-        summary = DedupeConfirmationService(session, Real115Client()).confirm_candidates(payload.candidate_ids)
-        BackgroundJobService.update(
-            session, job_id, stage="完成", current=summary.requested,
-            total=summary.requested, done=True, summary=asdict(summary),
-            finished_at=datetime.now(UTC),
-        )
-    except Exception as exc:
-        logger.exception("dedupe confirm job %s failed", job_id)
-        BackgroundJobService.update(session, job_id, stage="失败", error=str(exc), done=True, finished_at=datetime.now(UTC))
-    finally:
-        session.close()
+        job_id = create_job(db, "dedupe:confirm")
+    except JobAlreadyRunning:
+        raise HTTPException(status_code=409, detail="已有去重确认任务在运行")
+
+    def work(session, cb):
+        cb("远端确认", 0, len(payload.candidate_ids))
+        summary = DedupeConfirmationService(session, client).confirm_candidates(payload.candidate_ids)
+        cb("完成", summary.requested, summary.requested)
+        return summary
+
+    submit_job(job_id, work)
+    return {"job_id": job_id, "status": "pending"}
 
 
 @router.post("/delete-plans")
@@ -191,62 +145,35 @@ def get_delete_plan(plan_id: int, db: Session = Depends(get_db)) -> DedupeDelete
 
 
 @router.post("/delete-plans/{plan_id}/execute-jobs")
-async def start_delete_job(plan_id: int, payload: DedupeDeletePlanExecuteRequest, db: Session = Depends(get_db)) -> dict:
+async def start_delete_job(
+    plan_id: int,
+    payload: DedupeDeletePlanExecuteRequest,
+    db: Session = Depends(get_db),
+    client: Real115Client = Depends(get_115_client),
+) -> dict:
     if not payload.confirm:
         raise HTTPException(status_code=400, detail="confirm must be true")
-    if _delete_lock.locked():
-        raise HTTPException(status_code=409, detail="已有去重删除任务在运行")
-    job_id = _new_job("delete", db)
-    asyncio.create_task(_run_delete_job(job_id, plan_id))
-    return {"job_id": job_id, "status": "pending"}
-
-
-async def _run_delete_job(job_id: str, plan_id: int) -> None:
-    async with _delete_lock:
-        await asyncio.to_thread(_blocking_delete, job_id, plan_id)
-
-
-def _blocking_delete(job_id: str, plan_id: int) -> None:
-    from app.db.session import SessionLocal
-    from app.services.client_115.client import Real115Client
-
-    session = SessionLocal()
     try:
-        BackgroundJobService.update(session, job_id, stage="限流删除", current=0, total=0)
-        summary = DedupeDeletePlanService(session, Real115Client()).execute_plan(plan_id, confirm=True)
-        BackgroundJobService.update(
-            session, job_id, stage="完成", current=summary.total,
-            total=summary.total, done=True, summary=asdict(summary),
-            finished_at=datetime.now(UTC),
-        )
-    except Exception as exc:
-        logger.exception("dedupe delete job %s failed", job_id)
-        BackgroundJobService.update(session, job_id, stage="失败", error=str(exc), done=True, finished_at=datetime.now(UTC))
-    finally:
-        session.close()
+        job_id = create_job(db, "dedupe:delete")
+    except JobAlreadyRunning:
+        raise HTTPException(status_code=409, detail="已有去重删除任务在运行")
+
+    def work(session, cb):
+        cb("限流删除", 0, 0)
+        summary = DedupeDeletePlanService(session, client).execute_plan(plan_id, confirm=True)
+        cb("完成", summary.total, summary.total)
+        return summary
+
+    submit_job(job_id, work)
+    return {"job_id": job_id, "status": "pending"}
 
 
 @router.get("/jobs/{job_id}/progress")
 async def job_progress(job_id: str) -> StreamingResponse:
-    async def event_stream():
-        sent_done_once = False
-        while True:
-            from app.db.session import SessionLocal
-            with SessionLocal() as session:
-                state = BackgroundJobService.get(session, job_id)
-            if state is None:
-                state = _jobs.get(job_id)
-            if state is None:
-                yield f"data: {json.dumps({'error': 'not found'})}\n\n"
-                break
-            yield f"data: {json.dumps(_public_state(state), ensure_ascii=False)}\n\n"
-            if state["done"]:
-                if sent_done_once:
-                    break
-                sent_done_once = True
-            await asyncio.sleep(1)
-
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+    return StreamingResponse(
+        job_event_stream(job_id, transform=_public_state),
+        media_type="text/event-stream",
+    )
 
 
 @router.get("/jobs/active", response_model=DedupeActiveJobsResponse)
@@ -266,30 +193,8 @@ def _active_job(job_type: str) -> DedupeJobFrame | None:
              if item["job_type"] == f"dedupe:{job_type}"),
             None,
         )
-    if job is None:
-        job = next(
-            (item for item in _jobs.values()
-             if item.get("job_type") == job_type and not item.get("done")),
-            None,
-        )
     public = _public_state(job)
     return DedupeJobFrame.model_validate(public) if public else None
-
-
-async def _sweep_jobs() -> None:
-    while True:
-        try:
-            await asyncio.sleep(_SWEEP_INTERVAL_SECONDS)
-            now = datetime.now(UTC)
-            from app.db.session import SessionLocal
-            with SessionLocal() as session:
-                removed = BackgroundJobService.purge_expired(session, _JOB_RETENTION_SECONDS)
-            if removed:
-                logger.info("dedupe sweep: removed %d completed jobs", removed)
-        except asyncio.CancelledError:
-            break
-        except Exception:
-            logger.exception("dedupe sweep cycle failed")
 
 
 @router.get("/groups", response_model=DedupeGroupListResponse)

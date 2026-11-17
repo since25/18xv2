@@ -52,6 +52,24 @@ def test_scan_rejects_concurrent(client, db_session, monkeypatch):
     assert response.status_code == 409
 
 
+def test_scan_submits_background_job(client, db_session, monkeypatch):
+    """扫描接口建任务记录后交给统一启动器在后台执行，返回 202 和任务编号。"""
+    from app.api.routes import jellyfin as jellyfin_routes
+
+    monkeypatch.setenv("JELLYFIN_ENABLED", "true")
+    get_settings.cache_clear()
+    submitted: list[str] = []
+    monkeypatch.setattr(jellyfin_routes, "submit_job", lambda job_id, work: submitted.append(job_id))
+
+    response = client.post("/jellyfin/scan")
+
+    assert response.status_code == 202
+    job_id = response.json()["job_id"]
+    assert submitted == [job_id]
+    row = db_session.get(BackgroundJob, job_id)
+    assert row is not None and row.job_type == "jellyfin:scan" and row.done is False
+
+
 def test_sync_409_without_api_key(client, monkeypatch):
     monkeypatch.setenv("JELLYFIN_ENABLED", "true")
     monkeypatch.delenv("JELLYFIN_API_KEY", raising=False)
