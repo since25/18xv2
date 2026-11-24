@@ -3,7 +3,7 @@
 所有脚本在项目根目录下运行，依赖 `.venv`：
 
 ```bash
-cd /Users/wangyichuan/Desktop/wangcodemac/18x_v2
+cd /Users/wangyichuan/Developer/wangcodemac/18x_v2
 source .venv/bin/activate
 ```
 

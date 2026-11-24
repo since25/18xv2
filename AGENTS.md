@@ -7,7 +7,7 @@
 
 ## 项目背景
 这是对 18x_rawdata 项目的重构版本（18x_v2）。
-原项目路径：/Users/wangyichuan/Desktop/wangcodemac/18x_rawdata
+原项目路径：/Users/wangyichuan/Developer/wangcodemac/18x_rawdata
 
 ## 开发环境
 - 开发机：macOS（本地）

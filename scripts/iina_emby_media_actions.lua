@@ -7,9 +7,9 @@
 local mp = require("mp")
 
 local helper = os.getenv("EMBY_MEDIA_ACTIONS_HELPER")
-  or "/Users/wangyichuan/Desktop/wangcodemac/18x_v2/scripts/emby_media_action_shortcut.py"
+  or "/Users/wangyichuan/Developer/wangcodemac/18x_v2/scripts/emby_media_action_shortcut.py"
 local python = os.getenv("EMBY_MEDIA_ACTIONS_PYTHON")
-  or "/Users/wangyichuan/Desktop/wangcodemac/18x_v2/.venv/bin/python"
+  or "/Users/wangyichuan/Developer/wangcodemac/18x_v2/.venv/bin/python"
 local base_url = os.getenv("EMBY_MEDIA_ACTIONS_BASE_URL")
   or "http://192.168.70.138:8010/api"
 local log_path = os.getenv("EMBY_MEDIA_ACTIONS_LOG")

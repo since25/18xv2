@@ -17,7 +17,7 @@ docker/
 ## 本地开发
 
 ```bash
-cd /Users/wangyichuan/Desktop/wangcodemac/18x_v2
+cd /Users/wangyichuan/Developer/wangcodemac/18x_v2
 cp .env.example .env   # 填写 115 凭据（如有）
 
 # 开发模式（热重载，源码挂载）
@@ -45,7 +45,7 @@ curl http://127.0.0.1:8000/healthz
 - 如果你已有 SQLite 历史数据，先完成一次 PostgreSQL 初始化和 Alembic 建表，再执行迁移脚本：
 
 ```bash
-cd /Users/wangyichuan/Desktop/wangcodemac/18x_v2
+cd /Users/wangyichuan/Developer/wangcodemac/18x_v2
 python scripts/migrate_sqlite_to_postgres.py \
   --sqlite-url sqlite:///./data/storage_organizer.db \
   --postgres-url postgresql+psycopg://postgres:postgres@127.0.0.1:5432/organizer
