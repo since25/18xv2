@@ -161,6 +161,36 @@ def test_job_view_alert_from_latest_failed_run(client: TestClient, db_session: S
     assert move["latest_run"] is None
 
 
+def test_put_site_session_then_get_shows_configured_without_cookie(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    monkeypatch.setenv("SEHUATANG_SESSION_PATH", str(tmp_path / "site_session.json"))
+    get_settings.cache_clear()
+    before = client.get("/script-jobs").json()["items"][0]["site_session"]
+    assert before == {"configured": False, "updated_at": None}
+
+    response = client.put(
+        "/script-jobs/sehuatang/site-session",
+        json={"cookie": "cf_clearance=SECRET-COOKIE-123; a=1", "user_agent": "Mozilla/5.0 Test Agent"},
+    )
+    assert response.status_code == 200
+    assert response.json()["configured"] is True
+    listing = client.get("/script-jobs")
+    assert listing.json()["items"][0]["site_session"]["configured"] is True
+    assert listing.json()["items"][1]["site_session"] is None
+    assert "SECRET-COOKIE-123" not in listing.text
+    assert "SECRET-COOKIE-123" not in response.text
+
+
+def test_put_site_session_rejects_garbage_cookie(client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    monkeypatch.setenv("SEHUATANG_SESSION_PATH", str(tmp_path / "site_session.json"))
+    get_settings.cache_clear()
+    response = client.put(
+        "/script-jobs/sehuatang/site-session", json={"cookie": "garbage", "user_agent": "Mozilla/5.0 Test Agent"}
+    )
+    assert response.status_code == 400
+
+
 def test_changes_endpoint_lists_latest_first(client: TestClient) -> None:
     client.put("/script-jobs/sehuatang", json={"run_time": "02:00"})
     client.put("/script-jobs/sehuatang", json={"run_time": "03:00"})

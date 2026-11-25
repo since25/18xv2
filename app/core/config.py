@@ -96,6 +96,11 @@ class Settings(BaseSettings):
 
     # 脚本中心：每次运行的日志和输入输出文件都放在这里（保留 30 天）
     script_jobs_dir: str = Field(default="data/script-jobs", alias="SCRIPT_JOBS_DIR")
+    # sehuatang：qB 接口凭证（只放 .env，页面不显示）；站点 cookie 和 User-Agent 存在这个文件里
+    qb_url: str | None = Field(default=None, alias="QB_URL")
+    qb_username: str | None = Field(default=None, alias="QB_USERNAME")
+    qb_password: str | None = Field(default=None, alias="QB_PASSWORD")
+    sehuatang_session_path: str = Field(default="data/sehuatang/site_session.json", alias="SEHUATANG_SESSION_PATH")
 
     # 115 cookies（供 p115client.P115Client 使用，区别于 Open API token）
     cookies_path: str = Field(default="data/cookies/cookie.txt", alias="COOKIES_PATH")

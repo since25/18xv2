@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import select
@@ -15,13 +16,21 @@ from app.schemas.script_jobs import (
     ScriptJobRunStarted,
     ScriptJobUpdate,
     ScriptJobView,
+    SiteSessionStatus,
+    SiteSessionUpdate,
 )
+from app.core.config import get_settings
 from app.services.script_jobs import config_service, run_store
 from app.services.script_jobs.definitions import get_definition
 from app.services.script_jobs.runner import JobBusy, ScriptJobRunner
+from app.services.script_jobs.site_session import save_site_session, site_session_status
 
 
 router = APIRouter(tags=["script-jobs"])
+
+
+def _session_path() -> Path:
+    return Path(get_settings().sehuatang_session_path)
 
 
 def get_script_job_runner(request: Request) -> ScriptJobRunner:
@@ -70,6 +79,7 @@ def _job_view(db: Session, config: ScriptJobConfig, now: datetime) -> dict[str, 
         "active_run": run_store.run_response(active_run) if active_run is not None else None,
         "latest_run": run_store.run_response(latest_run) if latest_run is not None else None,
         "alert": alert,
+        "site_session": site_session_status(_session_path()) if config.job_name == "sehuatang" else None,
     }
 
 
@@ -84,6 +94,16 @@ def _get_config_or_404(db: Session, job_name: str) -> ScriptJobConfig:
 def list_script_jobs(db: Session = Depends(get_db)) -> dict[str, object]:
     now = datetime.now(UTC)
     return {"items": [_job_view(db, config, now) for config in config_service.list_configs(db)]}
+
+
+@router.put("/script-jobs/sehuatang/site-session", response_model=SiteSessionStatus)
+def update_sehuatang_site_session(payload: SiteSessionUpdate) -> dict[str, object]:
+    """保存 sehuatang 站点 cookie 和浏览器 User-Agent；响应里不含 cookie。"""
+    try:
+        save_site_session(_session_path(), payload.cookie, payload.user_agent)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return site_session_status(_session_path())
 
 
 @router.put("/script-jobs/{job_name}", response_model=ScriptJobView)

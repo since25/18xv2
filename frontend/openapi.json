@@ -8513,6 +8513,16 @@
           "runnable": {
             "title": "Runnable",
             "type": "boolean"
+          },
+          "site_session": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SiteSessionStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -9188,6 +9198,52 @@
           "score"
         ],
         "title": "SimilarKeywordSuggestionResponse",
+        "type": "object"
+      },
+      "SiteSessionStatus": {
+        "description": "只有是否已设置和更新时间，永远不含 cookie 内容。",
+        "properties": {
+          "configured": {
+            "title": "Configured",
+            "type": "boolean"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "required": [
+          "configured",
+          "updated_at"
+        ],
+        "title": "SiteSessionStatus",
+        "type": "object"
+      },
+      "SiteSessionUpdate": {
+        "properties": {
+          "cookie": {
+            "minLength": 1,
+            "title": "Cookie",
+            "type": "string"
+          },
+          "user_agent": {
+            "minLength": 10,
+            "title": "User Agent",
+            "type": "string"
+          }
+        },
+        "required": [
+          "cookie",
+          "user_agent"
+        ],
+        "title": "SiteSessionUpdate",
         "type": "object"
       },
       "StrategyAnalyzeRequest": {
@@ -15770,6 +15826,48 @@
           }
         },
         "summary": "List Script Jobs",
+        "tags": [
+          "script-jobs"
+        ]
+      }
+    },
+    "/script-jobs/sehuatang/site-session": {
+      "put": {
+        "description": "保存 sehuatang 站点 cookie 和浏览器 User-Agent；响应里不含 cookie。",
+        "operationId": "update_sehuatang_site_session_script_jobs_sehuatang_site_session_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SiteSessionUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SiteSessionStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Sehuatang Site Session",
         "tags": [
           "script-jobs"
         ]

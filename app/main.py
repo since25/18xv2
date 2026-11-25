@@ -73,7 +73,8 @@ def _start_script_jobs(app: FastAPI, settings) -> asyncio.Task | None:
         if not {"script_runs", "script_job_configs"}.issubset(table_names):
             logger.info("脚本中心数据表不存在，跳过脚本调度")
             return None
-        base_dir = Path(settings.script_jobs_dir)
+        # 子进程在各自的运行目录里启动，这里必须用绝对路径
+        base_dir = Path(settings.script_jobs_dir).resolve()
         runner = ScriptJobRunner(SessionLocal, base_dir)
         interrupted = runner.recover_on_startup()
         if interrupted:

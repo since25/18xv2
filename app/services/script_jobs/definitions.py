@@ -132,6 +132,19 @@ class JobDefinition:
     finalize: Callable[[Session, RunContext, int], RunOutcome] | None = None
 
 
+def _sehuatang_prepare(db: Session, ctx: RunContext) -> PreparedCommand:
+    # 延迟导入，避免 definitions 与 sehuatang_task 循环引用
+    from app.services.script_jobs import sehuatang_task
+
+    return sehuatang_task.prepare(db, ctx)
+
+
+def _sehuatang_finalize(db: Session, ctx: RunContext, exit_code: int) -> RunOutcome:
+    from app.services.script_jobs import sehuatang_task
+
+    return sehuatang_task.finalize(db, ctx, exit_code)
+
+
 DEFINITIONS: dict[str, JobDefinition] = {
     "sehuatang": JobDefinition(
         name="sehuatang",
@@ -146,6 +159,8 @@ DEFINITIONS: dict[str, JobDefinition] = {
             "forum_url": "https://sehuatang.org/forum.php?mod=forumdisplay&fid=2&typeid=684&filter=typeid&page={page}",
             "qb_category": "国产BT",
         },
+        prepare=_sehuatang_prepare,
+        finalize=_sehuatang_finalize,
     ),
     "MOVE_SSD_CACHE_TO_DISK2": JobDefinition(
         name="MOVE_SSD_CACHE_TO_DISK2",

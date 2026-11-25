@@ -1357,6 +1357,7 @@ export interface components {
       active_run: components['schemas']['ScriptRunResponse'] | null
       latest_run: components['schemas']['ScriptRunResponse'] | null
       alert: string | null
+      site_session: components['schemas']['SiteSessionStatus'] | null
     }
     'ScriptRunCounts': {
       deleted_dirs?: number
@@ -1461,6 +1462,14 @@ export interface components {
       matched_entry_id: number
       matched_canonical_name: string
       score: number
+    }
+    'SiteSessionStatus': {
+      configured: boolean
+      updated_at: string | null
+    }
+    'SiteSessionUpdate': {
+      cookie: string
+      user_agent: string
     }
     'StrategyAnalyzeRequest': {
       node_ids?: number[] | null

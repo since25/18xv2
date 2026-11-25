@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.schemas.script_runs import ScriptRunResponse
 
@@ -14,6 +14,18 @@ class ScriptJobUpdate(BaseModel):
     run_time: str | None = None
     executor: str | None = None
     params: dict[str, Any] | None = None
+
+
+class SiteSessionStatus(BaseModel):
+    """只有是否已设置和更新时间，永远不含 cookie 内容。"""
+
+    configured: bool
+    updated_at: str | None
+
+
+class SiteSessionUpdate(BaseModel):
+    cookie: str = Field(min_length=1)
+    user_agent: str = Field(min_length=10)
 
 
 class ScriptJobView(BaseModel):
@@ -28,6 +40,7 @@ class ScriptJobView(BaseModel):
     active_run: ScriptRunResponse | None = None
     latest_run: ScriptRunResponse | None = None
     alert: str | None = None
+    site_session: SiteSessionStatus | None = None
 
 
 class ScriptJobListResponse(BaseModel):
