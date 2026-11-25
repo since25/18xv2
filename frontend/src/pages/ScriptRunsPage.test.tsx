@@ -1,40 +1,33 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import type { ScriptRun, ScriptRunCounts, ScriptRunSummary } from '@/api/scriptRuns'
+import type { ScriptRunSummary } from '@/api/scriptRuns'
+import { ZERO, buttonName, makeJob, makeRun } from './scriptCenter/testData'
 
 const getScriptRunSummary = vi.fn()
 const listScriptRuns = vi.fn()
 const listScriptRunItems = vi.fn()
+const stopScriptRun = vi.fn()
+const getScriptRunLog = vi.fn()
+const listScriptJobs = vi.fn()
+const startScriptJobRun = vi.fn()
 
 vi.mock('@/api/scriptRuns', () => ({
   getScriptRunSummary: (...args: unknown[]) => getScriptRunSummary(...args),
   listScriptRuns: (...args: unknown[]) => listScriptRuns(...args),
   listScriptRunItems: (...args: unknown[]) => listScriptRunItems(...args),
+  stopScriptRun: (...args: unknown[]) => stopScriptRun(...args),
+  getScriptRunLog: (...args: unknown[]) => getScriptRunLog(...args),
+}))
+
+vi.mock('@/api/scriptJobs', () => ({
+  listScriptJobs: (...args: unknown[]) => listScriptJobs(...args),
+  startScriptJobRun: (...args: unknown[]) => startScriptJobRun(...args),
+  updateScriptJob: vi.fn(),
+  updateSiteSession: vi.fn(),
 }))
 
 const { default: ScriptRunsPage } = await import('./ScriptRunsPage')
-
-const ZERO: ScriptRunCounts = {
-  deleted_dirs: 0, deleted_files: 0, empty_dirs: 0, moved_new: 0, moved_rescan: 0, ambiguous: 0,
-  skipped: 0, errors: 0, warnings: 0, unparsed_lines: 0, moved: 0, duplicates_removed: 0, failed: 0,
-}
-
-function makeRun(overrides: Partial<ScriptRun> = {}): ScriptRun {
-  return {
-    id: 1,
-    run_key: 'DEL_SOMETHING:1',
-    script_name: 'DEL_SOMETHING',
-    started_at: '2026-11-01T04:09:00Z',
-    finished_at: '2026-11-01T04:10:00Z',
-    exit_code: 0,
-    status: 'success',
-    counts: { ...ZERO, deleted_dirs: 6, deleted_files: 44, moved_new: 12, moved_rescan: 2 },
-    items_truncated: false,
-    received_at: '2026-11-01T04:10:01Z',
-    ...overrides,
-  }
-}
 
 function makeSummary(overrides: Partial<ScriptRunSummary> = {}): ScriptRunSummary {
   return {
@@ -44,8 +37,8 @@ function makeSummary(overrides: Partial<ScriptRunSummary> = {}): ScriptRunSummar
       { date: '2026-11-01', has_run: true, cleaned: 50, moved_new: 12 },
     ],
     scripts: [
-      { script_name: 'DEL_SOMETHING', expected_time: '12:09', latest_run: null, today_status: 'success' },
-      { script_name: 'MOVE_SSD_CACHE_TO_DISK2', expected_time: '01:01', latest_run: null, today_status: 'missing' },
+      { script_name: 'DEL_SOMETHING', expected_time: '12:09', executor: 'unraid', enabled: false, latest_run: null, today_status: 'success' },
+      { script_name: 'MOVE_SSD_CACHE_TO_DISK2', expected_time: '01:01', executor: 'unraid', enabled: false, latest_run: null, today_status: 'missing' },
     ],
     ...overrides,
   }
@@ -53,6 +46,8 @@ function makeSummary(overrides: Partial<ScriptRunSummary> = {}): ScriptRunSummar
 
 describe('ScriptRunsPage', () => {
   beforeEach(() => {
+    listScriptJobs.mockResolvedValue({ items: [makeJob({ executor: 'unraid', enabled: false })] })
+    startScriptJobRun.mockResolvedValue({ run_id: 50, status: 'running' })
     getScriptRunSummary.mockResolvedValue(makeSummary())
     listScriptRuns.mockResolvedValue({ total: 1, items: [makeRun()] })
     listScriptRunItems.mockImplementation((_id: number, params: { kind?: string }) =>
@@ -118,5 +113,47 @@ describe('ScriptRunsPage', () => {
     render(<ScriptRunsPage />)
     expect(await screen.findByText('还没有收到脚本回报')).toBeTruthy()
     expect(await screen.findByText(/统计加载失败：网络错误/)).toBeTruthy()
+  })
+
+  it('页面名称改为脚本中心，sehuatang 有告警时显示红条', async () => {
+    listScriptJobs.mockResolvedValue({
+      items: [makeJob({ alert: '站点 cookie 可能失效：列表页全部失败' })],
+    })
+    render(<ScriptRunsPage />)
+    expect(await screen.findByText(/站点 cookie 可能失效：列表页全部失败/)).toBeTruthy()
+    expect(screen.getByText(/到设置里更换站点 cookie/)).toBeTruthy()
+    expect(screen.getAllByText('脚本中心').length).toBeGreaterThan(0)
+  })
+
+  it('运行中的记录 finished_at 为空时不报错，并标出演练和手动', async () => {
+    listScriptRuns.mockResolvedValue({
+      total: 1,
+      items: [
+        makeRun({
+          id: 7,
+          script_name: 'sehuatang',
+          status: 'running',
+          finished_at: null,
+          exit_code: null,
+          trigger: 'manual',
+          dry_run: true,
+          counts: { ...ZERO },
+        }),
+      ],
+    })
+    render(<ScriptRunsPage />)
+    expect(await screen.findByText('运行中')).toBeTruthy()
+    expect(screen.getByText('演练')).toBeTruthy()
+    expect(screen.getByText('手动')).toBeTruthy()
+    expect(screen.queryByText(/退出码/)).toBeNull()
+  })
+
+  it('演练确认后调用接口并刷新任务', async () => {
+    render(<ScriptRunsPage />)
+    const box = await screen.findByTestId('job-card-sehuatang')
+    fireEvent.click(within(box).getByRole('button', { name: buttonName('演练') }))
+    fireEvent.click(screen.getByRole('button', { name: buttonName('确定') }))
+    await waitFor(() => expect(startScriptJobRun).toHaveBeenCalledWith('sehuatang', true))
+    await waitFor(() => expect(listScriptJobs.mock.calls.length).toBeGreaterThan(1))
   })
 })

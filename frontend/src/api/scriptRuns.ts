@@ -1,7 +1,12 @@
 import { api } from './client'
+import type { components } from './schema.gen'
 
-export type ScriptRunStatus = 'success' | 'warning' | 'failed'
-export type ScriptTodayStatus = ScriptRunStatus | 'pending' | 'missing'
+export type ScriptRun = components['schemas']['ScriptRunResponse']
+export type ScriptRunCounts = components['schemas']['ScriptRunCounts']
+export type ScriptRunStatus = ScriptRun['status']
+export type ScriptRunItem = components['schemas']['ScriptRunItemResponse']
+export type ScriptRunLogChunk = components['schemas']['ScriptRunLogChunk']
+export type ScriptTodayStatus = ScriptRunStatus | 'pending' | 'missing' | 'disabled' | 'not_tracked'
 export type ScriptRunItemKind =
   | 'deleted_dir'
   | 'deleted_file'
@@ -12,35 +17,11 @@ export type ScriptRunItemKind =
   | 'skipped'
   | 'error'
   | 'warning'
-
-export interface ScriptRunCounts {
-  deleted_dirs: number
-  deleted_files: number
-  empty_dirs: number
-  moved_new: number
-  moved_rescan: number
-  ambiguous: number
-  skipped: number
-  errors: number
-  warnings: number
-  unparsed_lines: number
-  moved: number
-  duplicates_removed: number
-  failed: number
-}
-
-export interface ScriptRun {
-  id: number
-  run_key: string
-  script_name: string
-  started_at: string
-  finished_at: string
-  exit_code: number
-  status: ScriptRunStatus
-  counts: ScriptRunCounts
-  items_truncated: boolean
-  received_at: string
-}
+  | 'submitted'
+  | 'title_blocked'
+  | 'torrent_blocked'
+  | 'submit_failed'
+  | 'parse_failed'
 
 export interface ScriptRunDay {
   date: string
@@ -49,24 +30,18 @@ export interface ScriptRunDay {
   moved_new: number
 }
 
+// 汇总接口没有声明响应模型，类型在这里手写
 export interface ScriptRunSummary {
   timezone: string
   days: ScriptRunDay[]
   scripts: Array<{
     script_name: string
     expected_time: string
+    executor: string
+    enabled: boolean
     latest_run: ScriptRun | null
     today_status: ScriptTodayStatus
   }>
-}
-
-export interface ScriptRunItem {
-  id: number
-  kind: ScriptRunItemKind
-  path: string | null
-  target_path: string | null
-  keyword: string | null
-  message: string | null
 }
 
 export interface ScriptRunItemsResponse {
@@ -91,4 +66,12 @@ export function listScriptRunItems(
   if (params.kind) query.set('kind', params.kind)
   if (params.q) query.set('q', params.q)
   return api.get<ScriptRunItemsResponse>(`/script-runs/${runId}/items?${query.toString()}`)
+}
+
+export function stopScriptRun(runId: number) {
+  return api.post<{ ok: boolean }>(`/script-runs/${runId}/stop`)
+}
+
+export function getScriptRunLog(runId: number, offset: number) {
+  return api.get<ScriptRunLogChunk>(`/script-runs/${runId}/log?offset=${offset}`)
 }

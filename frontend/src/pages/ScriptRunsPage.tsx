@@ -1,73 +1,33 @@
-import { useState } from 'react'
-import { Alert, Input, Space, Table, Tabs, Tag, Tooltip, Typography } from 'antd'
+import { useEffect, useState } from 'react'
+import { Alert, Input, Space, Table, Tabs, Tag, Tooltip, Typography, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import {
   getScriptRunSummary,
   listScriptRunItems,
   listScriptRuns,
+  stopScriptRun,
   type ScriptRun,
   type ScriptRunDay,
   type ScriptRunItem,
   type ScriptRunItemKind,
   type ScriptRunStatus,
   type ScriptRunSummary,
-  type ScriptTodayStatus,
 } from '@/api/scriptRuns'
+import { listScriptJobs, startScriptJobRun, type ScriptJob } from '@/api/scriptJobs'
 import PageScaffold from '@/layout/PageScaffold'
 import SurfacePanel from '@/layout/SurfacePanel'
 import TimeText from '@/components/TimeText'
 import { useApiQuery } from '@/hooks/useApiQuery'
+import JobCards from './scriptCenter/JobCards'
+import JobSettingsDrawer from './scriptCenter/JobSettingsDrawer'
+import RunLogPanel from './scriptCenter/RunLogPanel'
+import { KIND_LABELS, RUN_STATUS, TODAY_STATUS, describeRun, fullCounts, scriptLabel } from './scriptCenter/labels'
 
 const { Text } = Typography
 const PAGE_SIZE = 50
-
-const SCRIPT_LABELS: Record<string, string> = {
-  DEL_SOMETHING: '整理脚本',
-  MOVE_SSD_CACHE_TO_DISK2: '搬运脚本',
-}
-const RUN_STATUS: Record<ScriptRunStatus, { label: string; color: string }> = {
-  success: { label: '正常', color: 'success' },
-  warning: { label: '有警告', color: 'warning' },
-  failed: { label: '失败', color: 'error' },
-}
-const TODAY_STATUS: Record<ScriptTodayStatus, { label: string; color: string }> = {
-  ...RUN_STATUS,
-  pending: { label: '今天还没到运行时间', color: 'default' },
-  missing: { label: '今天没有运行记录', color: 'error' },
-}
-// 页签顺序：先看结果，再看问题
-const KIND_LABELS: Array<[ScriptRunItemKind, string]> = [
-  ['deleted_file', '清理-文件'],
-  ['deleted_dir', '清理-目录'],
-  ['moved_new', '新命中'],
-  ['moved_rescan', '重新归位'],
-  ['empty_dir', '空文件夹'],
-  ['error', '报错'],
-  ['warning', '警告'],
-  ['ambiguous', '词条歧义'],
-  ['skipped', '跳过'],
-]
-
-function scriptLabel(name: string) {
-  return SCRIPT_LABELS[name] ?? name
-}
-
-/** 一次运行的一句话结果 */
-function describeRun(run: ScriptRun) {
-  const c = run.counts
-  if (run.script_name === 'DEL_SOMETHING') {
-    const parts = [
-      `清理 ${c.deleted_dirs + c.deleted_files}（目录 ${c.deleted_dirs}，文件 ${c.deleted_files}）`,
-      `新命中 ${c.moved_new}`,
-    ]
-    if (c.moved_rescan > 0) parts.push(`重新归位 ${c.moved_rescan}`)
-    if (c.empty_dirs > 0) parts.push(`空文件夹 ${c.empty_dirs}`)
-    if (c.errors > 0) parts.push(`报错 ${c.errors}`)
-    if (c.warnings > 0) parts.push(`警告 ${c.warnings}`)
-    return parts.join('，')
-  }
-  return `移动 ${c.moved}，删除重复 ${c.duplicates_removed}，跳过 ${c.skipped}，失败 ${c.failed}`
-}
+// 有任务在跑时，卡片和运行记录每 5 秒刷新一次
+const ACTIVE_REFRESH_MS = 5000
+const TRIGGER_LABELS: Record<string, string | null> = { manual: '手动', scheduled: null, report: null }
 
 function DayBars({ title, days, valueOf }: { title: string; days: ScriptRunDay[]; valueOf: (day: ScriptRunDay) => number }) {
   const max = Math.max(1, ...days.map(valueOf))
@@ -137,7 +97,18 @@ function RunItems({ run }: { run: ScriptRun }) {
   if (kindCounts && available.length === 0) return <Text type="secondary">这次运行没有名单</Text>
 
   const isMove = activeKind === 'moved_new' || activeKind === 'moved_rescan'
-  const columns: ColumnsType<ScriptRunItem> = isMove
+  const isPost = run.script_name === 'sehuatang'
+  const columns: ColumnsType<ScriptRunItem> = isPost
+    ? [
+        {
+          title: '帖子',
+          dataIndex: 'path',
+          render: (value: string | null, item) =>
+            item.target_path ? <a href={item.target_path} target="_blank" rel="noreferrer">{value ?? item.target_path}</a> : value ?? '-',
+        },
+        { title: '命中词 / 说明', key: 'reason', width: 240, render: (_, item) => item.keyword ?? item.message ?? '-' },
+      ]
+    : isMove
     ? [
         { title: '来源', dataIndex: 'path', render: (value: string | null) => value ?? '-' },
         { title: '目标', dataIndex: 'target_path', render: (value: string | null) => value ?? '-' },
@@ -159,7 +130,7 @@ function RunItems({ run }: { run: ScriptRun }) {
       />
       <Input.Search
         allowClear
-        placeholder="在当前类别里搜索路径"
+        placeholder={isPost ? '在当前类别里搜索标题' : '在当前类别里搜索路径'}
         style={{ maxWidth: 360 }}
         onSearch={(value) => {
           setQ(value.trim())
@@ -186,8 +157,34 @@ function RunItems({ run }: { run: ScriptRun }) {
   )
 }
 
+function RunDetail({ run }: { run: ScriptRun }) {
+  if (!run.has_log) return <RunItems run={run} />
+  return (
+    <Tabs
+      size="small"
+      items={[
+        { key: 'items', label: '名单', children: <RunItems run={run} /> },
+        { key: 'log', label: '日志', children: <RunLogPanel key={run.id} runId={run.id} /> },
+      ]}
+    />
+  )
+}
+
+function errorText(err: unknown) {
+  return err instanceof Error ? err.message : String(err)
+}
+
 export default function ScriptRunsPage() {
   const [page, setPage] = useState(1)
+  const [settingsJob, setSettingsJob] = useState<ScriptJob | null>(null)
+  const [logRun, setLogRun] = useState<ScriptRun | null>(null)
+
+  const jobsQuery = useApiQuery(() => listScriptJobs().then((res) => res.items), [], {
+    silent: true,
+    initialData: [] as ScriptJob[],
+  })
+  const jobs = jobsQuery.data
+  const jobsError = jobsQuery.error ? jobsQuery.error.message : null
 
   // 统计与运行记录：出错都不弹提示，错误文字显示在各自的提示条里
   const summaryQuery = useApiQuery(() => getScriptRunSummary() as Promise<ScriptRunSummary | null>, [], {
@@ -206,18 +203,72 @@ export default function ScriptRunsPage() {
   const runsError = runsQuery.error ? runsQuery.error.message : null
   const runsLoading = runsQuery.loading
 
+  const reloadAll = () => {
+    void jobsQuery.reload({ silent: true })
+    void runsQuery.reload({ silent: true })
+    void summaryQuery.reload({ silent: true })
+  }
+
+  const hasActive = jobs.some((job) => job.active_run)
+  useEffect(() => {
+    if (!hasActive) return undefined
+    const timer = setInterval(() => {
+      void jobsQuery.reload({ silent: true })
+      void runsQuery.reload({ silent: true })
+    }, ACTIVE_REFRESH_MS)
+    return () => clearInterval(timer)
+    // reload 引用稳定；只在“是否有任务在跑”变化时重设定时器
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasActive])
+
+  const handleRun = async (job: ScriptJob, dryRun: boolean) => {
+    try {
+      await startScriptJobRun(job.job_name, dryRun)
+      message.success(dryRun ? '已开始演练' : '已开始运行')
+    } catch (err) {
+      message.error(errorText(err))
+    }
+    reloadAll()
+  }
+
+  const handleStop = async (runId: number) => {
+    try {
+      await stopScriptRun(runId)
+      message.success('已发送停止请求')
+    } catch (err) {
+      message.error(errorText(err))
+    }
+    reloadAll()
+  }
+
+  const alertJob = jobs.find((job) => job.job_name === 'sehuatang' && job.alert)
+
   const columns: ColumnsType<ScriptRun> = [
     { title: '时间', dataIndex: 'started_at', width: 180, render: (value: string) => <TimeText value={value} /> },
-    { title: '脚本', dataIndex: 'script_name', width: 100, render: scriptLabel },
+    {
+      title: '脚本',
+      dataIndex: 'script_name',
+      width: 150,
+      render: (value: string, run) => (
+        <Space size={4} wrap>
+          <span>{scriptLabel(value)}</span>
+          {run.dry_run && <Tag>演练</Tag>}
+          {TRIGGER_LABELS[run.trigger] && <Tag>{TRIGGER_LABELS[run.trigger]}</Tag>}
+        </Space>
+      ),
+    },
     {
       title: '结果',
       key: 'result',
       render: (_, run) => (
         <Space direction="vertical" size={0}>
-          <span>{describeRun(run)}</span>
-          {run.exit_code !== 0 && <Text type="danger">脚本中途退出，退出码 {run.exit_code}</Text>}
-          {run.counts.unparsed_lines > 0 && (
-            <Text type="warning">有 {run.counts.unparsed_lines} 行输出没能识别，统计可能不准，脚本输出格式可能变了</Text>
+          <span>{run.status === 'running' || run.status === 'queued' ? '进行中' : describeRun(run)}</span>
+          {run.error_reason && <Text type="danger">{run.error_reason}</Text>}
+          {run.exit_code !== null && run.exit_code !== 0 && run.trigger === 'report' && (
+            <Text type="danger">脚本中途退出，退出码 {run.exit_code}</Text>
+          )}
+          {fullCounts(run.counts).unparsed_lines > 0 && (
+            <Text type="warning">有 {fullCounts(run.counts).unparsed_lines} 行输出没能识别，统计可能不准，脚本输出格式可能变了</Text>
           )}
         </Space>
       ),
@@ -231,7 +282,34 @@ export default function ScriptRunsPage() {
   ]
 
   return (
-    <PageScaffold title="脚本日报" description="Unraid 上两个定时脚本每次运行的结果">
+    <PageScaffold title="脚本中心" description="定时脚本的运行、设置和每次运行的结果">
+      {alertJob && (
+        <Alert
+          type="error"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message={`${alertJob.label}：${alertJob.alert}`}
+          description="到设置里更换站点 cookie 后，可以先演练一次确认恢复。"
+        />
+      )}
+      {jobsError && <Alert type="error" showIcon message={`脚本加载失败：${jobsError}`} style={{ marginBottom: 16 }} />}
+
+      <SurfacePanel title="脚本" style={{ marginBottom: 16 }}>
+        <JobCards
+          jobs={jobs}
+          onRun={handleRun}
+          onStop={handleStop}
+          onSettings={setSettingsJob}
+          onShowLog={setLogRun}
+        />
+      </SurfacePanel>
+
+      {logRun && (
+        <SurfacePanel title={`实时日志：${scriptLabel(logRun.script_name)}`} style={{ marginBottom: 16 }}>
+          <RunLogPanel key={logRun.id} runId={logRun.id} />
+        </SurfacePanel>
+      )}
+
       {summaryError && <Alert type="error" showIcon message={`统计加载失败：${summaryError}`} style={{ marginBottom: 16 }} />}
 
       {summary && (
@@ -260,7 +338,7 @@ export default function ScriptRunsPage() {
           columns={columns}
           dataSource={runs.items}
           locale={{ emptyText: '还没有收到脚本回报' }}
-          expandable={{ expandedRowRender: (run) => <RunItems run={run} />, expandRowByClick: true }}
+          expandable={{ expandedRowRender: (run) => <RunDetail run={run} />, expandRowByClick: true }}
           pagination={{
             current: page,
             pageSize: PAGE_SIZE,
@@ -272,6 +350,17 @@ export default function ScriptRunsPage() {
           }}
         />
       </SurfacePanel>
+
+      <JobSettingsDrawer
+        key={settingsJob?.job_name ?? 'none'}
+        job={settingsJob}
+        open={settingsJob !== null}
+        onClose={() => setSettingsJob(null)}
+        onSaved={() => {
+          setSettingsJob(null)
+          reloadAll()
+        }}
+      />
     </PageScaffold>
   )
 }
