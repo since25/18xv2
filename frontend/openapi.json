@@ -8443,6 +8443,27 @@
       },
       "ScriptJobView": {
         "properties": {
+          "active_run": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ScriptRunResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "alert": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Alert"
+          },
           "enabled": {
             "title": "Enabled",
             "type": "boolean"
@@ -8458,6 +8479,16 @@
           "label": {
             "title": "Label",
             "type": "string"
+          },
+          "latest_run": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ScriptRunResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "next_run_at": {
             "anyOf": [

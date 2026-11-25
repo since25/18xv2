@@ -132,6 +132,35 @@ def test_log_endpoint_404_without_log(client: TestClient) -> None:
     assert client.get(f"/script-runs/{created.json()['id']}/log").status_code == 404
 
 
+def test_job_view_alert_from_latest_failed_run(client: TestClient, db_session: Session) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from app.models.script_runs import ScriptRun
+
+    now = datetime.now(UTC)
+    db_session.add_all(
+        [
+            ScriptRun(run_key="ok", script_name="sehuatang", started_at=now - timedelta(days=1),
+                      finished_at=now - timedelta(days=1), exit_code=0, status="success", counts={},
+                      trigger="scheduled"),
+            ScriptRun(run_key="bad", script_name="sehuatang", started_at=now - timedelta(hours=1),
+                      finished_at=now - timedelta(hours=1), exit_code=0, status="failed", counts={},
+                      trigger="scheduled", error_reason="站点 cookie 可能失效：列表页全部失败"),
+            ScriptRun(run_key="live", script_name="sehuatang", started_at=now, status="running", counts={},
+                      trigger="manual"),
+        ]
+    )
+    db_session.commit()
+    sehuatang = client.get("/script-jobs").json()["items"][0]
+    assert sehuatang["alert"] == "站点 cookie 可能失效：列表页全部失败"
+    assert sehuatang["latest_run"]["run_key"] == "bad"
+    assert sehuatang["active_run"]["run_key"] == "live"
+    move = client.get("/script-jobs").json()["items"][1]
+    assert move["alert"] is None
+    assert move["active_run"] is None
+    assert move["latest_run"] is None
+
+
 def test_changes_endpoint_lists_latest_first(client: TestClient) -> None:
     client.put("/script-jobs/sehuatang", json={"run_time": "02:00"})
     client.put("/script-jobs/sehuatang", json={"run_time": "03:00"})

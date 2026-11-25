@@ -1354,6 +1354,9 @@ export interface components {
       params: Record<string, unknown>
       runnable: boolean
       next_run_at: string | null
+      active_run: components['schemas']['ScriptRunResponse'] | null
+      latest_run: components['schemas']['ScriptRunResponse'] | null
+      alert: string | null
     }
     'ScriptRunCounts': {
       deleted_dirs?: number

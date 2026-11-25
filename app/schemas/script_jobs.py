@@ -4,6 +4,8 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from app.schemas.script_runs import ScriptRunResponse
+
 
 class ScriptJobUpdate(BaseModel):
     """修改脚本配置；不传的字段保持不变。"""
@@ -23,6 +25,9 @@ class ScriptJobView(BaseModel):
     params: dict[str, Any]
     runnable: bool
     next_run_at: str | None
+    active_run: ScriptRunResponse | None = None
+    latest_run: ScriptRunResponse | None = None
+    alert: str | None = None
 
 
 class ScriptJobListResponse(BaseModel):

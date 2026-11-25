@@ -57,6 +57,35 @@ async def _downloader_sync_loop(settings, kind: str) -> None:
         await asyncio.sleep(interval)
 
 
+def _start_script_jobs(app: FastAPI, settings) -> asyncio.Task | None:
+    """创建脚本执行器、清理上次残留的运行，并启动调度协程。缺表（旧库、测试库）时跳过。"""
+    from pathlib import Path
+
+    from sqlalchemy import inspect as _inspect
+
+    from app.db.session import SessionLocal
+    from app.services.script_jobs.runner import ScriptJobRunner
+    from app.services.script_jobs.scheduler import script_jobs_loop
+
+    try:
+        with SessionLocal() as session:
+            table_names = set(_inspect(session.bind).get_table_names())
+        if not {"script_runs", "script_job_configs"}.issubset(table_names):
+            logger.info("脚本中心数据表不存在，跳过脚本调度")
+            return None
+        base_dir = Path(settings.script_jobs_dir)
+        runner = ScriptJobRunner(SessionLocal, base_dir)
+        interrupted = runner.recover_on_startup()
+        if interrupted:
+            logger.info("脚本中心：%d 条运行因重启标记为中断", interrupted)
+    except Exception:  # noqa: BLE001 - 脚本中心出错不能阻止 18x 启动
+        logger.exception("脚本中心启动失败")
+        return None
+    app.state.script_job_runner = runner
+    logger.info("脚本调度循环已启动")
+    return asyncio.create_task(script_jobs_loop(runner, SessionLocal, base_dir))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """启动时创建 115 client 单例，仅读取本地 token 状态，不主动 refresh。"""
@@ -144,6 +173,8 @@ async def lifespan(app: FastAPI):
         app.state.downloader_task_sweeper = downloader_sweepers[1]
         logger.info("RN 下载器同步 sweeper 已启动（资源包与任务分开）")
 
+    script_jobs_task = _start_script_jobs(app, settings)
+
     jellyfin_daily_task: asyncio.Task | None = None
     jellyfin_cover_task: asyncio.Task | None = None
     if int(getattr(settings, "jellyfin_daily_run_hour", -1)) != -1:
@@ -169,6 +200,9 @@ async def lifespan(app: FastAPI):
     for downloader_sweeper in downloader_sweepers:
         downloader_sweeper.cancel()
     await asyncio.gather(*downloader_sweepers, return_exceptions=True)
+    if script_jobs_task is not None:
+        script_jobs_task.cancel()
+        await asyncio.gather(script_jobs_task, return_exceptions=True)
     if jellyfin_daily_task is not None:
         jellyfin_daily_task.cancel()
         await asyncio.gather(jellyfin_daily_task, return_exceptions=True)

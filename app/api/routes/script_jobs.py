@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
@@ -15,7 +16,7 @@ from app.schemas.script_jobs import (
     ScriptJobUpdate,
     ScriptJobView,
 )
-from app.services.script_jobs import config_service
+from app.services.script_jobs import config_service, run_store
 from app.services.script_jobs.definitions import get_definition
 from app.services.script_jobs.runner import JobBusy, ScriptJobRunner
 
@@ -39,8 +40,24 @@ def _iso(value: datetime | None) -> str | None:
     return value.astimezone(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
-def _job_view(config: ScriptJobConfig, now: datetime) -> dict[str, object]:
+def _latest_run(db: Session, job_name: str, *, active: bool) -> ScriptRun | None:
+    status_filter = (
+        ScriptRun.status.in_(run_store.ACTIVE_STATUSES) if active else ScriptRun.status.not_in(run_store.ACTIVE_STATUSES)
+    )
+    return db.scalar(
+        select(ScriptRun)
+        .where(ScriptRun.script_name == job_name, status_filter)
+        .order_by(ScriptRun.started_at.desc(), ScriptRun.id.desc())
+        .limit(1)
+    )
+
+
+def _job_view(db: Session, config: ScriptJobConfig, now: datetime) -> dict[str, object]:
     definition = get_definition(config.job_name)
+    active_run = _latest_run(db, config.job_name, active=True)
+    latest_run = _latest_run(db, config.job_name, active=False)
+    # 最近一次结束的运行失败时，在页面顶部提示原因（例如站点 cookie 失效），直到下一次成功
+    alert = latest_run.error_reason if latest_run is not None and latest_run.status == "failed" else None
     return {
         "job_name": config.job_name,
         "label": definition.label,
@@ -50,6 +67,9 @@ def _job_view(config: ScriptJobConfig, now: datetime) -> dict[str, object]:
         "params": config.params,
         "runnable": definition.runnable,
         "next_run_at": _iso(config_service.next_run_at(config, now)),
+        "active_run": run_store.run_response(active_run) if active_run is not None else None,
+        "latest_run": run_store.run_response(latest_run) if latest_run is not None else None,
+        "alert": alert,
     }
 
 
@@ -63,7 +83,7 @@ def _get_config_or_404(db: Session, job_name: str) -> ScriptJobConfig:
 @router.get("/script-jobs", response_model=ScriptJobListResponse)
 def list_script_jobs(db: Session = Depends(get_db)) -> dict[str, object]:
     now = datetime.now(UTC)
-    return {"items": [_job_view(config, now) for config in config_service.list_configs(db)]}
+    return {"items": [_job_view(db, config, now) for config in config_service.list_configs(db)]}
 
 
 @router.put("/script-jobs/{job_name}", response_model=ScriptJobView)
@@ -80,7 +100,7 @@ def update_script_job(job_name: str, payload: ScriptJobUpdate, db: Session = Dep
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return _job_view(config, datetime.now(UTC))
+    return _job_view(db, config, datetime.now(UTC))
 
 
 @router.get("/script-jobs/{job_name}/changes", response_model=ScriptJobChangeListResponse)
