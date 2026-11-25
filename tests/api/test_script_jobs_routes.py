@@ -56,6 +56,82 @@ def test_switch_to_18x_and_enable_sets_next_run_at(client: TestClient) -> None:
     assert body["next_run_at"] is not None
 
 
+@pytest.fixture
+def fake_runner(client: TestClient, db_session: Session, tmp_path):
+    from tests.script_jobs.runner_fakes import build_runner, make_definition
+
+    definitions = {
+        "sehuatang": make_definition("sehuatang", "sehuatang"),
+        "MOVE_SSD_CACHE_TO_DISK2": make_definition("MOVE_SSD_CACHE_TO_DISK2", "media"),
+        "DEL_SOMETHING": make_definition("DEL_SOMETHING", "media"),
+    }
+    runner, popen, killpg, clock = build_runner(db_session, tmp_path, definitions=definitions)
+    previous = getattr(app.state, "script_job_runner", None)
+    app.state.script_job_runner = runner
+    try:
+        yield runner, popen
+    finally:
+        app.state.script_job_runner = previous
+
+
+def test_manual_run_returns_201_then_409_when_busy(client: TestClient, fake_runner) -> None:
+    first = client.post("/script-jobs/sehuatang/runs", json={"dry_run": False})
+    assert first.status_code == 201
+    assert first.json()["status"] == "running"
+    second = client.post("/script-jobs/sehuatang/runs", json={"dry_run": True})
+    assert second.status_code == 409
+
+
+def test_manual_run_unknown_job_404(client: TestClient, fake_runner) -> None:
+    assert client.post("/script-jobs/NOPE/runs", json={"dry_run": True}).status_code == 404
+
+
+def test_stop_then_stop_again_conflicts(client: TestClient, fake_runner) -> None:
+    runner, popen = fake_runner
+    run_id = client.post("/script-jobs/sehuatang/runs", json={"dry_run": False}).json()["run_id"]
+    assert client.post(f"/script-runs/{run_id}/stop").status_code == 200
+    popen.procs[0].returncode = -15
+    runner.poll()
+    assert client.post(f"/script-runs/{run_id}/stop").status_code == 409
+
+
+def test_log_endpoint_reads_incrementally(client: TestClient, fake_runner, db_session: Session) -> None:
+    from pathlib import Path
+
+    from app.models.script_runs import ScriptRun
+
+    runner, popen = fake_runner
+    run_id = client.post("/script-jobs/sehuatang/runs", json={"dry_run": False}).json()["run_id"]
+    db_session.expire_all()
+    log_path = Path(db_session.get(ScriptRun, run_id).log_path)
+    log_path.write_bytes("第一页完成\n第二页".encode())
+
+    first = client.get(f"/script-runs/{run_id}/log?offset=0").json()
+    assert first == {"text": "第一页完成\n", "next_offset": len("第一页完成\n".encode()), "finished": False}
+
+    popen.procs[0].returncode = 0
+    runner.poll()
+    rest = client.get(f"/script-runs/{run_id}/log?offset={first['next_offset']}").json()
+    assert rest["text"] == "第二页"
+    assert rest["finished"] is True
+
+
+def test_log_endpoint_404_without_log(client: TestClient) -> None:
+    created = client.post(
+        "/script-runs",
+        json={
+            "run_key": "report-no-log",
+            "script_name": "DEL_SOMETHING",
+            "started_at": "2026-11-02T04:09:00Z",
+            "finished_at": "2026-11-02T04:10:00Z",
+            "exit_code": 0,
+            "counts": {},
+            "items": [],
+        },
+    )
+    assert client.get(f"/script-runs/{created.json()['id']}/log").status_code == 404
+
+
 def test_changes_endpoint_lists_latest_first(client: TestClient) -> None:
     client.put("/script-jobs/sehuatang", json={"run_time": "02:00"})
     client.put("/script-jobs/sehuatang", json={"run_time": "03:00"})

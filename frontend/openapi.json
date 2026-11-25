@@ -8360,6 +8360,35 @@
         "title": "ScriptJobListResponse",
         "type": "object"
       },
+      "ScriptJobRunRequest": {
+        "properties": {
+          "dry_run": {
+            "default": false,
+            "title": "Dry Run",
+            "type": "boolean"
+          }
+        },
+        "title": "ScriptJobRunRequest",
+        "type": "object"
+      },
+      "ScriptJobRunStarted": {
+        "properties": {
+          "run_id": {
+            "title": "Run Id",
+            "type": "integer"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "status"
+        ],
+        "title": "ScriptJobRunStarted",
+        "type": "object"
+      },
       "ScriptJobUpdate": {
         "description": "修改脚本配置；不传的字段保持不变。",
         "properties": {
@@ -8821,6 +8850,29 @@
           "kind_counts"
         ],
         "title": "ScriptRunItemsResponse",
+        "type": "object"
+      },
+      "ScriptRunLogChunk": {
+        "properties": {
+          "finished": {
+            "title": "Finished",
+            "type": "boolean"
+          },
+          "next_offset": {
+            "title": "Next Offset",
+            "type": "integer"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text",
+          "next_offset",
+          "finished"
+        ],
+        "title": "ScriptRunLogChunk",
         "type": "object"
       },
       "ScriptRunResponse": {
@@ -15798,6 +15850,59 @@
         ]
       }
     },
+    "/script-jobs/{job_name}/runs": {
+      "post": {
+        "description": "手动运行或演练一次。",
+        "operationId": "start_script_job_run_script_jobs__job_name__runs_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_name",
+            "required": true,
+            "schema": {
+              "title": "Job Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScriptJobRunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScriptJobRunStarted"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Script Job Run",
+        "tags": [
+          "script-jobs"
+        ]
+      }
+    },
     "/script-runs": {
       "get": {
         "operationId": "list_script_runs_script_runs_get",
@@ -16051,6 +16156,103 @@
           }
         },
         "summary": "List Script Run Items",
+        "tags": [
+          "script-runs"
+        ]
+      }
+    },
+    "/script-runs/{run_id}/log": {
+      "get": {
+        "operationId": "read_script_run_log_script_runs__run_id__log_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScriptRunLogChunk"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Read Script Run Log",
+        "tags": [
+          "script-runs"
+        ]
+      }
+    },
+    "/script-runs/{run_id}/stop": {
+      "post": {
+        "operationId": "stop_script_run_script_runs__run_id__stop_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Stop Script Run Script Runs  Run Id  Stop Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stop Script Run",
         "tags": [
           "script-runs"
         ]

@@ -29,6 +29,21 @@ class ScriptJobListResponse(BaseModel):
     items: list[ScriptJobView]
 
 
+class ScriptJobRunRequest(BaseModel):
+    dry_run: bool = False
+
+
+class ScriptJobRunStarted(BaseModel):
+    run_id: int
+    status: str
+
+
+class ScriptRunLogChunk(BaseModel):
+    text: str
+    next_offset: int
+    finished: bool
+
+
 class ScriptJobChange(BaseModel):
     id: int
     job_name: str

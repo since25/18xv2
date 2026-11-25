@@ -94,6 +94,9 @@ class Settings(BaseSettings):
         default_factory=list, alias="MEDIA_LIBRARY_STRM_ROOTS"
     )
 
+    # 脚本中心：每次运行的日志和输入输出文件都放在这里（保留 30 天）
+    script_jobs_dir: str = Field(default="data/script-jobs", alias="SCRIPT_JOBS_DIR")
+
     # 115 cookies（供 p115client.P115Client 使用，区别于 Open API token）
     cookies_path: str = Field(default="data/cookies/cookie.txt", alias="COOKIES_PATH")
 

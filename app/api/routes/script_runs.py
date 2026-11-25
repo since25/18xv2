@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, time, timedelta
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -16,7 +17,11 @@ from app.schemas.script_runs import (
     ScriptRunItemsResponse,
     ScriptRunResponse,
 )
+from app.api.routes.script_jobs import get_script_job_runner
+from app.schemas.script_jobs import ScriptRunLogChunk
 from app.services.script_jobs import config_service, run_store
+from app.services.script_jobs.logs import read_log
+from app.services.script_jobs.runner import RunNotActive, ScriptJobRunner
 
 
 router = APIRouter(tags=["script-runs"])
@@ -158,6 +163,35 @@ def list_script_runs(
         .limit(limit)
     ).all()
     return {"total": total, "items": [run_store.run_response(row) for row in rows]}
+
+
+@router.post("/script-runs/{run_id}/stop")
+def stop_script_run(
+    run_id: int,
+    db: Session = Depends(get_db),
+    runner: ScriptJobRunner = Depends(get_script_job_runner),
+) -> dict[str, object]:
+    if db.get(ScriptRun, run_id) is None:
+        raise HTTPException(status_code=404, detail="脚本运行记录不存在")
+    try:
+        runner.stop(run_id)
+    except RunNotActive as exc:
+        raise HTTPException(status_code=409, detail="这次运行已经结束") from exc
+    return {"ok": True}
+
+
+@router.get("/script-runs/{run_id}/log", response_model=ScriptRunLogChunk)
+def read_script_run_log(
+    run_id: int,
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    run = db.get(ScriptRun, run_id)
+    if run is None or not run.log_path or not Path(run.log_path).is_file():
+        raise HTTPException(status_code=404, detail="这次运行没有日志")
+    finished = run.status not in run_store.ACTIVE_STATUSES
+    text, next_offset = read_log(Path(run.log_path), offset, finished=finished)
+    return {"text": text, "next_offset": next_offset, "finished": finished}
 
 
 @router.get("/script-runs/{run_id}/items", response_model=ScriptRunItemsResponse)

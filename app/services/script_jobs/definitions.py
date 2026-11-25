@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 import posixpath
 import re
 
 from pydantic import BaseModel, Field, field_validator
+from sqlalchemy.orm import Session
 
 
 JOB_NAMES: tuple[str, ...] = ("sehuatang", "MOVE_SSD_CACHE_TO_DISK2", "DEL_SOMETHING")
@@ -87,6 +90,32 @@ class DelParams(BaseModel):
 
 
 @dataclass(frozen=True)
+class PreparedCommand:
+    """子进程的命令行和环境变量。"""
+
+    argv: list[str]
+    env: dict[str, str]
+
+
+@dataclass(frozen=True)
+class RunContext:
+    run_id: int
+    job_name: str
+    # 启动时的参数快照；运行中改配置不影响本次运行
+    params: dict
+    dry_run: bool
+    run_dir: Path
+
+
+@dataclass(frozen=True)
+class RunOutcome:
+    status: str
+    counts: dict[str, int]
+    items: list[dict]
+    error_reason: str | None
+
+
+@dataclass(frozen=True)
 class JobDefinition:
     name: str
     label: str
@@ -98,6 +127,9 @@ class JobDefinition:
     params_model: type[BaseModel]
     default_run_time: str
     default_params: dict
+    # 启动前准备命令；结束后把输出整理成结果
+    prepare: Callable[[Session, RunContext], PreparedCommand] | None = None
+    finalize: Callable[[Session, RunContext, int], RunOutcome] | None = None
 
 
 DEFINITIONS: dict[str, JobDefinition] = {

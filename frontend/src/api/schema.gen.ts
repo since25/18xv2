@@ -1332,6 +1332,13 @@ export interface components {
     'ScriptJobListResponse': {
       items: components['schemas']['ScriptJobView'][]
     }
+    'ScriptJobRunRequest': {
+      dry_run?: boolean
+    }
+    'ScriptJobRunStarted': {
+      run_id: number
+      status: string
+    }
     'ScriptJobUpdate': {
       enabled?: boolean | null
       run_time?: string | null
@@ -1400,6 +1407,11 @@ export interface components {
       total: number
       items: components['schemas']['ScriptRunItemResponse'][]
       kind_counts: Record<string, number>
+    }
+    'ScriptRunLogChunk': {
+      text: string
+      next_offset: number
+      finished: boolean
     }
     'ScriptRunResponse': {
       id: number
