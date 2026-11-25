@@ -146,3 +146,102 @@ def test_failed_and_warning_status_are_computed_server_side(client: TestClient) 
     assert warning.json()["status"] == "warning"
     assert failed.json()["status"] == "failed"
 
+
+FIXED_NOW = datetime(2026, 11, 25, 5, 0, tzinfo=UTC)  # 上海时间 13:00
+
+
+def _freeze_now(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.services.script_jobs import run_store
+
+    monkeypatch.setattr(run_store, "now_utc", lambda: FIXED_NOW)
+
+
+def _script(summary: dict, name: str) -> dict:
+    return next(item for item in summary["scripts"] if item["script_name"] == name)
+
+
+def test_summary_lists_three_jobs_with_executor(client: TestClient) -> None:
+    summary = client.get("/script-runs/summary").json()
+    assert [item["script_name"] for item in summary["scripts"]] == [
+        "sehuatang",
+        "MOVE_SSD_CACHE_TO_DISK2",
+        "DEL_SOMETHING",
+    ]
+    assert {item["executor"] for item in summary["scripts"]} == {"unraid"}
+
+
+def test_summary_uses_config_run_time(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    _freeze_now(monkeypatch)
+    # 13:00 时：12:09 未超两小时宽限 → pending；改成 10:00 → missing；改成 23:59 → pending
+    assert _script(client.get("/script-runs/summary").json(), "DEL_SOMETHING")["today_status"] == "pending"
+    client.put("/script-jobs/DEL_SOMETHING", json={"run_time": "10:00"})
+    assert _script(client.get("/script-runs/summary").json(), "DEL_SOMETHING")["today_status"] == "missing"
+    client.put("/script-jobs/DEL_SOMETHING", json={"run_time": "23:59"})
+    del_script = _script(client.get("/script-runs/summary").json(), "DEL_SOMETHING")
+    assert del_script["today_status"] == "pending"
+    assert del_script["expected_time"] == "23:59"
+
+
+def test_summary_dry_runs_excluded_from_trend_and_today(
+    client: TestClient, db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _freeze_now(monkeypatch)
+    db_session.add(
+        ScriptRun(
+            run_key="dry-1",
+            script_name="DEL_SOMETHING",
+            started_at=FIXED_NOW - timedelta(hours=1),
+            finished_at=FIXED_NOW - timedelta(minutes=50),
+            exit_code=0,
+            status="success",
+            counts={"deleted_files": 9},
+            trigger="manual",
+            dry_run=True,
+        )
+    )
+    db_session.commit()
+    summary = client.get("/script-runs/summary?days=1").json()
+    assert summary["days"][0]["has_run"] is False
+    assert summary["days"][0]["cleaned"] == 0
+    assert _script(summary, "DEL_SOMETHING")["today_status"] == "pending"
+
+
+def test_summary_disabled_18x_job_shows_disabled(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    _freeze_now(monkeypatch)
+    client.put("/script-jobs/sehuatang", json={"executor": "18x", "enabled": False})
+    assert _script(client.get("/script-runs/summary").json(), "sehuatang")["today_status"] == "disabled"
+
+
+def test_summary_sehuatang_under_unraid_is_not_tracked(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    _freeze_now(monkeypatch)
+    assert _script(client.get("/script-runs/summary").json(), "sehuatang")["today_status"] == "not_tracked"
+
+
+def test_unraid_report_post_still_accepted_with_trigger_report(client: TestClient) -> None:
+    response = client.post("/script-runs", json=_payload(run_key="report-1", started_at="2026-11-02T04:09:00Z"))
+    assert response.status_code == 200
+    body = response.json()
+    assert body["trigger"] == "report"
+    assert body["dry_run"] is False
+    assert body["has_log"] is False
+    assert body["error_reason"] is None
+
+
+def test_running_run_without_finish_is_listed(client: TestClient, db_session: Session) -> None:
+    db_session.add(
+        ScriptRun(
+            run_key="running-1",
+            script_name="sehuatang",
+            started_at=datetime.now(UTC),
+            status="running",
+            counts={},
+            trigger="manual",
+        )
+    )
+    db_session.commit()
+    items = client.get("/script-runs").json()["items"]
+    running = next(item for item in items if item["run_key"] == "running-1")
+    assert running["finished_at"] is None
+    assert running["exit_code"] is None
+    assert running["status"] == "running"
+

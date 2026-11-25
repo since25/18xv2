@@ -8530,10 +8530,64 @@
             "title": "Moved Rescan",
             "type": "integer"
           },
+          "pages_failed": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Pages Failed",
+            "type": "integer"
+          },
+          "pages_ok": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Pages Ok",
+            "type": "integer"
+          },
+          "parse_failed": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Parse Failed",
+            "type": "integer"
+          },
+          "posts_found": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Posts Found",
+            "type": "integer"
+          },
           "skipped": {
             "default": 0,
             "minimum": 0.0,
             "title": "Skipped",
+            "type": "integer"
+          },
+          "skipped_seen": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Skipped Seen",
+            "type": "integer"
+          },
+          "submit_failed": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Submit Failed",
+            "type": "integer"
+          },
+          "submitted": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Submitted",
+            "type": "integer"
+          },
+          "title_blocked": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Title Blocked",
+            "type": "integer"
+          },
+          "torrent_blocked": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Torrent Blocked",
             "type": "integer"
           },
           "unparsed_lines": {
@@ -8581,6 +8635,7 @@
           },
           "script_name": {
             "enum": [
+              "sehuatang",
               "DEL_SOMETHING",
               "MOVE_SSD_CACHE_TO_DISK2"
             ],
@@ -8627,7 +8682,12 @@
               "ambiguous",
               "skipped",
               "error",
-              "warning"
+              "warning",
+              "submitted",
+              "title_blocked",
+              "torrent_blocked",
+              "submit_failed",
+              "parse_failed"
             ],
             "title": "Kind",
             "type": "string"
@@ -8768,13 +8828,46 @@
           "counts": {
             "$ref": "#/components/schemas/ScriptRunCounts"
           },
+          "dry_run": {
+            "title": "Dry Run",
+            "type": "boolean"
+          },
+          "error_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Reason"
+          },
           "exit_code": {
-            "title": "Exit Code",
-            "type": "integer"
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exit Code"
           },
           "finished_at": {
-            "title": "Finished At",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "has_log": {
+            "title": "Has Log",
+            "type": "boolean"
           },
           "id": {
             "title": "Id",
@@ -8802,11 +8895,24 @@
           },
           "status": {
             "enum": [
+              "queued",
+              "running",
               "success",
               "warning",
-              "failed"
+              "failed",
+              "stopped",
+              "interrupted"
             ],
             "title": "Status",
+            "type": "string"
+          },
+          "trigger": {
+            "enum": [
+              "report",
+              "scheduled",
+              "manual"
+            ],
+            "title": "Trigger",
             "type": "string"
           }
         },
@@ -8820,7 +8926,11 @@
           "status",
           "counts",
           "items_truncated",
-          "received_at"
+          "received_at",
+          "trigger",
+          "dry_run",
+          "error_reason",
+          "has_log"
         ],
         "title": "ScriptRunResponse",
         "type": "object"
@@ -15746,6 +15856,7 @@
         ]
       },
       "post": {
+        "description": "接收 Unraid 脚本的回报（切换到 18x 执行前仍在使用）。",
         "operationId": "create_script_run_script_runs_post",
         "requestBody": {
           "content": {
@@ -15861,7 +15972,12 @@
                     "ambiguous",
                     "skipped",
                     "error",
-                    "warning"
+                    "warning",
+                    "submitted",
+                    "title_blocked",
+                    "torrent_blocked",
+                    "submit_failed",
+                    "parse_failed"
                   ],
                   "type": "string"
                 },

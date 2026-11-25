@@ -6,7 +6,7 @@ from typing import Literal
 from pydantic import BaseModel, Field, field_validator
 
 
-ScriptName = Literal["DEL_SOMETHING", "MOVE_SSD_CACHE_TO_DISK2"]
+ScriptName = Literal["sehuatang", "DEL_SOMETHING", "MOVE_SSD_CACHE_TO_DISK2"]
 ScriptRunItemKind = Literal[
     "deleted_dir",
     "deleted_file",
@@ -17,7 +17,15 @@ ScriptRunItemKind = Literal[
     "skipped",
     "error",
     "warning",
+    # sehuatang
+    "submitted",
+    "title_blocked",
+    "torrent_blocked",
+    "submit_failed",
+    "parse_failed",
 ]
+ScriptRunStatus = Literal["queued", "running", "success", "warning", "failed", "stopped", "interrupted"]
+ScriptRunTrigger = Literal["report", "scheduled", "manual"]
 
 
 class ScriptRunCounts(BaseModel):
@@ -34,6 +42,16 @@ class ScriptRunCounts(BaseModel):
     moved: int = Field(default=0, ge=0)
     duplicates_removed: int = Field(default=0, ge=0)
     failed: int = Field(default=0, ge=0)
+    # sehuatang
+    pages_ok: int = Field(default=0, ge=0)
+    pages_failed: int = Field(default=0, ge=0)
+    posts_found: int = Field(default=0, ge=0)
+    title_blocked: int = Field(default=0, ge=0)
+    torrent_blocked: int = Field(default=0, ge=0)
+    skipped_seen: int = Field(default=0, ge=0)
+    submitted: int = Field(default=0, ge=0)
+    submit_failed: int = Field(default=0, ge=0)
+    parse_failed: int = Field(default=0, ge=0)
 
 
 class ScriptRunItemPayload(BaseModel):
@@ -66,12 +84,16 @@ class ScriptRunResponse(BaseModel):
     run_key: str
     script_name: str
     started_at: str
-    finished_at: str
-    exit_code: int
-    status: Literal["success", "warning", "failed"]
+    finished_at: str | None
+    exit_code: int | None
+    status: ScriptRunStatus
     counts: ScriptRunCounts
     items_truncated: bool
     received_at: str
+    trigger: ScriptRunTrigger
+    dry_run: bool
+    error_reason: str | None
+    has_log: bool
 
 
 class ScriptRunItemResponse(BaseModel):

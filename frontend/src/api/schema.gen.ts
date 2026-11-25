@@ -1362,10 +1362,19 @@ export interface components {
       moved?: number
       duplicates_removed?: number
       failed?: number
+      pages_ok?: number
+      pages_failed?: number
+      posts_found?: number
+      title_blocked?: number
+      torrent_blocked?: number
+      skipped_seen?: number
+      submitted?: number
+      submit_failed?: number
+      parse_failed?: number
     }
     'ScriptRunCreate': {
       run_key: string
-      script_name: "DEL_SOMETHING" | "MOVE_SSD_CACHE_TO_DISK2"
+      script_name: "sehuatang" | "DEL_SOMETHING" | "MOVE_SSD_CACHE_TO_DISK2"
       started_at: string
       finished_at: string
       exit_code: number
@@ -1373,7 +1382,7 @@ export interface components {
       items?: components['schemas']['ScriptRunItemPayload'][]
     }
     'ScriptRunItemPayload': {
-      kind: "deleted_dir" | "deleted_file" | "empty_dir" | "moved_new" | "moved_rescan" | "ambiguous" | "skipped" | "error" | "warning"
+      kind: "deleted_dir" | "deleted_file" | "empty_dir" | "moved_new" | "moved_rescan" | "ambiguous" | "skipped" | "error" | "warning" | "submitted" | "title_blocked" | "torrent_blocked" | "submit_failed" | "parse_failed"
       path?: string | null
       target_path?: string | null
       keyword?: string | null
@@ -1397,12 +1406,16 @@ export interface components {
       run_key: string
       script_name: string
       started_at: string
-      finished_at: string
-      exit_code: number
-      status: "success" | "warning" | "failed"
+      finished_at: string | null
+      exit_code: number | null
+      status: "queued" | "running" | "success" | "warning" | "failed" | "stopped" | "interrupted"
       counts: components['schemas']['ScriptRunCounts']
       items_truncated: boolean
       received_at: string
+      trigger: "report" | "scheduled" | "manual"
+      dry_run: boolean
+      error_reason: string | null
+      has_log: boolean
     }
     'SessionResponse': {
       session_id: string
