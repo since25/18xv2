@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
 from sqlalchemy.orm import Session
 
 import app as app_package
+from app.schemas.keywords import KeywordEntryResponse
+from app.services.keywords.registry_service import KeywordRegistryService
 from app.services.script_jobs import run_store
 from app.services.script_jobs.definitions import PreparedCommand, RunContext, RunOutcome
 from app.services.script_jobs.logs import LOG_FILE_NAME
@@ -17,6 +20,22 @@ from app.services.script_jobs.media_output import ParseResult, parse_del_dry_run
 PROJECT_ROOT = Path(app_package.__file__).resolve().parent.parent
 JOBS_DIR = PROJECT_ROOT / "scripts" / "jobs"
 MOVE_SCRIPT = JOBS_DIR / "move_ssd_cache_to_disk2.sh"
+
+
+def export_keywords(db: Session, keyword_type: str, path: Path) -> int:
+    """把启用的某类关键词按 GET /api/keywords 的返回格式写成文件，供 DEL 两个脚本读取（不再登录接口）。
+
+    条目、顺序和字段都与接口分页拼起来的结果一致；脚本里的过滤和匹配代码不变。返回条数。
+    """
+    entries, _total = KeywordRegistryService(db).list_entries(
+        keyword_type=keyword_type, status="active", skip=0, limit=1_000_000
+    )
+    payload = {
+        "total": len(entries),
+        "entries": [KeywordEntryResponse.model_validate(entry).model_dump(mode="json") for entry in entries],
+    }
+    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    return len(entries)
 
 
 def move_prepare(db: Session | None, ctx: RunContext) -> PreparedCommand:

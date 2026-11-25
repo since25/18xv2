@@ -1,5 +1,6 @@
 import os
 import re
+import json
 import shutil
 import datetime
 import requests
@@ -11,8 +12,6 @@ from urllib.parse import urlsplit, urlunsplit
 # =========================
 scan_root = os.getenv("ORGANIZE_SCAN_ROOT", "/mnt/cache/docker1/SSD_cache/finish")
 target_root = os.getenv("ORGANIZE_TARGET_ROOT", "/mnt/cache/docker1/SSD_cache/已整理")
-#scan_root = "/mnt/disk2/2/SSD_cache/dn"
-#target_root = "/mnt/disk2/2/SSD_cache/已整理"
 
 keywords_api_url = "http://192.168.70.138:8010/api/keywords"
 keywords_api_timeout = 15
@@ -29,7 +28,7 @@ include_aliases = True
 dry_run = os.getenv("DRY_RUN", "false").strip().lower() in ("1", "true", "yes", "on")
 fuzzy_match = True
 max_depth = 6   # 只扫描 scan_root 下至多 6 级子目录
-log_file = "/mnt/cache/docker1/python/scripts/local_organize_log.txt"
+log_file = os.getenv("ORGANIZE_LOG_FILE", "/mnt/cache/docker1/python/scripts/local_organize_log.txt").strip()
 
 # 是否过滤过短关键词
 min_keyword_len = 2
@@ -116,19 +115,17 @@ def normalize_text(text: str) -> str:
     return text
 
 
-def load_whitelist_rules_from_api():
+def _iter_keyword_pages():
+    """逐页给出关键词接口的返回数据。
+
+    18x 执行时设置 KEYWORDS_FILE：文件内容与接口返回格式完全相同（18x 从库里导出），只有一页，不登录、不发请求。
     """
-    返回：
-    [
-      {
-        "entry_id": 1,
-        "canonical_name": "北京瑶瑶",
-        "all_terms": ["北京瑶瑶", "瑶瑶", "北京yy"]
-      },
-      ...
-    ]
-    """
-    rules = []
+    keywords_file = os.getenv("KEYWORDS_FILE", "").strip()
+    if keywords_file:
+        with open(keywords_file, encoding="utf-8") as f:
+            yield json.load(f)
+        return
+
     skip = 0
     session = create_authenticated_session()
 
@@ -148,8 +145,31 @@ def load_whitelist_rules_from_api():
         resp.raise_for_status()
         data = resp.json()
 
+        yield data
+
         entries = data.get("entries", [])
         total = data.get("total", 0)
+        skip += len(entries)
+        if skip >= total or not entries:
+            break
+
+
+def load_whitelist_rules_from_api():
+    """
+    返回：
+    [
+      {
+        "entry_id": 1,
+        "canonical_name": "北京瑶瑶",
+        "all_terms": ["北京瑶瑶", "瑶瑶", "北京yy"]
+      },
+      ...
+    ]
+    """
+    rules = []
+
+    for data in _iter_keyword_pages():
+        entries = data.get("entries", [])
 
         for entry in entries:
             canonical_name = (entry.get("canonical_name") or "").strip()
@@ -173,10 +193,6 @@ def load_whitelist_rules_from_api():
                 "is_fallback": (entry.get("merge_policy") == "fallback_only")
                 or (canonical_name in fallback_only_canonical_names),
             })
-
-        skip += len(entries)
-        if skip >= total or not entries:
-            break
 
     return rules
 

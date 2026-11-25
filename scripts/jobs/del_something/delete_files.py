@@ -1,5 +1,6 @@
 import os
 import csv
+import json
 import shutil
 import datetime
 import requests
@@ -30,7 +31,7 @@ fuzzy_match = True
 suffix_filter = []  # 例如 ['.mp4', '.jpg']，空列表表示全部匹配
 enable_backup = False
 backup_dir = '/mnt/cache/docker1/python/scripts/delsomethin/backup'
-log_file = '/mnt/cache/docker1/python/scripts/delsomethin/delete_log.txt'
+log_file = os.getenv('DELETE_LOG_FILE', '/mnt/cache/docker1/python/scripts/delsomethin/delete_log.txt').strip()
 max_file_size_mb = 0  # 0 表示不限制大小
 
 # 过滤过短关键词，避免误删
@@ -76,8 +77,20 @@ def create_authenticated_session():
     return session
 
 
-def load_keywords_from_api():
-    keywords = set()
+def _iter_keyword_pages():
+    """逐页给出关键词接口的返回数据。
+
+    18x 执行时设置 KEYWORDS_FILE：文件内容与接口返回格式完全相同（18x 从库里导出），只有一页，不登录、不发请求。
+    """
+    keywords_file = os.getenv('KEYWORDS_FILE', '').strip()
+    if keywords_file:
+        try:
+            with open(keywords_file, encoding='utf-8') as f:
+                yield json.load(f)
+        except Exception as e:
+            raise RuntimeError(f"读取关键词文件失败: {e}")
+        return
+
     skip = 0
     session = create_authenticated_session()
 
@@ -100,8 +113,20 @@ def load_keywords_from_api():
         except Exception as e:
             raise RuntimeError(f"读取关键词 API 失败: {e}")
 
+        yield data
+
         entries = data.get('entries', [])
         total = data.get('total', 0)
+        skip += len(entries)
+        if skip >= total or not entries:
+            break
+
+
+def load_keywords_from_api():
+    keywords = set()
+
+    for data in _iter_keyword_pages():
+        entries = data.get('entries', [])
 
         for entry in entries:
             canonical_name = (entry.get('canonical_name') or '').strip()
@@ -113,10 +138,6 @@ def load_keywords_from_api():
                     alias_name = (alias_item.get('alias') or '').strip()
                     if alias_name and len(alias_name) >= min_keyword_len:
                         keywords.add(alias_name)
-
-        skip += len(entries)
-        if skip >= total or not entries:
-            break
 
     return keywords
 
