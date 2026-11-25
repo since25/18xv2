@@ -6,7 +6,7 @@
 
 ## 一、项目基本信息
 
-- 项目根目录：`/Users/wangyichuan/Desktop/wangcodemac/18x_v2`
+- 项目根目录：`/Users/wangyichuan/Developer/wangcodemac/18x_v2`
 - 技术栈：Python 3.12、FastAPI、Uvicorn、115 客户端服务
 - 应用入口：`app/main.py`
 - 运行测试：`.venv/bin/python -m pytest tests/ -v`
@@ -199,7 +199,7 @@
 真机联调依赖 cookies（用于 `fs_export_dir` 导出目录树）：
 
 ```
-/Users/wangyichuan/Desktop/wangcodemac/p115client/cookies/
+/Users/wangyichuan/Developer/wangcodemac/p115client/cookies/
 115-cookies-wechatmini-e612967902aa092dbbf5d5f4d60c7f08e090869b-20260417-154257.txt
 ```
 
@@ -262,7 +262,7 @@
 ## 八、下次接手引导语
 
 ```
-我在继续 /Users/wangyichuan/Desktop/wangcodemac/18x_v2 项目。
+我在继续 /Users/wangyichuan/Developer/wangcodemac/18x_v2 项目。
 请先 Read PROGRESS.md 恢复上下文。
 当前状态：登录系统、Open API 扫码授权、Docker 部署、PostgreSQL 迁移、关键词命中重建性能问题均已完成并上线验证。
 重点待办：历史计划 `source_path` 漂移处理、2 个 duplicate_target 冲突任务、P2 文档补全、P3 前端细化。

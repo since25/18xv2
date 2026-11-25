@@ -48,7 +48,7 @@
 ### 3.1 Python 环境
 
 ```bash
-cd /Users/wangyichuan/Desktop/wangcodemac/18x_v2
+cd /Users/wangyichuan/Developer/wangcodemac/18x_v2
 python3.12 -m venv .venv
 source .venv/bin/activate
 pip install -U pip
@@ -73,7 +73,7 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ### 3.3 启动前端
 
 ```bash
-cd /Users/wangyichuan/Desktop/wangcodemac/18x_v2/frontend
+cd /Users/wangyichuan/Developer/wangcodemac/18x_v2/frontend
 npm install
 npm run dev
 ```
@@ -212,7 +212,7 @@ scripts/remote-test.sh all
 ### 6.1 本地 Docker 开发
 
 ```bash
-cd /Users/wangyichuan/Desktop/wangcodemac/18x_v2
+cd /Users/wangyichuan/Developer/wangcodemac/18x_v2
 docker compose -f docker/docker-compose.dev.yml up --build
 ```
 
