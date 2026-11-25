@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 
 import sqlalchemy as sa
@@ -124,3 +125,60 @@ def test_script_runs_migration_upgrades_and_downgrades():
         migration.downgrade()
         assert "script_runs" not in sa.inspect(connection).get_table_names()
         assert "script_run_items" not in sa.inspect(connection).get_table_names()
+
+
+def _load_migration(path: str, name: str):
+    spec = importlib.util.spec_from_file_location(name, Path(path))
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_script_jobs_migration_upgrades_and_downgrades():
+    base = _load_migration("alembic/versions/20261102_0017_script_runs.py", "script_runs_migration_base")
+    migration = _load_migration("alembic/versions/20261125_0018_script_jobs.py", "script_jobs_migration")
+
+    engine = sa.create_engine("sqlite:///:memory:")
+    with engine.begin() as connection:
+        ops = Operations(MigrationContext.configure(connection))
+        base.op = ops
+        migration.op = ops
+        base.upgrade()
+        migration.upgrade()
+
+        inspector = sa.inspect(connection)
+        tables = set(inspector.get_table_names())
+        assert {"script_job_configs", "script_job_config_changes", "sehuatang_posts"}.issubset(tables)
+        run_columns = {column["name"]: column for column in inspector.get_columns("script_runs")}
+        assert {"trigger", "dry_run", "log_path", "error_reason", "pid"}.issubset(run_columns)
+        assert run_columns["finished_at"]["nullable"] is True
+        assert run_columns["exit_code"]["nullable"] is True
+
+        rows = connection.execute(
+            sa.text("select job_name, executor, enabled, run_time, params from script_job_configs")
+        ).all()
+        by_name = {row.job_name: row for row in rows}
+        assert set(by_name) == {"sehuatang", "MOVE_SSD_CACHE_TO_DISK2", "DEL_SOMETHING"}
+        assert {row.executor for row in rows} == {"unraid"}
+        assert not any(row.enabled for row in rows)
+        assert by_name["sehuatang"].run_time == "01:28"
+        assert by_name["MOVE_SSD_CACHE_TO_DISK2"].run_time == "01:01"
+        assert by_name["DEL_SOMETHING"].run_time == "12:09"
+        sehuatang_params = by_name["sehuatang"].params
+        if isinstance(sehuatang_params, str):
+            sehuatang_params = json.loads(sehuatang_params)
+        assert sehuatang_params == {
+            "pages": 4,
+            "forum_url": "https://sehuatang.org/forum.php?mod=forumdisplay&fid=2&typeid=684&filter=typeid&page={page}",
+            "qb_category": "国产BT",
+        }
+
+        migration.downgrade()
+        inspector = sa.inspect(connection)
+        tables = set(inspector.get_table_names())
+        assert not {"script_job_configs", "script_job_config_changes", "sehuatang_posts"} & tables
+        assert {"script_runs", "script_run_items"}.issubset(tables)
+        run_columns = {column["name"] for column in inspector.get_columns("script_runs")}
+        assert not {"trigger", "dry_run", "log_path", "error_reason", "pid"} & run_columns
