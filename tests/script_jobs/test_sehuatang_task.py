@@ -176,6 +176,38 @@ def test_finalize_dry_run_does_not_touch_posts(db_session, tmp_path):
     assert db_session.scalars(select(SehuatangPost)).all() == []
 
 
+def _write_partial(ctx: RunContext, items: list[dict], trailing: str = "") -> None:
+    lines = "".join(json.dumps(item, ensure_ascii=False) + "\n" for item in items)
+    (ctx.run_dir / "items.jsonl").write_text(lines + trailing, encoding="utf-8")
+
+
+def test_salvage_reads_partial_items_and_marks_submitted(db_session, tmp_path):
+    run = _new_run(db_session)
+    ctx = _ctx(tmp_path, run.id)
+    _write_partial(
+        ctx,
+        [_item("submitted", "50", message="种子"), _item("title_blocked", "51", keyword="AI增强")],
+        trailing='{"kind": "submitted", "tid": "5',  # 被打断时写了一半的行
+    )
+    outcome = sehuatang_task.salvage(db_session, ctx)
+    assert outcome.counts["submitted"] == 1
+    assert outcome.counts["title_blocked"] == 1
+    assert [item["kind"] for item in outcome.items] == ["submitted", "title_blocked"]
+    post = db_session.scalar(select(SehuatangPost).where(SehuatangPost.tid == "50"))
+    assert post.last_outcome == "submitted"
+    assert post.submitted_at is not None
+
+
+def test_salvage_dry_run_and_missing_file(db_session, tmp_path):
+    run = _new_run(db_session, dry_run=True)
+    ctx = _ctx(tmp_path, run.id, dry_run=True)
+    assert sehuatang_task.salvage(db_session, ctx).items == []
+    _write_partial(ctx, [_item("submitted", "60", message="演练，未实际提交")])
+    outcome = sehuatang_task.salvage(db_session, ctx)
+    assert outcome.counts["submitted"] == 1
+    assert db_session.scalars(select(SehuatangPost)).all() == []
+
+
 def test_submitted_post_not_downgraded_later(db_session, tmp_path):
     db_session.add(SehuatangPost(tid="40", title="旧标题", url="u", last_outcome="submitted"))
     db_session.commit()

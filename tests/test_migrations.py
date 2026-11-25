@@ -175,10 +175,27 @@ def test_script_jobs_migration_upgrades_and_downgrades():
             "qb_category": "国产BT",
         }
 
+        # 18x 自己产生的记录（含未结束的）回滚时要删掉，旧版本只认识 Unraid 回报
+        connection.execute(
+            sa.text(
+                "insert into script_runs (id, run_key, script_name, started_at, finished_at, exit_code, status,"
+                " counts, items_truncated, received_at, trigger, dry_run)"
+                " values (1, 'report-1', 'DEL_SOMETHING', '2026-11-25 04:09:00', '2026-11-25 04:10:00', 0, 'success',"
+                " '{}', 0, '2026-11-25 04:10:00', 'report', 0),"
+                " (2, 'manual-1', 'sehuatang', '2026-11-25 05:00:00', null, null, 'running',"
+                " '{}', 0, '2026-11-25 05:00:00', 'manual', 0)"
+            )
+        )
+        connection.execute(
+            sa.text("insert into script_run_items (run_id, kind, path) values (1, 'deleted_file', 'a'), (2, 'submitted', 'b')")
+        )
+
         migration.downgrade()
         inspector = sa.inspect(connection)
         tables = set(inspector.get_table_names())
         assert not {"script_job_configs", "script_job_config_changes", "sehuatang_posts"} & tables
+        assert connection.execute(sa.text("select run_key from script_runs")).scalars().all() == ["report-1"]
+        assert connection.execute(sa.text("select run_id from script_run_items")).scalars().all() == [1]
         assert {"script_runs", "script_run_items"}.issubset(tables)
         run_columns = {column["name"] for column in inspector.get_columns("script_runs")}
         assert not {"trigger", "dry_run", "log_path", "error_reason", "pid"} & run_columns

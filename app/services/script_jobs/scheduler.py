@@ -37,6 +37,10 @@ def due_jobs(configs: list[ScriptJobConfig], today_runs: list[ScriptRun], now: d
         scheduled = config_service.scheduled_time_on(now_local.date(), config.run_time)
         if not (scheduled <= now_local < scheduled + CATCH_UP_WINDOW):
             continue
+        # 预定时间之后才改的配置（例如刚从 Unraid 切过来，或把时间改成刚过去的点）当天不补跑，
+        # 避免同一天 Unraid 和 18x 各跑一次；补跑只用于 18x 停机或任务被中断
+        if config.updated_at is not None and run_store.as_utc(config.updated_at) > scheduled:
+            continue
         already = any(
             run.script_name == config.job_name
             and run.trigger == "scheduled"

@@ -116,6 +116,33 @@ def test_log_endpoint_reads_incrementally(client: TestClient, fake_runner, db_se
     assert rest["finished"] is True
 
 
+def test_log_endpoint_finished_run_over_64kb_is_read_in_chunks(
+    client: TestClient, fake_runner, db_session: Session
+) -> None:
+    from pathlib import Path
+
+    from app.models.script_runs import ScriptRun
+
+    runner, popen = fake_runner
+    run_id = client.post("/script-jobs/sehuatang/runs", json={"dry_run": False}).json()["run_id"]
+    db_session.expire_all()
+    log_path = Path(db_session.get(ScriptRun, run_id).log_path)
+    content = ("第" * 40 + "\n") * 2000  # 约 242KB
+    log_path.write_bytes(content.encode())
+    popen.procs[0].returncode = 0
+    runner.poll()
+
+    collected = ""
+    offset = 0
+    for _ in range(20):
+        chunk = client.get(f"/script-runs/{run_id}/log?offset={offset}").json()
+        collected += chunk["text"]
+        offset = chunk["next_offset"]
+        if chunk["finished"]:
+            break
+    assert collected == content
+
+
 def test_log_endpoint_404_without_log(client: TestClient) -> None:
     created = client.post(
         "/script-runs",

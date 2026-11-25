@@ -186,6 +186,56 @@ def test_recover_on_startup_kills_process_group_then_marks_interrupted(db_sessio
         assert run.finished_at is not None
 
 
+def _salvaging_defs(calls: list):
+    from app.services.script_jobs.definitions import RunOutcome
+
+    def salvage(db, ctx):
+        calls.append((ctx.run_id, ctx.dry_run, ctx.run_dir))
+        return RunOutcome(status="", counts={"submitted": 2}, items=[{"kind": "submitted", "path": "示例"}],
+                          error_reason=None)
+
+    return _defs(sehuatang=make_definition("sehuatang", "sehuatang", timeout=120, salvage=salvage))
+
+
+def test_stopped_run_keeps_salvaged_partial_results(db_session, tmp_path):
+    calls: list = []
+    runner, popen, _, _ = build_runner(db_session, tmp_path, definitions=_salvaging_defs(calls))
+    run_id = runner.start("sehuatang", trigger="manual", dry_run=False)
+    runner.stop(run_id)
+    popen.procs[0].returncode = -15
+    runner.poll()
+    run = _run(db_session, run_id)
+    assert run.status == "stopped"
+    assert run.counts["submitted"] == 2
+    assert calls and calls[0][0] == run_id
+
+
+def test_timeout_keeps_salvaged_partial_results(db_session, tmp_path):
+    calls: list = []
+    runner, popen, _, clock = build_runner(db_session, tmp_path, definitions=_salvaging_defs(calls))
+    run_id = runner.start("sehuatang", trigger="scheduled", dry_run=False)
+    clock.advance(121)
+    runner.poll()
+    popen.procs[0].returncode = -15
+    runner.poll()
+    run = _run(db_session, run_id)
+    assert run.status == "failed"
+    assert run.counts["submitted"] == 2
+
+
+def test_recover_on_startup_salvages_running_run(db_session, tmp_path):
+    calls: list = []
+    runner, _, _, _ = build_runner(db_session, tmp_path, definitions=_salvaging_defs(calls))
+    run_id = runner.start("sehuatang", trigger="scheduled", dry_run=False)
+    fresh, _, _, _ = build_runner(db_session, tmp_path, definitions=_salvaging_defs(calls))
+    fresh.recover_on_startup()
+    run = _run(db_session, run_id)
+    assert run.status == "interrupted"
+    assert run.counts["submitted"] == 2
+    assert calls[-1][0] == run_id
+    assert calls[-1][2] == tmp_path / "sehuatang" / str(run_id)
+
+
 def test_recover_ignores_already_dead_process(db_session, tmp_path):
     runner, _, _, _ = build_runner(db_session, tmp_path, definitions=_defs())
     run_id = runner.start("sehuatang", trigger="manual", dry_run=False)

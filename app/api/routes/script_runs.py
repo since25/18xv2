@@ -189,8 +189,11 @@ def read_script_run_log(
     run = db.get(ScriptRun, run_id)
     if run is None or not run.log_path or not Path(run.log_path).is_file():
         raise HTTPException(status_code=404, detail="这次运行没有日志")
-    finished = run.status not in run_store.ACTIVE_STATUSES
-    text, next_offset = read_log(Path(run.log_path), offset, finished=finished)
+    path = Path(run.log_path)
+    run_ended = run.status not in run_store.ACTIVE_STATUSES
+    text, next_offset = read_log(path, offset, finished=run_ended)
+    # 运行结束且已读到文件末尾才算读完；一次最多 64KB，没读完时前端继续取
+    finished = run_ended and next_offset >= path.stat().st_size
     return {"text": text, "next_offset": next_offset, "finished": finished}
 
 

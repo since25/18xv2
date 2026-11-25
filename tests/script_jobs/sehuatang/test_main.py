@@ -75,6 +75,10 @@ def test_main_output_never_contains_secrets(tmp_path, monkeypatch, capsys):
     assert "SECRET-COOKIE-123" not in output
     assert "SECRET-PW-456" not in output
     assert json.loads(result_path.read_text(encoding="utf-8"))["counts"]["submitted"] == 1
+    # 逐帖追加的进度文件，被打断时靠它找回已提交的帖子
+    lines = (tmp_path / "items.jsonl").read_text(encoding="utf-8").splitlines()
+    assert [json.loads(line)["tid"] for line in lines] == ["21"]
+    assert "SECRET" not in "".join(lines)
 
 
 def test_make_qb_returns_none_without_config(monkeypatch):

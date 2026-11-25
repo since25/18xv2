@@ -124,9 +124,12 @@ def downgrade() -> None:
     op.drop_index("ix_script_job_config_changes_job_name", table_name="script_job_config_changes")
     op.drop_table("script_job_config_changes")
     op.drop_table("script_job_configs")
-    # 18x 自己产生的排队/运行中记录可能没有结束时间和退出码，补齐后才能恢复非空约束
-    op.execute("UPDATE script_runs SET exit_code = -1 WHERE exit_code IS NULL")
-    op.execute("UPDATE script_runs SET finished_at = started_at WHERE finished_at IS NULL")
+    # 旧版本只认识 Unraid 回报（状态只有 success/warning/failed，结束时间和退出码非空），
+    # 18x 自己执行产生的记录和名单回滚时删除，否则旧版运行记录接口会报错
+    op.execute(
+        "DELETE FROM script_run_items WHERE run_id IN (SELECT id FROM script_runs WHERE trigger <> 'report')"
+    )
+    op.execute("DELETE FROM script_runs WHERE trigger <> 'report'")
     with op.batch_alter_table("script_runs") as batch:
         for column in NEW_RUN_COLUMNS:
             batch.drop_column(column)

@@ -77,7 +77,17 @@ def main(argv: list[str] | None = None) -> int:
         _write_result(result_path, result)
         return 0
 
-    result = run_job(inp, make_site(session), None if inp.dry_run else make_qb(), log=_log, sleep=SLEEP)
+    # 逐帖追加写进度，运行被停止或打断时 18x 靠它找回已提交的帖子
+    items_path = result_path.parent / "items.jsonl"
+    with items_path.open("a", encoding="utf-8") as items_file:
+
+        def record(item: dict) -> None:
+            items_file.write(json.dumps(item, ensure_ascii=False) + "\n")
+            items_file.flush()
+
+        result = run_job(
+            inp, make_site(session), None if inp.dry_run else make_qb(), log=_log, sleep=SLEEP, record=record
+        )
     _write_result(result_path, result)
     return 0
 

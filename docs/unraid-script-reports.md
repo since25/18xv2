@@ -8,7 +8,7 @@
 
 预期运行时间在 18x「脚本中心」每个脚本的设置里修改（存在 `script_job_configs` 表里），时间按 `Asia/Shanghai` 判断。Unraid 上改了定时要同步改这里，否则会误报“今天没有运行记录”。原来的环境变量 `SCRIPT_REPORT_SCHEDULES` 已不再使用。
 
-数据库迁移在 18x 容器启动时由 `docker/entrypoint.sh` 自动执行。回滚时执行 `alembic downgrade 20261101_0016`，只会删除脚本日报相关的表。
+数据库迁移在 18x 容器启动时由 `docker/entrypoint.sh` 自动执行。回滚时要先用当前版本的容器执行 `alembic downgrade`（降到 `20261102_0017` 只撤销脚本中心，降到 `20261101_0016` 连脚本日报的表一起删除），再回退代码版本；顺序反了旧版容器会因为找不到新迁移而起不来。详见 `docs/script-jobs.md` 的“回滚”。
 
 ## Unraid 文件
 

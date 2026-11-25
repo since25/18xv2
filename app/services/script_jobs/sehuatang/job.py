@@ -106,8 +106,15 @@ def run_job(
     *,
     log: Callable[[str], None],
     sleep: Callable[[float], None],
+    record: Callable[[dict], None] | None = None,
 ) -> JobResult:
     result = JobResult()
+
+    def add(kind: str, post: ListPost, *, keyword: str | None = None, message: str | None = None) -> None:
+        # 每处理完一帖就交给 record（子进程里追加写文件），被打断时能找回已做的部分
+        result.add(kind, post, keyword=keyword, message=message)
+        if record is not None:
+            record(result.items[-1])
     posts, challenge = _collect_posts(inp, site, result, log, sleep)
 
     if result.counts["pages_ok"] == 0:
@@ -124,7 +131,7 @@ def run_job(
     for post in posts:
         hit = find_hit(post.title, inp.terms)
         if hit:
-            result.add("title_blocked", post, keyword=hit)
+            add("title_blocked", post, keyword=hit)
         elif post.tid in inp.submitted_tids:
             result.counts["skipped_seen"] += 1
         else:
@@ -148,7 +155,7 @@ def run_job(
         result.fatal_reason = qb_error
         log(qb_error)
         for post in candidates:
-            result.add("submit_failed", post, message=qb_error)
+            add("submit_failed", post, message=qb_error)
         return result
 
     for index, post in enumerate(candidates, 1):
@@ -157,11 +164,11 @@ def run_job(
         try:
             response = site.get(post.url, timeout=15)
             if response.status != 200 or is_challenge(response.status, response.text):
-                result.add("parse_failed", post, message=f"帖子页打开失败（HTTP {response.status}）")
+                add("parse_failed", post, message=f"帖子页打开失败（HTTP {response.status}）")
                 continue
             links = parse_thread(response.text)
         except Exception as exc:  # noqa: BLE001
-            result.add("parse_failed", post, message=f"帖子页解析出错（{type(exc).__name__}）")
+            add("parse_failed", post, message=f"帖子页解析出错（{type(exc).__name__}）")
             continue
 
         torrent = _download_torrent(site, links.attachment_urls, log)
@@ -169,15 +176,15 @@ def run_job(
             data, names = torrent
             hit = next((word for word in (find_hit(name, inp.terms) for name in names) if word), None)
             if hit:
-                result.add("torrent_blocked", post, keyword=hit)
+                add("torrent_blocked", post, keyword=hit)
                 continue
         elif not links.magnets:
-            result.add("parse_failed", post, message="未找到种子或磁力")
+            add("parse_failed", post, message="未找到种子或磁力")
             continue
 
         via = "种子" if torrent is not None else "磁力"
         if inp.dry_run:
-            result.add("submitted", post, message="演练，未实际提交")
+            add("submitted", post, message="演练，未实际提交")
             continue
         try:
             if torrent is not None:
@@ -185,9 +192,9 @@ def run_job(
             else:
                 qb.add_magnets(links.magnets, inp.qb_category)
         except QbError as exc:
-            result.add("submit_failed", post, message=str(exc))
+            add("submit_failed", post, message=str(exc))
             continue
-        result.add("submitted", post, message=via)
+        add("submitted", post, message=via)
         log(f"  已提交（{via}）")
 
     log(

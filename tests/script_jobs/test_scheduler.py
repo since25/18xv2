@@ -70,6 +70,31 @@ def test_unraid_executor_or_disabled_never_due(config):
     assert due_jobs([config], [], _at(1, 28)) == []
 
 
+def test_config_changed_after_todays_run_time_does_not_catch_up():
+    # 01:40 刚切到 18x（Unraid 今天可能已经跑过），当天不补跑
+    config = _config()
+    config.updated_at = _at(1, 40)
+    assert due_jobs([config], [], _at(1, 45)) == []
+
+
+def test_config_changed_before_run_time_still_runs():
+    config = _config()
+    config.updated_at = _at(1, 0)
+    assert due_jobs([config], [], _at(1, 28)) == ["sehuatang"]
+
+
+def test_config_changed_yesterday_still_catches_up():
+    config = _config()
+    config.updated_at = _at(23, 0) - timedelta(days=1)
+    assert due_jobs([config], [], _at(2, 0)) == ["sehuatang"]
+
+
+def test_config_updated_at_naive_is_treated_as_utc():
+    config = _config()
+    config.updated_at = _at(1, 40).replace(tzinfo=None)
+    assert due_jobs([config], [], _at(1, 45)) == []
+
+
 class _RecordingRunner:
     def __init__(self):
         self.started: list[tuple[str, str, bool]] = []
@@ -88,6 +113,8 @@ def test_run_due_jobs_starts_scheduled_real_runs(db_session):
     config = get_config(db_session, "sehuatang")
     config.executor = "18x"
     config.enabled = True
+    # 配置是昨天改的；今天预定时间之后才改的配置当天不补跑（见上面的用例）
+    config.updated_at = _at(1, 0) - timedelta(days=1)
     db_session.commit()
     # 今天已有一条前一天的旧记录不影响
     db_session.add(

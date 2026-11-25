@@ -68,7 +68,7 @@ class FakeClock:
         self.now += timedelta(seconds=seconds)
 
 
-def make_definition(name: str, group: str, *, timeout: int = 600, finalize=None) -> JobDefinition:
+def make_definition(name: str, group: str, *, timeout: int = 600, finalize=None, salvage=None) -> JobDefinition:
     def prepare(db, ctx):
         return PreparedCommand(argv=["fake", ctx.job_name], env={"X": "1"})
 
@@ -87,6 +87,7 @@ def make_definition(name: str, group: str, *, timeout: int = 600, finalize=None)
         default_params={},
         prepare=prepare,
         finalize=finalize or default_finalize,
+        salvage=salvage,
     )
 
 

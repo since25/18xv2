@@ -21,6 +21,8 @@ from app.services.script_jobs.sehuatang.matching import Term, normalize
 
 INPUT_FILE = "input.json"
 RESULT_FILE = "result.json"
+# 子进程每处理完一帖就追加一行，被打断时靠它找回已处理的部分
+ITEMS_FILE = "items.jsonl"
 MIN_TERM_LENGTH = 2
 PROJECT_ROOT = Path(app_package.__file__).resolve().parent.parent
 
@@ -114,14 +116,8 @@ def _update_posts(db: Session, run_id: int, items: list[dict]) -> None:
     db.commit()
 
 
-def finalize(db: Session, ctx: RunContext, exit_code: int) -> RunOutcome:
-    result_path = ctx.run_dir / RESULT_FILE
-    if exit_code != 0 or not result_path.is_file():
-        return RunOutcome(status="failed", counts={}, items=[], error_reason="运行异常退出")
-    result = json.loads(result_path.read_text(encoding="utf-8"))
-    counts = {key: int(value) for key, value in (result.get("counts") or {}).items()}
-    raw_items = list(result.get("items") or [])
-    items = [
+def _run_items(raw_items: list[dict]) -> list[dict]:
+    return [
         {
             "kind": item["kind"],
             "path": item.get("title"),
@@ -131,6 +127,39 @@ def finalize(db: Session, ctx: RunContext, exit_code: int) -> RunOutcome:
         }
         for item in raw_items
     ]
+
+
+def salvage(db: Session, ctx: RunContext) -> RunOutcome:
+    """运行被停止、超时或重启打断时，读子进程逐帖追加的 items.jsonl，找回已处理的帖子。
+
+    已提交的帖子照常记进帖子表，第二天不会重复提交。最后一行可能只写了一半，跳过。
+    """
+    path = ctx.run_dir / ITEMS_FILE
+    raw_items: list[dict] = []
+    if path.is_file():
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            try:
+                item = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(item, dict) and item.get("kind"):
+                raw_items.append(item)
+    counts: dict[str, int] = {}
+    for item in raw_items:
+        counts[item["kind"]] = counts.get(item["kind"], 0) + 1
+    if raw_items and not ctx.dry_run:
+        _update_posts(db, ctx.run_id, raw_items)
+    return RunOutcome(status="", counts=counts, items=_run_items(raw_items), error_reason=None)
+
+
+def finalize(db: Session, ctx: RunContext, exit_code: int) -> RunOutcome:
+    result_path = ctx.run_dir / RESULT_FILE
+    if exit_code != 0 or not result_path.is_file():
+        return RunOutcome(status="failed", counts={}, items=[], error_reason="运行异常退出")
+    result = json.loads(result_path.read_text(encoding="utf-8"))
+    counts = {key: int(value) for key, value in (result.get("counts") or {}).items()}
+    raw_items = list(result.get("items") or [])
+    items = _run_items(raw_items)
     if not ctx.dry_run:
         _update_posts(db, ctx.run_id, raw_items)
 

@@ -27,7 +27,8 @@ export default function RunLogPanel({ runId }: { runId: number }) {
           setFinished(true)
           return
         }
-        timer = setTimeout(load, POLL_MS)
+        // 这次读到了内容说明可能还有积压（单次最多 64KB），马上接着读；没内容再等 2 秒
+        timer = setTimeout(load, chunk.text ? 0 : POLL_MS)
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : String(err))
       }

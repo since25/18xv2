@@ -130,6 +130,8 @@ class JobDefinition:
     # 启动前准备命令；结束后把输出整理成结果
     prepare: Callable[[Session, RunContext], PreparedCommand] | None = None
     finalize: Callable[[Session, RunContext, int], RunOutcome] | None = None
+    # 被停止、超时或重启打断时，找回已经做完的部分（计数和名单）；status 字段不使用
+    salvage: Callable[[Session, RunContext], RunOutcome] | None = None
 
 
 def _sehuatang_prepare(db: Session, ctx: RunContext) -> PreparedCommand:
@@ -143,6 +145,12 @@ def _sehuatang_finalize(db: Session, ctx: RunContext, exit_code: int) -> RunOutc
     from app.services.script_jobs import sehuatang_task
 
     return sehuatang_task.finalize(db, ctx, exit_code)
+
+
+def _sehuatang_salvage(db: Session, ctx: RunContext) -> RunOutcome:
+    from app.services.script_jobs import sehuatang_task
+
+    return sehuatang_task.salvage(db, ctx)
 
 
 DEFINITIONS: dict[str, JobDefinition] = {
@@ -161,6 +169,7 @@ DEFINITIONS: dict[str, JobDefinition] = {
         },
         prepare=_sehuatang_prepare,
         finalize=_sehuatang_finalize,
+        salvage=_sehuatang_salvage,
     ),
     "MOVE_SSD_CACHE_TO_DISK2": JobDefinition(
         name="MOVE_SSD_CACHE_TO_DISK2",

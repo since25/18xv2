@@ -194,6 +194,19 @@ def test_dry_run_never_calls_qb():
     assert result.items[0]["message"] == "演练，未实际提交"
 
 
+def test_record_callback_receives_each_item_as_it_happens():
+    site = FakeSite(
+        {
+            FORUM.format(page=1): ok(list_page([("31", "AI增强 帖子"), ("32", "正常帖子")])),
+            _url("32"): ok(thread_page(magnets=[MAGNET])),
+        }
+    )
+    recorded: list[dict] = []
+    result = run_job(_input(), site, FakeQb(), log=lambda m: None, sleep=lambda s: None, record=recorded.append)
+    assert recorded == result.items
+    assert [item["kind"] for item in recorded] == ["title_blocked", "submitted"]
+
+
 def test_posts_deduplicated_across_pages():
     site = FakeSite(
         {

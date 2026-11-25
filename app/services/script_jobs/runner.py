@@ -137,15 +137,28 @@ class ScriptJobRunner:
         with self._lock, self._session_factory() as db:
             runs = list(db.scalars(select(ScriptRun).where(ScriptRun.status.in_(run_store.ACTIVE_STATUSES))).all())
             for run in runs:
-                if run.status == "running" and run.pid:
-                    self._signal(run.pid, signal.SIGTERM)
+                counts: dict = {}
+                items: list[dict] = []
+                if run.status == "running":
+                    if run.pid:
+                        self._signal(run.pid, signal.SIGTERM)
+                    if run.log_path:
+                        ctx = RunContext(
+                            run_id=run.id,
+                            job_name=run.script_name,
+                            params={},
+                            dry_run=bool(run.dry_run),
+                            run_dir=Path(run.log_path).parent,
+                        )
+                        counts, items = self._salvage(db, run.script_name, ctx)
+                        run = db.get(ScriptRun, run.id)
                 run_store.finish_run(
                     db,
                     run,
                     exit_code=None,
                     status="interrupted",
-                    counts=run.counts or {},
-                    items=[],
+                    counts=counts,
+                    items=items,
                     error_reason=INTERRUPTED_REASON,
                 )
             return len(runs)
@@ -175,6 +188,19 @@ class ScriptJobRunner:
                 .order_by(ScriptRun.started_at.asc(), ScriptRun.id.asc())
             ).all()
         )
+
+    def _salvage(self, db: Session, job_name: str, ctx: RunContext) -> tuple[dict, list[dict]]:
+        """被打断的运行：找回已经做完的部分。失败只记日志，返回空结果。"""
+        try:
+            definition = self._definitions(job_name)
+            if definition.salvage is None:
+                return {}, []
+            outcome = definition.salvage(db, ctx)
+            return outcome.counts, outcome.items
+        except Exception:
+            logger.exception("脚本 %s 部分结果找回失败（运行 %s）", job_name, ctx.run_id)
+            db.rollback()
+            return {}, []
 
     def _signal(self, pid: int, sig: int) -> None:
         try:
@@ -241,19 +267,15 @@ class ScriptJobRunner:
             if run is None:
                 return
             definition = self._definitions(run.script_name)
-            if active.stop_reason == "stopped":
-                run_store.finish_run(db, run, exit_code=exit_code, status="stopped", counts={}, items=[], error_reason=None)
-                return
-            if active.stop_reason == "timeout":
-                minutes = definition.timeout_seconds // 60
+            if active.stop_reason in ("stopped", "timeout"):
+                counts, items = self._salvage(db, run.script_name, active.ctx)
+                run = db.get(ScriptRun, run_id)
+                if active.stop_reason == "stopped":
+                    status, reason = "stopped", None
+                else:
+                    status, reason = "failed", f"超过运行时限（{definition.timeout_seconds // 60} 分钟）"
                 run_store.finish_run(
-                    db,
-                    run,
-                    exit_code=exit_code,
-                    status="failed",
-                    counts={},
-                    items=[],
-                    error_reason=f"超过运行时限（{minutes} 分钟）",
+                    db, run, exit_code=exit_code, status=status, counts=counts, items=items, error_reason=reason
                 )
                 return
             try:
