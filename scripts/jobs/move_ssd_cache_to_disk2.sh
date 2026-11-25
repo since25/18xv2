@@ -1,9 +1,11 @@
 #!/bin/bash
 # ============================================================
 # 移动 SSD 缓存"已整理"目录的文件到 disk2"已整理"目录
-#   源目录: /mnt/cache/docker1/SSD_cache/已整理
-#   目标目录: /mnt/disk2/qbbtdn/已整理   [2026-09-12 统一: 主树唯一化为 qbbtdn/已整理]
-# 移动完成后将权限设置为 nobody:users(Unraid 共享目录权限)
+#   源目录: 环境变量 MOVE_SOURCE_DIR(默认配置 /mnt/cache/docker1/SSD_cache/已整理)
+#   目标目录: 环境变量 MOVE_TARGET_DIR(默认配置 /mnt/disk2/qbbtdn/已整理)
+#   两个目录由 18x 脚本中心按页面参数传入
+# 移动完成后将权限设置为 99:100(即 Unraid 的 nobody:users;容器里 nobody 是 65534,必须写数字)
+# 来源: Unraid User Scripts 的 MOVE_SSD_CACHE_TO_DISK2,移入 18x 时只改了目录来源、去掉日报回报、权限改为数字
 # 规则:
 #   - 目标不存在         -> 直接移动
 #   - 同名目录           -> 递归合并内容,源目录空后删除
@@ -15,8 +17,8 @@
 
 set -u
 
-SRC="/mnt/cache/docker1/SSD_cache/已整理"
-DST="/mnt/disk2/qbbtdn/已整理"
+SRC="${MOVE_SOURCE_DIR:?未设置源目录 MOVE_SOURCE_DIR}"
+DST="${MOVE_TARGET_DIR:?未设置目标目录 MOVE_TARGET_DIR}"
 
 # --- 演练模式 ---
 DRY_RUN=0
@@ -24,39 +26,6 @@ if [ "${1:-}" = "--dry-run" ] || [ "${1:-}" = "-n" ]; then
   DRY_RUN=1
   echo "[演练模式] 不会实际移动/删除文件"
 fi
-
-# 脚本日报：输出照常进入 User Scripts 日志，同时写一份临时文件给回报脚本解析
-REPORT_SCRIPT_NAME="MOVE_SSD_CACHE_TO_DISK2"
-REPORT_STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-REPORT_TMP="$(mktemp)"
-REPORT_DRY_RUN="${DRY_RUN:-false}"
-for report_arg in "$@"; do
-    case "$report_arg" in --dry-run|-n) REPORT_DRY_RUN=true ;; esac
-done
-exec 3>&1 4>&2
-exec > >(tee "$REPORT_TMP") 2>&1
-REPORT_TEE_PID=$!
-
-report_on_exit() {
-    local original_rc=$?
-    trap - EXIT
-    set +e
-    # 恢复输出并等 tee 结束，保证临时文件已写完
-    exec 1>&3 2>&4
-    wait "$REPORT_TEE_PID"
-    case "$REPORT_DRY_RUN" in
-        1|true|yes|on) ;;
-        *)
-            /mnt/cache/docker1/python/scripts/PYTHON_SEHUATANG/venv/bin/python3 \
-                /mnt/cache/docker1/python/scripts/delsomethin/report_script_run.py \
-                "$REPORT_SCRIPT_NAME" "$REPORT_STARTED_AT" "$original_rc" "$REPORT_TMP" \
-                /boot/config/plugins/user.scripts/scripts/DEL_SOMETHING/.env
-            ;;
-    esac
-    rm -f "$REPORT_TMP"
-    exit "$original_rc"
-}
-trap report_on_exit EXIT
 
 # --- 检查源目录 ---
 if [ ! -d "$SRC" ]; then
@@ -166,11 +135,11 @@ echo "开始移动: $SRC -> $DST"
 echo "------------------------------------------"
 merge_move "$SRC" "$DST"
 
-# --- 设置 nobody:users 权限 ---
+# --- 设置 99:100 权限(Unraid nobody:users) ---
 if [ $DRY_RUN -eq 0 ] && [ -d "$DST" ]; then
   echo "------------------------------------------"
-  echo "设置权限 nobody:users ..."
-  chown -R nobody:users "$DST"
+  echo "设置权限 99:100(Unraid nobody:users) ..."
+  chown -R 99:100 "$DST"
   # 目录 775, 文件 664(与源目录权限一致)
   find "$DST" -type d -exec chmod 775 {} +
   find "$DST" -type f -exec chmod 664 {} +

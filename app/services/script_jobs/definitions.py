@@ -153,6 +153,24 @@ def _sehuatang_salvage(db: Session, ctx: RunContext) -> RunOutcome:
     return sehuatang_task.salvage(db, ctx)
 
 
+def _move_prepare(db: Session, ctx: RunContext) -> PreparedCommand:
+    from app.services.script_jobs import media_task
+
+    return media_task.move_prepare(db, ctx)
+
+
+def _media_finalize(db: Session, ctx: RunContext, exit_code: int) -> RunOutcome:
+    from app.services.script_jobs import media_task
+
+    return media_task.media_finalize(db, ctx, exit_code)
+
+
+def _media_salvage(db: Session, ctx: RunContext) -> RunOutcome:
+    from app.services.script_jobs import media_task
+
+    return media_task.media_salvage(db, ctx)
+
+
 DEFINITIONS: dict[str, JobDefinition] = {
     "sehuatang": JobDefinition(
         name="sehuatang",
@@ -176,13 +194,16 @@ DEFINITIONS: dict[str, JobDefinition] = {
         label="搬运脚本",
         group="media",
         timeout_seconds=21600,
-        runnable=False,
+        runnable=True,
         params_model=MoveParams,
         default_run_time="01:01",
         default_params={
             "source_dir": "/mnt/cache/docker1/SSD_cache/已整理",
             "target_dir": "/mnt/disk2/qbbtdn/已整理",
         },
+        prepare=_move_prepare,
+        finalize=_media_finalize,
+        salvage=_media_salvage,
     ),
     "DEL_SOMETHING": JobDefinition(
         name="DEL_SOMETHING",
