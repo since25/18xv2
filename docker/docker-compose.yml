@@ -34,7 +34,10 @@ services:
       - ../data:/app/data
       # Emby 媒体动作需要在容器内按服务器原始路径扫描和删除 STRM。
       - /mnt/cache/docker1/alist-strm/video:/mnt/cache/docker1/alist-strm/video
-      # Jellyfin 本地媒体：扫描路径与 Jellyfin 容器内保持一致，并写入旁路封面。
-      - /mnt/disk2/qbbtdn/已整理:/mnt/disk2/qbbtdn/已整理
+      # 脚本中心 MOVE / DEL：SSD_cache 是 DEL 删除和整理、MOVE 的源；disk2/qbbtdn 是 DEL 删除和整理、MOVE 的目标。
+      # 容器内路径与宿主机一致，运行名单可直接对照。原来单独挂的 /mnt/disk2/qbbtdn/已整理 已包含在下面，
+      # Jellyfin 本地媒体（扫描与旁路封面）使用的路径不变。
+      - /mnt/cache/docker1/SSD_cache:/mnt/cache/docker1/SSD_cache
+      - /mnt/disk2/qbbtdn:/mnt/disk2/qbbtdn
       - /mnt/user/docker1/alist-strm/video/302porn_tv1:/mnt/user/docker1/alist-strm/video/302porn_tv1:ro
     restart: unless-stopped
