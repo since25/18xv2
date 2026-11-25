@@ -5,13 +5,14 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import sys
 
 from sqlalchemy.orm import Session
 
 import app as app_package
 from app.schemas.keywords import KeywordEntryResponse
 from app.services.keywords.registry_service import KeywordRegistryService
-from app.services.script_jobs import run_store
+from app.services.script_jobs import del_main, run_store
 from app.services.script_jobs.definitions import PreparedCommand, RunContext, RunOutcome
 from app.services.script_jobs.logs import LOG_FILE_NAME
 from app.services.script_jobs.media_output import ParseResult, parse_del_dry_run, parse_output
@@ -47,6 +48,37 @@ def move_prepare(db: Session | None, ctx: RunContext) -> PreparedCommand:
     env["MOVE_SOURCE_DIR"] = ctx.params["source_dir"]
     env["MOVE_TARGET_DIR"] = ctx.params["target_dir"]
     return PreparedCommand(argv=argv, env=env)
+
+
+def del_prepare(db: Session, ctx: RunContext) -> PreparedCommand:
+    """DEL：写删除目录清单、两份关键词文件和编排输入，再以子进程运行 del_main。"""
+    run_dir = ctx.run_dir.resolve()
+    (run_dir / del_main.TARGET_DIRS_FILE).write_text(
+        "".join(f"{path}\n" for path in ctx.params["delete_dirs"]), encoding="utf-8"
+    )
+    export_keywords(db, "blacklist", run_dir / del_main.BLACKLIST_FILE)
+    export_keywords(db, "whitelist", run_dir / del_main.WHITELIST_FILE)
+    payload = {
+        "dry_run": ctx.dry_run,
+        "organize_jobs": ctx.params["organize_jobs"],
+        "merge_on_conflict": ctx.params["merge_on_conflict"],
+        "fix_permissions": ctx.params["fix_permissions"],
+        "scripts_dir": str(JOBS_DIR / "del_something"),
+        "run_dir": str(run_dir),
+    }
+    input_path = run_dir / "input.json"
+    input_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+    env = dict(os.environ)
+    # 子进程的工作目录是运行目录，要显式把项目根放进模块搜索路径
+    env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(PROJECT_ROOT), env.get("PYTHONPATH", "")]))
+    env["PYTHONUNBUFFERED"] = "1"
+    env.pop("KEYWORDS_API_USERNAME", None)
+    env.pop("KEYWORDS_API_PASSWORD", None)
+    return PreparedCommand(
+        argv=[sys.executable, "-m", "app.services.script_jobs.del_main", "--input", str(input_path)],
+        env=env,
+    )
 
 
 def _read_log(ctx: RunContext) -> str | None:

@@ -52,10 +52,23 @@ def test_update_accepts_allowed_root_itself(db_session):
     assert config.params["source_dir"] == "/mnt/cache/docker1/SSD_cache"
 
 
-def test_update_rejects_18x_executor_for_unrunnable_job(db_session):
+def test_update_rejects_18x_executor_for_unrunnable_job(db_session, monkeypatch):
+    # 三个脚本现在都能在 18x 执行；用一个改成不可执行的定义验证这道保护仍然有效
+    from dataclasses import replace
+
+    from app.services.script_jobs import config_service, definitions
+
+    unrunnable = replace(definitions.get_definition("DEL_SOMETHING"), runnable=False)
+    monkeypatch.setattr(config_service, "get_definition", lambda name: unrunnable)
     ensure_default_configs(db_session)
     with pytest.raises(ValueError, match="尚未支持在 18x 执行"):
         _update(db_session, "DEL_SOMETHING", executor="18x")
+
+
+def test_move_and_del_can_switch_to_18x(db_session):
+    ensure_default_configs(db_session)
+    for name in ("MOVE_SSD_CACHE_TO_DISK2", "DEL_SOMETHING"):
+        assert _update(db_session, name, executor="18x").executor == "18x"
 
 
 def test_update_records_change_with_before_and_after(db_session):

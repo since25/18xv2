@@ -122,7 +122,7 @@ class JobDefinition:
     # 同组任务互斥：后到的排队
     group: str
     timeout_seconds: int
-    # 本阶段能否在 18x 执行（MOVE、DEL 留给后续阶段）
+    # 能否在 18x 执行（三个脚本现在都能；字段保留给以后新增、尚未搬进来的脚本）
     runnable: bool
     params_model: type[BaseModel]
     default_run_time: str
@@ -157,6 +157,12 @@ def _move_prepare(db: Session, ctx: RunContext) -> PreparedCommand:
     from app.services.script_jobs import media_task
 
     return media_task.move_prepare(db, ctx)
+
+
+def _del_prepare(db: Session, ctx: RunContext) -> PreparedCommand:
+    from app.services.script_jobs import media_task
+
+    return media_task.del_prepare(db, ctx)
 
 
 def _media_finalize(db: Session, ctx: RunContext, exit_code: int) -> RunOutcome:
@@ -210,7 +216,7 @@ DEFINITIONS: dict[str, JobDefinition] = {
         label="整理脚本",
         group="media",
         timeout_seconds=10800,
-        runnable=False,
+        runnable=True,
         params_model=DelParams,
         default_run_time="12:09",
         default_params={
@@ -231,6 +237,9 @@ DEFINITIONS: dict[str, JobDefinition] = {
             "merge_on_conflict": True,
             "fix_permissions": True,
         },
+        prepare=_del_prepare,
+        finalize=_media_finalize,
+        salvage=_media_salvage,
     ),
 }
 
