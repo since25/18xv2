@@ -1,4 +1,4 @@
-"""sehuatang 主流程：抓列表 → 标题过黑名单 → 跳过已提交 → 进帖子 → 种子内文件名再过黑名单 → 提交 qB。
+"""sehuatang 主流程：抓列表 → 标题过黑名单 → 跳过已提交 → 进帖子 → 种子名再过黑名单 → 提交 qB。
 
 打印的进度里只有页码、帖子编号和标题，不含 cookie、密码和请求头。
 """
@@ -174,7 +174,9 @@ def run_job(
         torrent = _download_torrent(site, links.attachment_urls, log)
         if torrent is not None:
             data, names = torrent
-            hit = next((word for word in (find_hit(name, inp.terms) for name in names) if word), None)
+            # 只看种子名（多文件种子是顶层文件夹名）：种子名命中时整个下载会被 DEL 删掉，才不提交。
+            # 种子里夹带的广告文件不拦整个种子，交给 qB“排除文件名”和 DEL 处理
+            hit = find_hit(names[0], inp.terms) if names else None
             if hit:
                 add("torrent_blocked", post, keyword=hit)
                 continue

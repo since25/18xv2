@@ -57,7 +57,7 @@ def test_flow_title_block_seen_skip_torrent_block_and_submit():
                 list_page([("1", "【新作】AI增强版"), ("2", "已提交过的帖子"), ("3", "种子里有坏词"), ("4", "正常帖子")])
             ),
             _url("3"): _thread_with_torrent(30),
-            _att(30): ok(content=multi_file_torrent("合集", [["示例坏词片段.mp4"]])),
+            _att(30): ok(content=multi_file_torrent("示例坏词合集", [["正片.mp4"]])),
             _url("4"): _thread_with_torrent(40),
             _att(40): ok(content=single_file_torrent("正常视频.mp4")),
         }
@@ -82,6 +82,23 @@ def test_flow_title_block_seen_skip_torrent_block_and_submit():
     # 标题被拦和已提交的帖子不进帖子页
     assert _url("1") not in site.visited
     assert _url("2") not in site.visited
+
+
+def test_blacklisted_ad_file_inside_torrent_does_not_block_it():
+    # 每个种子都夹带的广告文件名在黑名单里；只要种子名本身没命中就照常提交，广告交给 qB 排除 / DEL 清理
+    terms = TERMS + [("台湾uu美少女直播", normalize("台湾uu美少女直播"))]
+    site = FakeSite(
+        {
+            FORUM.format(page=1): ok(list_page([("33", "正常帖子")])),
+            _url("33"): _thread_with_torrent(330),
+            _att(330): ok(content=multi_file_torrent("正常合集", [["正片.mp4"], ["台湾uu美少女直播 20年信誉保证服务全球.mp4"]])),
+        }
+    )
+    qb = FakeQb()
+    result, _ = _run(_input(terms=terms), site, qb)
+    assert result.counts["torrent_blocked"] == 0
+    assert result.counts["submitted"] == 1
+    assert len(qb.torrents) == 1
 
 
 def test_prefers_torrent_over_magnet_and_never_submits_both():
