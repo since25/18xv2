@@ -1,16 +1,14 @@
 # Unraid 脚本日报部署说明
 
+> 2026-11 起，三个脚本逐个改由 18x「脚本中心」执行，见 `docs/script-jobs.md`。sehuatang 由 18x 执行；`MOVE_SSD_CACHE_TO_DISK2` 和 `DEL_SOMETHING` 在切换到 18x 之前，仍按本文档从 Unraid 回报。
+
 脚本日报接收 `DEL_SOMETHING` 和 `MOVE_SSD_CACHE_TO_DISK2` 的运行结果，保存 90 天名单和长期统计。回报接口沿用 18x 的登录认证，不新增账号。
 
 ## 18x 配置和迁移
 
-在 18x 的环境变量中确认：
+预期运行时间在 18x「脚本中心」每个脚本的设置里修改（存在 `script_job_configs` 表里），时间按 `Asia/Shanghai` 判断。Unraid 上改了定时要同步改这里，否则会误报“今天没有运行记录”。原来的环境变量 `SCRIPT_REPORT_SCHEDULES` 已不再使用。
 
-```dotenv
-SCRIPT_REPORT_SCHEDULES=DEL_SOMETHING=12:09,MOVE_SSD_CACHE_TO_DISK2=01:01
-```
-
-定时发生变化时，同步修改这个配置；时间按 `Asia/Shanghai` 判断。数据库迁移在 18x 容器启动时由 `docker/entrypoint.sh` 自动执行。回滚时执行 `alembic downgrade 20261101_0016`，只会删除脚本日报的两张表。
+数据库迁移在 18x 容器启动时由 `docker/entrypoint.sh` 自动执行。回滚时执行 `alembic downgrade 20261101_0016`，只会删除脚本日报相关的表。
 
 ## Unraid 文件
 
