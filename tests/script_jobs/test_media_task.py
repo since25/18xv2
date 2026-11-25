@@ -66,3 +66,23 @@ def test_move_definition_is_runnable_with_hooks():
     assert definition.prepare is not None
     assert definition.finalize is not None
     assert definition.salvage is not None
+
+
+def test_move_salvage_counts_work_done_before_stop(tmp_path):
+    log = "\n".join(
+        [
+            "开始移动: /src -> /dst",
+            "移动: 甲.mp4",
+            "合并目录: 乙",
+            "移动: 乙/内层.mp4",
+            "删除重复(目标已有相同文件, 5 字节): 丙.mp4",
+            "大小不同(5 vs 9),另存为新版本: 丁_新版本.mp4",
+            "移动: 戊.mp4",
+            "  移动失败: 戊.mp4",
+        ]
+    )
+    outcome = media_task.media_salvage(None, _ctx(tmp_path, log=log))
+    # 失败那次也先打印了“移动:”，按原脚本计数规则不算移动成功
+    assert outcome.counts["moved"] == 3
+    assert outcome.counts["duplicates_removed"] == 1
+    assert outcome.counts["failed"] == 1

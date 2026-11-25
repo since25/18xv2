@@ -43,6 +43,9 @@ _DEL_KNOWN_TAGS = {
     "完成",
     "BACKUP",
     "DRY-RUN",
+    # 整理脚本：同名目录合并进已有目录；命中超过组合上限的多个白名单而跳过
+    "MERGED",
+    "AMBIGUOUS",
 }
 _TAG_RE = re.compile(r"^\[(?P<tag>[^\]]+)\]")
 _HIT_LINE_RE = re.compile(r"^命中(?:标准词|词项)\s*[:：]\s*(?P<keyword>.+?)\s*$")
@@ -180,6 +183,15 @@ def parse_del_something_output(output: str) -> ParseResult:
             counts[kind] += 1
             items.append(_item(kind, path=source, target_path=target, keyword=keyword))
             continue
+        merged_match = re.match(r"^\[MERGED\]\s*(?P<source>.+?)\s+->\s+(?P<target>.+?)\s*$", line)
+        if merged_match:
+            source = merged_match.group("source").strip()
+            kind = "moved_rescan" if re.search(r"已整理/抖音(?:风)?(?:/|$)", source) else "moved_new"
+            counts[kind] += 1
+            items.append(
+                _item(kind, path=source, target_path=merged_match.group("target").strip(), message="合并到已有目录")
+            )
+            continue
         if line.startswith("[MOVED]"):
             counts["unparsed_lines"] += 1
             continue
@@ -192,6 +204,7 @@ def parse_del_something_output(output: str) -> ParseResult:
             continue
         for marker, kind, count_key in (
             ("[AMBIGUOUS-LOW]", "ambiguous", "ambiguous"),
+            ("[AMBIGUOUS]", "ambiguous", "ambiguous"),
             ("[SKIPPED]", "skipped", "skipped"),
             ("[WARN]", "warning", "warnings"),
         ):

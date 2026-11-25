@@ -82,3 +82,30 @@ def test_dry_run_lists_would_delete_and_would_move() -> None:
     assert all(item["keyword"] == "示例词" for item in moved)
     assert moved[1]["path"] == "/data/已整理/抖音/示例C"
     assert moved[1]["target_path"] == "/data/已整理/示例词/示例C"
+
+
+def test_del_parser_counts_merged_and_ambiguous_in_later_jobs() -> None:
+    output = "\n".join(
+        [
+            "[INFO] Organizing: /data/finish -> /data/已整理",
+            "[SUMMARY]",
+            "move candidates: 0",
+            "[INFO] Organizing: /data/已整理/抖音 -> /data/已整理",
+            "[MERGED] /data/已整理/抖音/示例E -> /data/已整理/示例词/示例E",
+            "          合并: 新移入 2 项 | 重复去重 1 项 | 同名冲突保留 0 项",
+            "          [WARN] 源目录未清空(仍有内容), 保留待下轮处理: /data/已整理/抖音/示例E",
+            "[AMBIGUOUS] /data/已整理/抖音/示例F",
+            "            命中多个 whitelist: 甲 (甲) | 乙 (乙) | 丙 (丙) | 丁 (丁)",
+            "[SUMMARY]",
+        ]
+    )
+    result = parse_output("DEL_SOMETHING", output)
+    assert result.counts["unparsed_lines"] == 0
+    assert result.counts["moved_rescan"] == 1
+    assert result.counts["ambiguous"] == 1
+    assert result.counts["warnings"] == 1
+    merged = next(item for item in result.items if item["kind"] == "moved_rescan")
+    assert merged["target_path"] == "/data/已整理/示例词/示例E"
+    assert merged["message"] == "合并到已有目录"
+    ambiguous = next(item for item in result.items if item["kind"] == "ambiguous")
+    assert ambiguous["path"] == "/data/已整理/抖音/示例F"

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 import json
 import os
 from pathlib import Path
@@ -53,9 +54,11 @@ def move_prepare(db: Session | None, ctx: RunContext) -> PreparedCommand:
 def del_prepare(db: Session, ctx: RunContext) -> PreparedCommand:
     """DEL：写删除目录清单、两份关键词文件和编排输入，再以子进程运行 del_main。"""
     run_dir = ctx.run_dir.resolve()
-    (run_dir / del_main.TARGET_DIRS_FILE).write_text(
-        "".join(f"{path}\n" for path in ctx.params["delete_dirs"]), encoding="utf-8"
-    )
+    # delete_files.py 用 csv.reader 读：必须用 csv.writer 写，目录名里的英文逗号才不会被拆成两列
+    with (run_dir / del_main.TARGET_DIRS_FILE).open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle, lineterminator="\n")
+        for path in ctx.params["delete_dirs"]:
+            writer.writerow([path])
     export_keywords(db, "blacklist", run_dir / del_main.BLACKLIST_FILE)
     export_keywords(db, "whitelist", run_dir / del_main.WHITELIST_FILE)
     payload = {
@@ -116,5 +119,26 @@ def media_salvage(db: Session | None, ctx: RunContext) -> RunOutcome:
     result = _parse(ctx, output)
     counts = dict(result.counts)
     if ctx.job_name == "MOVE_SSD_CACHE_TO_DISK2" and not result.summary_found:
-        counts["failed"] = 0
+        counts.update(_move_progress(output))
     return RunOutcome(status="", counts=counts, items=result.items, error_reason=None)
+
+
+def _move_progress(output: str) -> dict[str, int]:
+    """MOVE 被打断时没有汇总行：按原脚本的计数规则逐行数出已移动、已删除重复和失败的数量。
+
+    原脚本先打印“移动: / 另存为新版本:”再执行，执行失败会紧接着打印“  移动失败:”，这一次不算移动。
+    """
+    moved = duplicates = failed = 0
+    for raw_line in output.splitlines():
+        line = raw_line.strip()
+        if line.startswith("移动: ") or "),另存为新版本: " in line:
+            moved += 1
+        elif line.startswith("删除重复("):
+            duplicates += 1
+        elif line.startswith("移动失败: "):
+            moved -= 1
+            failed += 1
+        elif line.startswith("删除失败: "):
+            duplicates -= 1
+            failed += 1
+    return {"moved": max(0, moved), "duplicates_removed": max(0, duplicates), "failed": failed}

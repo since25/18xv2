@@ -96,7 +96,10 @@
   - 18x 的 DEL 演练也不修正权限。Unraid 原外壳演练时仍会 `chown`，所以两边的演练日志会差几行“修正权限”，这是预期的。
   - DEL 演练的名单列出“将删除”和“将移动”，条目备注是“演练”。
 - **结果**：跑完解析运行日志，计数和名单的规则与阶段 6 回报相同。
-  - 修了阶段 6 解析器的一个问题：以前读到第一条整理任务的 `[SUMMARY]` 后就不再计数，所以后面几条整理任务的移动和错误不会进名单。
+  - 修了阶段 6 解析器的两个问题：
+    - 以前读到第一条整理任务的 `[SUMMARY]` 后就不再计数，所以后面几条整理任务的移动和错误不会进名单。
+    - `[MERGED]`（合并进已有的同名目录）以前被当成未识别行，现在计为移动；`[AMBIGUOUS]`（命中超过 3 个白名单词而跳过）现在计为歧义。
+  - MOVE 被停止或超时时没有汇总行，这时按日志逐行数出已移动、已删除重复和失败的数量。
   - 删除日志 `delete_log.txt` 和整理日志 `organize_log.txt` 放在运行目录里，保留 30 天。
 - **容器挂载**：app 容器以相同路径、可写的方式挂载 `/mnt/cache/docker1/SSD_cache` 和 `/mnt/disk2/qbbtdn`（见 `docker/docker-compose.yml`）。原来单独挂的 `/mnt/disk2/qbbtdn/已整理` 已经包含在里面。
 
@@ -161,6 +164,12 @@ MOVE 打断时要特别小心：跨盘移动是先复制、再删源文件，复
 5. **DEL 演练对比**：
    - 在 18x 里演练 DEL。
    - 同一时间，在 Unraid 上直接运行两个 Python 脚本，并设置 `DRY_RUN=true`。不要运行 `DEL_SOMETHING/script` 外壳，因为它在演练时也会 `chown`。
+   - Unraid 上的脚本仍要登录 18x 接口取关键词，所以先载入账号再运行：
+
+     ```bash
+     set -a; source /boot/config/plugins/user.scripts/scripts/DEL_SOMETHING/.env; set +a
+     export DRY_RUN=true
+     ```
    - 整理脚本按 `DEL_SOMETHING/script` 里 `ORGANIZE_JOBS` 的 7 条，逐条设置 `ORGANIZE_SCAN_ROOT` / `ORGANIZE_TARGET_ROOT` 后运行。
    - 比较两边的 `[DRY-RUN]` 行和 `[ERROR]` / `[WARN]` / `[AMBIGUOUS…]` 行，应该一致；去掉行首空白后再排序比较。
 6. **停掉 Unraid 定时**（需批准）：

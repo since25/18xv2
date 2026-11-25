@@ -209,3 +209,21 @@ def test_del_finalize_uses_matching_parser(tmp_path, dry_run):
     # 演练时两行都计（演练行 + 正式行）；正式运行只计正式行
     assert outcome.counts["deleted_dirs"] == (2 if dry_run else 1)
     assert outcome.status == "success"
+
+
+def test_del_prepare_keeps_comma_in_delete_dir(db_session, tmp_path):
+    # 删除目录名里有英文逗号时不能被 csv 拆开，否则会去删别的目录
+    import importlib.util
+
+    comma_dir = tmp_path / "media" / "a,b"
+    comma_dir.mkdir(parents=True)
+    (tmp_path / "media" / "a").mkdir()
+    run_dir = tmp_path / "DEL_SOMETHING" / "4"
+    run_dir.mkdir(parents=True)
+    params = dict(DEL_PARAMS, delete_dirs=[str(comma_dir)])
+    media_task.del_prepare(db_session, RunContext(run_id=4, job_name="DEL_SOMETHING", params=params, dry_run=True, run_dir=run_dir))
+
+    spec = importlib.util.spec_from_file_location("del_files_csv_check", media_task.JOBS_DIR / "del_something" / "delete_files.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module.load_target_dirs(str(run_dir / del_main.TARGET_DIRS_FILE)) == [str(comma_dir)]
