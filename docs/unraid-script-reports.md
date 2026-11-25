@@ -1,6 +1,8 @@
 # Unraid 脚本日报部署说明
 
 > 2026-11 起，三个脚本逐个改由 18x「脚本中心」执行，见 `docs/script-jobs.md`。sehuatang 由 18x 执行；`MOVE_SSD_CACHE_TO_DISK2` 和 `DEL_SOMETHING` 在切换到 18x 之前，仍按本文档从 Unraid 回报。
+>
+> 切换到 18x 后，`/boot` 脚本里的回报片段和 Unraid 上的 `report_script_run.py` 随原脚本一起停用，只在回退到 Unraid 执行时用到。解析规则已搬进 `app/services/script_jobs/media_output.py`，18x 执行后直接解析日志，不再走回报接口。
 
 脚本日报接收 `DEL_SOMETHING` 和 `MOVE_SSD_CACHE_TO_DISK2` 的运行结果，保存 90 天名单和长期统计。回报接口沿用 18x 的登录认证，不新增账号。
 
@@ -12,11 +14,13 @@
 
 ## Unraid 文件
 
-把 `scripts/unraid/report_script_run.py` 复制到：
+Unraid 上的回报脚本放在：
 
 ```text
 /mnt/cache/docker1/python/scripts/delsomethin/report_script_run.py
 ```
+
+现在仓库里的 `scripts/unraid/report_script_run.py` 要从仓库导入解析模块，不能再单独复制到 Unraid。Unraid 上现有的是拆分前的独立版本，不要覆盖。如果确实需要重新部署，用提交 `95226643` 里的版本：`git show 95226643:scripts/unraid/report_script_run.py`。
 
 两个生产脚本都读取 `/boot/config/plugins/user.scripts/scripts/DEL_SOMETHING/.env`，其中已有 `KEYWORDS_API_USERNAME` 和 `KEYWORDS_API_PASSWORD`。回报脚本只读取这两个变量，不把凭证写入日志。
 
