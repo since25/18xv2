@@ -1319,6 +1319,35 @@ export interface components {
       skipped: number
       failed_keywords: number
     }
+    'ScriptJobChange': {
+      id: number
+      job_name: string
+      changed_at: string
+      before: Record<string, unknown>
+      after: Record<string, unknown>
+    }
+    'ScriptJobChangeListResponse': {
+      items: components['schemas']['ScriptJobChange'][]
+    }
+    'ScriptJobListResponse': {
+      items: components['schemas']['ScriptJobView'][]
+    }
+    'ScriptJobUpdate': {
+      enabled?: boolean | null
+      run_time?: string | null
+      executor?: string | null
+      params?: Record<string, unknown> | null
+    }
+    'ScriptJobView': {
+      job_name: string
+      label: string
+      executor: string
+      enabled: boolean
+      run_time: string
+      params: Record<string, unknown>
+      runnable: boolean
+      next_run_at: string | null
+    }
     'ScriptRunCounts': {
       deleted_dirs?: number
       deleted_files?: number
