@@ -49,6 +49,63 @@ describe('JobSettingsDrawer', () => {
     expect(screen.queryByLabelText('抓几页')).toBeNull()
   })
 
+  it('MOVE 保存时提交源和目标目录', async () => {
+    const job = makeJob({
+      job_name: 'MOVE_SSD_CACHE_TO_DISK2',
+      label: '搬运脚本',
+      run_time: '01:01',
+      params: { source_dir: '/mnt/cache/docker1/SSD_cache/示例源', target_dir: '/mnt/disk2/qbbtdn/示例目标' },
+      site_session: null,
+    })
+    render(<JobSettingsDrawer job={job} open onClose={vi.fn()} onSaved={vi.fn()} />)
+    fireEvent.change(screen.getByLabelText('目标目录'), { target: { value: '/mnt/disk2/qbbtdn/新目标' } })
+    fireEvent.click(screen.getByRole('button', { name: buttonName('保存设置') }))
+    await waitFor(() => expect(updateScriptJob).toHaveBeenCalled())
+    const [name, body] = updateScriptJob.mock.calls[0]
+    expect(name).toBe('MOVE_SSD_CACHE_TO_DISK2')
+    expect(body.params).toEqual({ source_dir: '/mnt/cache/docker1/SSD_cache/示例源', target_dir: '/mnt/disk2/qbbtdn/新目标' })
+    expect(screen.queryByText(/本阶段只读/)).toBeNull()
+  })
+
+  it('DEL 保存删除目录和整理任务', async () => {
+    const job = {
+      ...DEL_JOB,
+      params: {
+        delete_dirs: ['/mnt/cache/docker1/SSD_cache/甲', '/mnt/disk2/qbbtdn/乙'],
+        organize_jobs: [
+          { scan_root: '/mnt/cache/docker1/SSD_cache/扫甲', target_root: '/mnt/cache/docker1/SSD_cache/整甲' },
+          { scan_root: '/mnt/disk2/qbbtdn/扫乙', target_root: '/mnt/disk2/qbbtdn/整乙' },
+        ],
+        merge_on_conflict: true,
+        fix_permissions: true,
+      },
+    }
+    render(<JobSettingsDrawer job={job} open onClose={vi.fn()} onSaved={vi.fn()} />)
+    expect(screen.getByText(/关键词在「关键词」页管理/)).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('删除扫描目录（每行一个）'), {
+      target: { value: '/mnt/cache/docker1/SSD_cache/甲\n\n  /mnt/disk2/qbbtdn/丙  \n' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '删除第 2 条整理任务' }))
+    fireEvent.click(screen.getByLabelText('跑完修正权限'))
+    fireEvent.click(screen.getByRole('button', { name: buttonName('保存设置') }))
+    await waitFor(() => expect(updateScriptJob).toHaveBeenCalled())
+    const [name, body] = updateScriptJob.mock.calls[0]
+    expect(name).toBe('DEL_SOMETHING')
+    expect(body.params).toEqual({
+      delete_dirs: ['/mnt/cache/docker1/SSD_cache/甲', '/mnt/disk2/qbbtdn/丙'],
+      organize_jobs: [{ scan_root: '/mnt/cache/docker1/SSD_cache/扫甲', target_root: '/mnt/cache/docker1/SSD_cache/整甲' }],
+      merge_on_conflict: true,
+      fix_permissions: false,
+    })
+  })
+
+  it('DEL 目录校验失败时显示后端原因', async () => {
+    updateScriptJob.mockRejectedValueOnce(new Error('目录不在容器已挂载的目录下（只能选 /mnt/cache/docker1/SSD_cache 之下）：/tmp/x'))
+    render(<JobSettingsDrawer job={DEL_JOB} open onClose={vi.fn()} onSaved={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: buttonName('保存设置') }))
+    expect(await screen.findByText(/目录不在容器已挂载的目录下/)).toBeTruthy()
+  })
+
   it('站点 cookie 保存后输入框清空且页面不出现旧 cookie', async () => {
     const onSaved = vi.fn()
     render(<JobSettingsDrawer job={makeJob()} open onClose={vi.fn()} onSaved={onSaved} />)

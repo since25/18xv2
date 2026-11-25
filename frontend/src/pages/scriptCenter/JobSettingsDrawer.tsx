@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Alert, Button, Divider, Drawer, Form, Input, InputNumber, Radio, Space, Switch, Typography } from 'antd'
+import { DeleteOutlined, PlusOutlined } from '@ant-design/icons'
 
 import { updateScriptJob, updateSiteSession } from '@/api/scriptJobs'
 import type { ScriptJob } from '@/api/scriptJobs'
@@ -14,6 +15,11 @@ interface JobSettingsDrawerProps {
   onSaved: () => void
 }
 
+interface OrganizeJob {
+  scan_root: string
+  target_root: string
+}
+
 interface SettingsForm {
   enabled: boolean
   run_time: string
@@ -21,6 +27,37 @@ interface SettingsForm {
   pages?: number
   forum_url?: string
   qb_category?: string
+  source_dir?: string
+  target_dir?: string
+  delete_dirs_text?: string
+  organize_jobs?: OrganizeJob[]
+  merge_on_conflict?: boolean
+  fix_permissions?: boolean
+}
+
+const MOVE = 'MOVE_SSD_CACHE_TO_DISK2'
+const DEL = 'DEL_SOMETHING'
+
+/** 按脚本取出要提交的参数；目录的合法性由后端校验（必须在容器挂载的两个根目录之下） */
+function paramsFor(jobName: string, values: SettingsForm): Record<string, unknown> | undefined {
+  if (jobName === 'sehuatang') {
+    return { pages: Number(values.pages), forum_url: values.forum_url, qb_category: values.qb_category }
+  }
+  if (jobName === MOVE) {
+    return { source_dir: (values.source_dir ?? '').trim(), target_dir: (values.target_dir ?? '').trim() }
+  }
+  if (jobName === DEL) {
+    return {
+      delete_dirs: (values.delete_dirs_text ?? '').split('\n').map((line) => line.trim()).filter(Boolean),
+      organize_jobs: (values.organize_jobs ?? []).map((item) => ({
+        scan_root: (item?.scan_root ?? '').trim(),
+        target_root: (item?.target_root ?? '').trim(),
+      })),
+      merge_on_conflict: Boolean(values.merge_on_conflict),
+      fix_permissions: Boolean(values.fix_permissions),
+    }
+  }
+  return undefined
 }
 
 function errorText(err: unknown) {
@@ -75,7 +112,7 @@ function SiteSessionSection({ job, onSaved }: { job: ScriptJob; onSaved: () => v
   )
 }
 
-/** 脚本设置：开关、运行时间、执行方和参数。MOVE、DEL 的参数本阶段只读展示。 */
+/** 脚本设置：开关、运行时间、执行方和参数。判定规则写死在脚本里，不在这里改。 */
 export default function JobSettingsDrawer({ job, open, onClose, onSaved }: JobSettingsDrawerProps) {
   const [form] = Form.useForm<SettingsForm>()
   const [saving, setSaving] = useState(false)
@@ -93,6 +130,12 @@ export default function JobSettingsDrawer({ job, open, onClose, onSaved }: JobSe
       pages: params.pages as number | undefined,
       forum_url: params.forum_url as string | undefined,
       qb_category: params.qb_category as string | undefined,
+      source_dir: params.source_dir as string | undefined,
+      target_dir: params.target_dir as string | undefined,
+      delete_dirs_text: ((params.delete_dirs as string[] | undefined) ?? []).join('\n'),
+      organize_jobs: (params.organize_jobs as OrganizeJob[] | undefined) ?? [],
+      merge_on_conflict: params.merge_on_conflict as boolean | undefined,
+      fix_permissions: params.fix_permissions as boolean | undefined,
     })
   }, [job, form])
 
@@ -100,6 +143,7 @@ export default function JobSettingsDrawer({ job, open, onClose, onSaved }: JobSe
 
   const save = async () => {
     const values = form.getFieldsValue(true) as SettingsForm
+    const params = paramsFor(job.job_name, values)
     setSaving(true)
     setError(null)
     try {
@@ -107,9 +151,7 @@ export default function JobSettingsDrawer({ job, open, onClose, onSaved }: JobSe
         enabled: values.enabled,
         run_time: values.run_time,
         executor: values.executor,
-        ...(isSehuatang
-          ? { params: { pages: Number(values.pages), forum_url: values.forum_url, qb_category: values.qb_category } }
-          : {}),
+        ...(params ? { params } : {}),
       })
       onSaved()
     } catch (err) {
@@ -148,10 +190,51 @@ export default function JobSettingsDrawer({ job, open, onClose, onSaved }: JobSe
               <Input style={{ width: 200 }} />
             </Form.Item>
           </>
-        ) : (
-          <Form.Item label="参数（本阶段只读）">
-            <pre style={{ fontSize: 12, whiteSpace: 'pre-wrap', margin: 0 }}>{JSON.stringify(job.params, null, 2)}</pre>
-          </Form.Item>
+        ) : null}
+        {job.job_name === MOVE && (
+          <>
+            <Form.Item label="源目录" name="source_dir">
+              <Input />
+            </Form.Item>
+            <Form.Item label="目标目录" name="target_dir">
+              <Input />
+            </Form.Item>
+          </>
+        )}
+        {job.job_name === DEL && (
+          <>
+            <Text type="secondary">判定规则不在这里改；关键词在「关键词」页管理。</Text>
+            <Form.Item label="删除扫描目录（每行一个）" name="delete_dirs_text" style={{ marginTop: 12 }}>
+              <Input.TextArea rows={4} />
+            </Form.Item>
+            <Form.Item label="整理任务（扫描目录 → 整理到）">
+              <Form.List name="organize_jobs">
+                {(fields, { add, remove }) => (
+                  <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                    {fields.map((field, index) => (
+                      <Space key={field.key} align="start" style={{ width: '100%' }}>
+                        <Form.Item name={[field.name, 'scan_root']} noStyle>
+                          <Input aria-label={`第 ${index + 1} 条扫描目录`} placeholder="扫描目录" style={{ width: 200 }} />
+                        </Form.Item>
+                        <Form.Item name={[field.name, 'target_root']} noStyle>
+                          <Input aria-label={`第 ${index + 1} 条整理到`} placeholder="整理到" style={{ width: 200 }} />
+                        </Form.Item>
+                        <Button icon={<DeleteOutlined />} aria-label={`删除第 ${index + 1} 条整理任务`}
+                          onClick={() => remove(field.name)} />
+                      </Space>
+                    ))}
+                    <Button icon={<PlusOutlined />} onClick={() => add({ scan_root: '', target_root: '' })}>添加一条</Button>
+                  </Space>
+                )}
+              </Form.List>
+            </Form.Item>
+            <Form.Item label="同名目录合并" name="merge_on_conflict" valuePropName="checked">
+              <Switch />
+            </Form.Item>
+            <Form.Item label="跑完修正权限" name="fix_permissions" valuePropName="checked">
+              <Switch />
+            </Form.Item>
+          </>
         )}
       </Form>
       {error && <Alert type="error" showIcon message={error} style={{ marginBottom: 12 }} />}
