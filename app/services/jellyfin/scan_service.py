@@ -9,7 +9,9 @@ import uuid
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
+from app.models.actresses import JellyfinMediaActor
 from app.models.jellyfin import JellyfinMediaItem, JellyfinMediaKeyword
+from app.services.actresses.names import normalize_actress_name
 from app.services.emby_media_actions.nfo_parser import parse_nfo_actors
 from app.services.jellyfin.matcher import build_keyword_index, match_local_folder, match_strm_item
 
@@ -92,7 +94,7 @@ class MediaScanService:
             media_count = 0
             for path, folder_name in self._iter_strm_media(configured_root):
                 media_count += 1
-                matches, match_state = self._match_strm_file(path, folder_name, keyword_index)
+                matches, match_state, actor_names = self._match_strm_file(path, folder_name, keyword_index)
                 self._save_item(
                     db,
                     source="strm_115",
@@ -100,6 +102,7 @@ class MediaScanService:
                     job_id=scan_job_id,
                     match_state=match_state,
                     matches=matches,
+                    actors=actor_names,
                 )
                 result["strm_files"] += 1
                 result[match_state] += 1
@@ -196,7 +199,8 @@ class MediaScanService:
         path: str,
         folder_name: str | None,
         keyword_index: dict[str, int],
-    ) -> tuple[list[tuple[int, str, str]], str]:
+    ) -> tuple[list[tuple[int, str, str]], str, list[str] | None]:
+        """返回关键词匹配结果、匹配状态和 NFO 演员名单（NFO 缺失为空列表，解析失败为 None）。"""
         actor_names: list[str] | None
         nfo_path = str(Path(path).with_suffix(".nfo"))
         if not os.path.isfile(nfo_path):
@@ -207,7 +211,8 @@ class MediaScanService:
                 actor_names = [actor.name for actor in parse_nfo_actors(xml_text)]
             except Exception:
                 actor_names = None
-        return match_strm_item(actor_names, folder_name or "", keyword_index)
+        matches, match_state = match_strm_item(actor_names, folder_name or "", keyword_index)
+        return matches, match_state, actor_names
 
     @staticmethod
     def _save_item(
@@ -218,6 +223,7 @@ class MediaScanService:
         job_id: str,
         match_state: str,
         matches: list[tuple[int, str, str]],
+        actors: list[str] | None = None,
     ) -> None:
         try:
             stat = os.stat(path, follow_symlinks=False)
@@ -252,6 +258,26 @@ class MediaScanService:
                     raw_term=raw_term,
                 )
             )
+        # 演员名单每次整体重算：先清空，只有 115 STRM 条目才按 NFO 顺序写回
+        db.execute(delete(JellyfinMediaActor).where(JellyfinMediaActor.media_item_id == item.id))
+        if source == "strm_115" and actors:
+            seen_names: set[str] = set()
+            position = 0
+            for raw_name in actors:
+                name_normalized = normalize_actress_name(raw_name)
+                # 同一条目内归一化后重复的名字只保留第一次出现
+                if name_normalized in seen_names:
+                    continue
+                seen_names.add(name_normalized)
+                db.add(
+                    JellyfinMediaActor(
+                        media_item_id=item.id,
+                        position=position,
+                        raw_name=raw_name,
+                        name_normalized=name_normalized,
+                    )
+                )
+                position += 1
 
     @staticmethod
     def _deactivate_missing(
