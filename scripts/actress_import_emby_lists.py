@@ -1,7 +1,7 @@
 """
 一次性把旧 Emby 黑白名单（启用中的 emby_blacklist / emby_whitelist 关键词）导入女优档案。
 关键词本身不改不删。默认只列出，加 --apply 才写入（标记来源记为「导入」），写入后重算待删清单。
-同一人同时在黑白两边的不导入，列为冲突。
+同一人同时在黑白两边的不导入，档案里已是相反状态的不覆盖，都列为冲突。
 
 用法（在生产容器内执行）：
   docker exec docker-app-1 python scripts/actress_import_emby_lists.py            # 只列出，不写入

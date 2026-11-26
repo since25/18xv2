@@ -34,20 +34,21 @@ class ImportRow:
 
 
 def _settle(person_rows: list[ImportRow], current_status: str, changed_result: str) -> None:
-    """按这个人在档案里的当前状态填结果；从别的状态改过来时注明原状态。"""
+    """按这个人在档案里的当前状态填结果：未标的导入，已是目标状态的不变，已是相反状态的不覆盖、列为冲突。"""
     for row in person_rows:
-        if current_status == row.target_status:
+        if current_status == "none":
+            row.result = changed_result
+        elif current_status == row.target_status:
             row.result = "unchanged"
-            continue
-        row.result = changed_result
-        if current_status != "none":
-            row.note = f"档案里原为{_STATUS_LABELS[current_status]}"
+        else:
+            row.result, row.note = "conflict", f"档案里已是{_STATUS_LABELS[current_status]}"
 
 
 def import_emby_lists(db: Session, *, apply: bool, strm_roots: list[str]) -> list[ImportRow]:
     """读启用中的 Emby 黑白名单关键词，按关键词顺序返回每条的导入结果。
 
-    同一人（名字归一化后相同，或在档案里是同一个女优）同时在黑白两边 → conflict，不导入。
+    同一人（名字归一化后相同，或在档案里是同一个女优）同时在黑白两边 → conflict，不导入；
+    档案里已是相反状态的不覆盖，也列为 conflict。
     apply=False 只列出，不写任何数据（也不建档）；apply=True 建档并以来源「导入」改状态，
     再重算待删清单。apply=True 且根目录没配置时抛 ActressError，不改任何数据。
     """
@@ -96,7 +97,8 @@ def import_emby_lists(db: Session, *, apply: bool, strm_roots: list[str]) -> lis
     ids_by_status: dict[str, list[int]] = {status: [] for status in _STATUS_BY_TYPE.values()}
     for actress, person_rows in zip(actresses, groups):
         _settle(person_rows, actress.status, "set")
-        if actress.status != person_rows[0].target_status:
+        # 只改未标的人；已是目标状态或相反状态的都不动
+        if actress.status == "none":
             ids_by_status[person_rows[0].target_status].append(actress.id)
     for status, actress_ids in ids_by_status.items():
         if actress_ids:

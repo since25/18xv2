@@ -86,7 +86,7 @@ def test_dry_run_lists_without_writing(db_session):
     assert rows == [
         ImportRow(name="丙", target_status="blacklist", result="unchanged", note=None),
         ImportRow(name="甲", target_status="blacklist", result="will_set", note=None),
-        ImportRow(name="丁", target_status="whitelist", result="will_set", note="档案里原为黑名单"),
+        ImportRow(name="丁", target_status="whitelist", result="conflict", note="档案里已是黑名单"),
         ImportRow(name="乙", target_status="whitelist", result="will_set", note=None),
     ]
     # 不建档、不改状态、不写标记、不建清单
@@ -121,6 +121,29 @@ def test_apply_sets_status_with_import_source(db_session, tmp_path):
     # 导入后重算待删清单，按改状态加入
     candidates = db_session.scalars(select(ActressDeleteCandidate)).all()
     assert [(row.film_dir, row.added_by) for row in candidates] == [(film_dir, "mark")]
+
+
+def test_apply_keeps_opposite_archive_status(db_session, tmp_path):
+    root = tmp_path / "strm"
+    _add_film(db_session, root, "ABC-001", ("甲",))
+    _actress(db_session, "甲", "whitelist")
+    _actress(db_session, "乙", "blacklist")
+    _keyword(db_session, "甲", "emby_blacklist")
+    _keyword(db_session, "乙", "emby_whitelist")
+    _keyword(db_session, "丙", "emby_blacklist")
+    marks_before = _marks(db_session)
+
+    rows = import_emby_lists(db_session, apply=True, strm_roots=[str(root)])
+
+    assert rows == [
+        ImportRow(name="丙", target_status="blacklist", result="set", note=None),
+        ImportRow(name="甲", target_status="blacklist", result="conflict", note="档案里已是白名单"),
+        ImportRow(name="乙", target_status="whitelist", result="conflict", note="档案里已是黑名单"),
+    ]
+    # 档案里已有的相反状态不覆盖，也不写标记；甲的片子不进待删清单
+    assert _statuses(db_session) == {"甲": "whitelist", "乙": "blacklist", "丙": "blacklist"}
+    assert _marks(db_session) == [*marks_before, ("丙", "none", "blacklist", "import")]
+    assert db_session.scalars(select(ActressDeleteCandidate)).all() == []
 
 
 def test_apply_without_roots_writes_nothing(db_session):
