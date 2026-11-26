@@ -1117,6 +1117,7 @@ export interface components {
     'MediaActorsResponse': {
       film_dir: string
       number: string
+      media_item_id: number
       in_candidates: boolean
       actors: components['schemas']['MediaActor'][]
     }

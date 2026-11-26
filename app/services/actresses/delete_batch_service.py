@@ -1,4 +1,4 @@
-"""女优删片批次：把待删清单里勾选的片子快照成批次，再按 115 → STRM → 番号目录的顺序删除。
+"""女优删片批次：把网页上确认删除的片子（必须仍在待删清单里）建成批次，再按 115 → STRM → 番号目录的顺序删除。
 
 一部片任何一步失败就停在这部片（后面的步骤不执行），记失败原因，继续下一部。
 每部片处理完 commit 一次；115 每删成功一个文件也立刻 commit，
@@ -50,6 +50,10 @@ class BatchSummary:
     skipped: int
 
 
+class CandidateListChanged(ActressError):
+    """网页确认的片子里有已不在待删清单里的（页面过期），接口层转成 409。"""
+
+
 class _FilmFailed(Exception):
     """这部片某一步失败，停在这里；消息写进片子的 error。"""
 
@@ -70,20 +74,26 @@ def _check_root(root: str) -> str | None:
 class DeleteBatchService:
     """删除批次的创建与执行。"""
 
-    def create_batch(self, db: Session, *, strm_roots: list[str]) -> ActressDeleteBatch:
-        """把清单里勾选的片子快照成一个待执行批次；一部都没勾时抛 ActressError。"""
+    def create_batch(self, db: Session, *, strm_roots: list[str], film_dirs: list[str]) -> ActressDeleteBatch:
+        """只用网页上确认的这些番号目录建一个待执行批次。
+
+        服务端的勾选标记不决定删哪些：每日任务等会往清单里加默认勾选的新片，用户在网页上没见过。
+        清单为空抛 ActressError；其中任何一部已不在待删清单里抛 CandidateListChanged，一部都不建。
+        """
         require_strm_roots(strm_roots, "建删除批次")
-        film_dirs = db.scalars(
-            select(ActressDeleteCandidate.film_dir)
-            .where(ActressDeleteCandidate.selected.is_(True))
-            .order_by(ActressDeleteCandidate.film_dir)
-        ).all()
-        if not film_dirs:
+        dirs = sorted({os.path.normpath(film_dir) for film_dir in film_dirs if film_dir})
+        if not dirs:
             raise ActressError("没有勾选的片子")
+        listed = set(
+            db.scalars(select(ActressDeleteCandidate.film_dir).where(ActressDeleteCandidate.film_dir.in_(dirs)))
+        )
+        gone = [film_dir for film_dir in dirs if film_dir not in listed]
+        if gone:
+            raise CandidateListChanged(f"清单有变化，请刷新后再确认（{len(gone)} 部已不在待删清单里）")
         batch = ActressDeleteBatch(status="pending")
         batch.films = [
             ActressDeleteBatchFilm(film_dir=film_dir, number=os.path.basename(film_dir), status="pending")
-            for film_dir in film_dirs
+            for film_dir in dirs
         ]
         db.add(batch)
         db.commit()

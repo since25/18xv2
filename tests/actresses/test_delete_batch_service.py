@@ -10,7 +10,7 @@ from app.models.jellyfin import JellyfinMediaItem
 from app.services.actresses.archive_service import ActressError, ArchiveService
 from app.services.actresses.candidates_service import CandidateService
 from app.services.actresses import delete_batch_service
-from app.services.actresses.delete_batch_service import BatchSummary, DeleteBatchService
+from app.services.actresses.delete_batch_service import BatchSummary, CandidateListChanged, DeleteBatchService
 from app.services.actresses.delete_guard import FilmDeleteGuard, PathMapper
 from app.services.actresses.names import normalize_actress_name
 from app.services.client_115.client import Client115Error
@@ -76,6 +76,10 @@ class _Env:
     def reconcile(self) -> None:
         CandidateService().reconcile(self.db, strm_roots=self.strm_roots, added_by="mark")
 
+    def candidate_dirs(self) -> list[str]:
+        """当前待删清单里的全部番号目录，相当于网页上全选后确认。"""
+        return list(self.db.scalars(select(ActressDeleteCandidate.film_dir)))
+
     def run(self, batch_id: int, *, client=None, guard=None, mapper=None) -> BatchSummary:
         return DeleteBatchService().run(
             self.db,
@@ -99,28 +103,45 @@ def _batch(db_session, batch_id: int) -> ActressDeleteBatch:
     return db_session.get(ActressDeleteBatch, batch_id)
 
 
-def test_create_batch_snapshots_only_selected(env):
+def test_create_batch_uses_only_confirmed_dirs(env):
     first = env.add_film("ABC-001", ("甲",), node_id="f1")
     second = env.add_film("ABC-002", ("甲",), node_id="f2")
     env.set_status("甲", "blacklist")
     env.reconcile()
-    CandidateService().set_selected(env.db, [second], False)
+    # 服务端的勾选标记不决定删哪些：没勾选的也能按网页确认的清单建批次
+    CandidateService().set_selected(env.db, [first], False)
 
-    batch = DeleteBatchService().create_batch(env.db, strm_roots=env.strm_roots)
+    batch = DeleteBatchService().create_batch(env.db, strm_roots=env.strm_roots, film_dirs=[first + "/", first])
 
     batch = _batch(env.db, batch.id)
     assert batch.status == "pending"
     assert [(film.film_dir, film.number, film.status) for film in batch.films] == [(first, "ABC-001", "pending")]
+    # 网页没确认的片子留在清单里
+    assert second in env.candidate_dirs()
 
 
-def test_create_batch_rejects_empty_selection(env):
-    film_dir = env.add_film("ABC-001", ("甲",), node_id="f1")
+def test_create_batch_rejects_empty_list(env):
+    env.add_film("ABC-001", ("甲",), node_id="f1")
     env.set_status("甲", "blacklist")
     env.reconcile()
-    CandidateService().set_selected(env.db, [film_dir], False)
 
     with pytest.raises(ActressError, match="没有勾选的片子"):
-        DeleteBatchService().create_batch(env.db, strm_roots=env.strm_roots)
+        DeleteBatchService().create_batch(env.db, strm_roots=env.strm_roots, film_dirs=[])
+    assert env.db.scalars(select(ActressDeleteBatch)).all() == []
+
+
+def test_create_batch_rejects_dirs_no_longer_in_candidates(env):
+    first = env.add_film("ABC-001", ("甲",), node_id="f1")
+    second = env.add_film("ABC-002", ("乙",), actor_dir="乙", node_id="f2")
+    env.set_status("甲", "blacklist")
+    env.set_status("乙", "blacklist")
+    env.reconcile()
+    # 网页打开之后乙被移出黑名单，ABC-002 已移出清单
+    env.set_status("乙", "none")
+    env.reconcile()
+
+    with pytest.raises(CandidateListChanged, match="清单有变化"):
+        DeleteBatchService().create_batch(env.db, strm_roots=env.strm_roots, film_dirs=[first, second])
     assert env.db.scalars(select(ActressDeleteBatch)).all() == []
 
 
@@ -128,7 +149,7 @@ def test_run_deletes_115_then_local(env):
     film_dir = env.add_film("ABC-001", ("甲",), node_id="f1")
     env.set_status("甲", "blacklist")
     env.reconcile()
-    batch = DeleteBatchService().create_batch(env.db, strm_roots=env.strm_roots)
+    batch = DeleteBatchService().create_batch(env.db, strm_roots=env.strm_roots, film_dirs=env.candidate_dirs())
 
     summary = env.run(batch.id)
 
@@ -161,7 +182,7 @@ def test_115_failure_keeps_local_files(env, monkeypatch):
     env.add_film("ABC-001", ("甲",), node_id="f1")
     env.set_status("甲", "blacklist")
     env.reconcile()
-    batch = DeleteBatchService().create_batch(env.db, strm_roots=env.strm_roots)
+    batch = DeleteBatchService().create_batch(env.db, strm_roots=env.strm_roots, film_dirs=env.candidate_dirs())
 
     def boom(file_id, dry_run=True):
         raise Client115Error("删除接口出错")
@@ -187,7 +208,7 @@ def test_missing_local_dir_blocks_before_115(env):
     env.add_film("ABC-001", ("甲",), node_id="f1")
     env.set_status("甲", "blacklist")
     env.reconcile()
-    batch = DeleteBatchService().create_batch(env.db, strm_roots=env.strm_roots)
+    batch = DeleteBatchService().create_batch(env.db, strm_roots=env.strm_roots, film_dirs=env.candidate_dirs())
     # 路径换算配错：换到一个不存在的目录
     wrong = PathMapper([(str(env.scan_root), str(env.tmp / "nowhere"))])
 
@@ -207,7 +228,7 @@ def test_missing_root_fails_batch_before_any_115_call(env):
     env.add_film("ABC-001", ("甲",), node_id="f1")
     env.set_status("甲", "blacklist")
     env.reconcile()
-    batch = DeleteBatchService().create_batch(env.db, strm_roots=env.strm_roots)
+    batch = DeleteBatchService().create_batch(env.db, strm_roots=env.strm_roots, film_dirs=env.candidate_dirs())
     guard = FilmDeleteGuard(str(env.tmp / "no-source"), str(env.organized))
 
     summary = env.run(batch.id, guard=guard)
@@ -242,7 +263,7 @@ def test_115_already_missing_still_deletes_local(env):
     env.add_film("ABC-001", ("甲",))
     env.set_status("甲", "blacklist")
     env.reconcile()
-    batch = DeleteBatchService().create_batch(env.db, strm_roots=env.strm_roots)
+    batch = DeleteBatchService().create_batch(env.db, strm_roots=env.strm_roots, film_dirs=env.candidate_dirs())
     client = _StubClient({})
 
     summary = env.run(batch.id, client=client)
@@ -264,7 +285,7 @@ def test_skips_film_protected_after_batch_created(env):
     env.add_film("ABC-001", ("甲", "乙"), node_id="f1")
     env.set_status("甲", "blacklist")
     env.reconcile()
-    batch = DeleteBatchService().create_batch(env.db, strm_roots=env.strm_roots)
+    batch = DeleteBatchService().create_batch(env.db, strm_roots=env.strm_roots, film_dirs=env.candidate_dirs())
     env.set_status("乙", "whitelist")
 
     summary = env.run(batch.id)
@@ -283,7 +304,7 @@ def test_resume_retries_failed_without_redoing_done_files(env, monkeypatch):
     env.add_film("ABC-001", ("甲",), node_id="f1")
     env.set_status("甲", "blacklist")
     env.reconcile()
-    batch = DeleteBatchService().create_batch(env.db, strm_roots=env.strm_roots)
+    batch = DeleteBatchService().create_batch(env.db, strm_roots=env.strm_roots, film_dirs=env.candidate_dirs())
     calls: list[str] = []
     original_delete = env.client.delete_node
 
@@ -325,7 +346,7 @@ def test_actor_dir_race_does_not_fail_film(env):
     env.add_film("ABC-001", ("甲",), node_id="f1")
     env.set_status("甲", "blacklist")
     env.reconcile()
-    batch = DeleteBatchService().create_batch(env.db, strm_roots=env.strm_roots)
+    batch = DeleteBatchService().create_batch(env.db, strm_roots=env.strm_roots, film_dirs=env.candidate_dirs())
 
     class _RacyGuard(FilmDeleteGuard):
         def remove_actor_dir_if_empty(self, path: str) -> bool:
@@ -346,7 +367,7 @@ def _prepare(env) -> int:
     env.add_film("ABC-001", ("甲",), node_id="f1")
     env.set_status("甲", "blacklist")
     env.reconcile()
-    return DeleteBatchService().create_batch(env.db, strm_roots=env.strm_roots).id
+    return DeleteBatchService().create_batch(env.db, strm_roots=env.strm_roots, film_dirs=env.candidate_dirs()).id
 
 
 def _assert_untouched(env) -> None:
@@ -417,7 +438,7 @@ def test_multi_part_resume_deletes_each_115_file_once(env, monkeypatch):
     env.db.commit()
     env.set_status("甲", "blacklist")
     env.reconcile()
-    batch_id = DeleteBatchService().create_batch(env.db, strm_roots=env.strm_roots).id
+    batch_id = DeleteBatchService().create_batch(env.db, strm_roots=env.strm_roots, film_dirs=env.candidate_dirs()).id
     calls: list[str] = []
     original_delete = env.client.delete_node
     fail_once = {"f2"}

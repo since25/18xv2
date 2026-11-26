@@ -76,6 +76,8 @@ class MediaActor(BaseModel):
 class MediaActorsResponse(BaseModel):
     film_dir: str
     number: str
+    # 实际查到的扫描条目 id，播放器改状态时作为 media_item_id 回传
+    media_item_id: int
     in_candidates: bool
     # 按 NFO 顺序
     actors: list[MediaActor]

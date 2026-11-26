@@ -27,6 +27,7 @@ from app.services.actresses.candidates_service import CandidateService
 from app.services.actresses.job_runner import refresh_work
 from app.services.actresses.names import normalize_actress_name
 from app.services.client_115.client import Fake115Client
+from app.services.job_runner import JobAlreadyRunning
 
 # 每个测试开始时清掉，避免外部环境里的值影响判断
 _CLEARED_ENV = (
@@ -268,6 +269,7 @@ def test_by_media_lookup_creates_missing_archive_entries(client, db_session, str
     assert body["film_dir"] == film_dir
     assert body["number"] == "ABC-001"
     assert body["in_candidates"] is True
+    assert body["media_item_id"] == db_session.scalar(select(JellyfinMediaItem.id))
     assert [(actor["name"], actor["status"]) for actor in body["actors"]] == [("甲", "blacklist"), ("乙", "none")]
     created = db_session.scalar(select(Actress).where(Actress.canonical_name == "乙"))
     assert created is not None and body["actors"][1]["actress_id"] == created.id
@@ -276,6 +278,9 @@ def test_by_media_lookup_creates_missing_archive_entries(client, db_session, str
     by_path = client.get("/actresses/by-media", params={"path": f"{film_dir}/ABC-001.strm"})
     assert by_path.status_code == 200
     assert by_path.json() == body
+    # 用番号目录查时取这部片第一个条目
+    by_dir = client.get("/actresses/by-media", params={"path": film_dir})
+    assert by_dir.json() == body
 
     assert client.get("/actresses/by-media", params={"jellyfin_item_id": "jf-unknown"}).status_code == 404
     assert client.get("/actresses/by-media").status_code == 400
@@ -336,19 +341,90 @@ def test_check_remote_writes_state_and_limits_batch_size(client, db_session, str
     assert "50" in response.json()["detail"]
 
 
-def test_write_routes_return_409_when_actress_disabled(client, db_session, monkeypatch):
-    actress_id = _actress(db_session, "甲")
+def _seed_for_switch(db_session) -> dict[str, int]:
+    """总开关测试用：两位女优（甲带别名乙）、一部清单里的片、一个失败批次。"""
+    actress = _actress(db_session, "甲")
+    other = _actress(db_session, "丙")
+    alias = ArchiveService().add_alias(db_session, actress, "乙")
+    _add_candidate(db_session, "/虚构/甲/ABC-001", selected=True)
+    batch = ActressDeleteBatch(status="failed")
+    db_session.add(batch)
+    db_session.commit()
+    return {"actress": actress, "other": other, "alias": alias.id, "batch": batch.id}
+
+
+def _write_requests(ids: dict[str, int]) -> dict[str, tuple[str, str, dict | None]]:
+    film_dir = "/虚构/甲/ABC-001"
+    return {
+        "by-media": ("GET", "/actresses/by-media?jellyfin_item_id=jf-1", None),
+        "status": (
+            "POST",
+            "/actresses/status",
+            {"actress_ids": [ids["actress"]], "status": "blacklist", "source": "web"},
+        ),
+        "refresh": ("POST", "/actresses/refresh", None),
+        "select": ("POST", "/actresses/candidates/select", {"film_dirs": [film_dir], "selected": False}),
+        "keep": ("POST", "/actresses/candidates/keep", {"film_dirs": [film_dir]}),
+        "check-remote": ("POST", "/actresses/candidates/check-remote", {"film_dirs": [film_dir]}),
+        "kept-remove": ("POST", "/actresses/kept/remove", {"film_dirs": [film_dir]}),
+        "create-batch": ("POST", "/actresses/delete-batches", {"film_dirs": [film_dir]}),
+        "resume": ("POST", f"/actresses/delete-batches/{ids['batch']}/resume", None),
+        "add-alias": ("POST", f"/actresses/{ids['actress']}/aliases", {"alias": "丁"}),
+        "remove-alias": ("DELETE", f"/actresses/{ids['actress']}/aliases/{ids['alias']}", None),
+        "merge": ("POST", f"/actresses/{ids['other']}/merge", {"into_id": ids["actress"]}),
+    }
+
+
+@pytest.mark.parametrize("name", list(_write_requests({"actress": 0, "other": 0, "alias": 0, "batch": 0})))
+def test_write_routes_return_409_when_actress_disabled(client, db_session, monkeypatch, tmp_path, name):
+    ids = _seed_for_switch(db_session)
     submitted = _capture_jobs(monkeypatch)
+    # 只关总开关，删除根目录等其余配置都齐
+    _delete_ready(monkeypatch, tmp_path)
+    _configure(monkeypatch, ACTRESS_ENABLED="false")
+    method, path, body = _write_requests(ids)[name]
+
+    response = client.request(method, path, json=body)
+
+    assert response.status_code == 409, response.text
+    assert "女优" in response.json()["detail"]
+    assert submitted == []
+    assert db_session.scalars(select(BackgroundJob)).all() == []
+    assert [batch.id for batch in db_session.scalars(select(ActressDeleteBatch))] == [ids["batch"]]
+    assert db_session.get(Actress, ids["other"]) is not None
+    assert db_session.get(Actress, ids["actress"]).status == "none"
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/actresses",
+        "/actresses/{actress}",
+        "/actresses/candidates",
+        "/actresses/kept",
+        "/actresses/delete-batches",
+        "/actresses/delete-batches/{batch}",
+    ],
+)
+def test_read_routes_work_when_actress_disabled(client, db_session, monkeypatch, path):
+    ids = _seed_for_switch(db_session)
     _configure(monkeypatch, ACTRESS_ENABLED="false")
 
-    status = client.post(
-        "/actresses/status", json={"actress_ids": [actress_id], "status": "blacklist", "source": "web"}
-    )
+    response = client.get(path.format(**ids))
 
-    assert status.status_code == 409
-    assert db_session.get(Actress, actress_id).status == "none"
-    assert client.post("/actresses/refresh").status_code == 409
-    assert client.post(f"/actresses/{actress_id}/aliases", json={"alias": "乙"}).status_code == 409
+    assert response.status_code == 200, response.text
+
+
+def test_refresh_returns_400_without_strm_roots(client, db_session, monkeypatch):
+    submitted = _capture_jobs(monkeypatch)
+    monkeypatch.delenv("MEDIA_LIBRARY_STRM_ROOTS")
+    get_settings.cache_clear()
+
+    response = client.post("/actresses/refresh")
+
+    assert response.status_code == 400
+    assert "根目录" in response.json()["detail"]
+    assert db_session.scalars(select(BackgroundJob)).all() == []
     assert submitted == []
 
 
@@ -367,18 +443,19 @@ def test_refresh_submits_job(client, db_session, monkeypatch):
 
 def test_create_batch_returns_409_when_disabled(client, db_session, monkeypatch, tmp_path):
     submitted = _capture_jobs(monkeypatch)
-    _add_candidate(db_session, "/虚构/甲/ABC-001", selected=True)
+    film_dir = "/虚构/甲/ABC-001"
+    _add_candidate(db_session, film_dir, selected=True)
     _delete_ready(monkeypatch, tmp_path)
     _configure(monkeypatch, ACTRESS_ENABLED="false")
 
-    assert client.post("/actresses/delete-batches").status_code == 409
+    assert client.post("/actresses/delete-batches", json={"film_dirs": [film_dir]}).status_code == 409
 
     # 功能开启但没配 302porn_tv1 的可写根目录：删除未就绪
     _configure(monkeypatch, ACTRESS_ENABLED="true")
     monkeypatch.delenv("ACTRESS_ORGANIZED_ROOT")
     get_settings.cache_clear()
 
-    response = client.post("/actresses/delete-batches")
+    response = client.post("/actresses/delete-batches", json={"film_dirs": [film_dir]})
 
     assert response.status_code == 409
     assert db_session.scalars(select(ActressDeleteBatch)).all() == []
@@ -388,12 +465,13 @@ def test_create_batch_returns_409_when_disabled(client, db_session, monkeypatch,
 def test_create_batch_returns_400_when_nothing_selected(client, db_session, monkeypatch, tmp_path):
     submitted = _capture_jobs(monkeypatch)
     _delete_ready(monkeypatch, tmp_path)
-    _add_candidate(db_session, "/虚构/甲/ABC-001", selected=False)
+    _add_candidate(db_session, "/虚构/甲/ABC-001", selected=True)
 
-    response = client.post("/actresses/delete-batches")
+    response = client.post("/actresses/delete-batches", json={"film_dirs": []})
 
     assert response.status_code == 400
     assert "没有勾选" in response.json()["detail"]
+    assert db_session.scalars(select(ActressDeleteBatch)).all() == []
     assert db_session.scalars(select(BackgroundJob)).all() == []
     assert submitted == []
 
@@ -401,11 +479,12 @@ def test_create_batch_returns_400_when_nothing_selected(client, db_session, monk
 def test_create_batch_returns_409_when_delete_job_running(client, db_session, monkeypatch, tmp_path):
     submitted = _capture_jobs(monkeypatch)
     _delete_ready(monkeypatch, tmp_path)
-    _add_candidate(db_session, "/虚构/甲/ABC-001", selected=True)
+    film_dir = "/虚构/甲/ABC-001"
+    _add_candidate(db_session, film_dir, selected=True)
     db_session.add(BackgroundJob(job_id="running-delete", job_type="actress:delete", done=False, stage="删除中"))
     db_session.commit()
 
-    response = client.post("/actresses/delete-batches")
+    response = client.post("/actresses/delete-batches", json={"film_dirs": [film_dir]})
 
     assert response.status_code == 409
     # 不留下没人执行的待执行批次
@@ -413,40 +492,97 @@ def test_create_batch_returns_409_when_delete_job_running(client, db_session, mo
     assert submitted == []
 
 
-def test_create_batch_starts_delete_job(client, db_session, monkeypatch, tmp_path):
+def test_create_batch_uses_only_confirmed_films(client, db_session, monkeypatch, tmp_path):
     submitted = _capture_jobs(monkeypatch)
     _delete_ready(monkeypatch, tmp_path)
-    _add_candidate(db_session, "/虚构/甲/ABC-001", selected=True)
+    shown = "/虚构/甲/ABC-001"
+    _add_candidate(db_session, shown, selected=True)
+    # 网页打开之后，每日任务又往清单里加了一部（默认勾选），网页上没见过
+    added_later = "/虚构/甲/ABC-002"
+    _add_candidate(db_session, added_later, selected=True)
 
-    response = client.post("/actresses/delete-batches")
+    response = client.post("/actresses/delete-batches", json={"film_dirs": [shown]})
 
     assert response.status_code == 202
     body = response.json()
     batch = db_session.get(ActressDeleteBatch, body["batch_id"])
+    assert [film.film_dir for film in batch.films] == [shown]
     assert batch.status == "pending"
     assert batch.job_id == body["job_id"]
     assert [job_id for job_id, _work in submitted] == [body["job_id"]]
     assert db_session.get(BackgroundJob, body["job_id"]).job_type == "actress:delete"
+    # 没确认的片子留在清单里
+    assert added_later in set(db_session.scalars(select(ActressDeleteCandidate.film_dir)))
 
 
-def test_resume_allows_only_unfinished_batches(client, db_session, monkeypatch, tmp_path):
+def test_create_batch_returns_409_when_candidates_changed(client, db_session, monkeypatch, tmp_path):
     submitted = _capture_jobs(monkeypatch)
     _delete_ready(monkeypatch, tmp_path)
-    finished = ActressDeleteBatch(status="completed")
-    stopped = ActressDeleteBatch(status="interrupted")
-    db_session.add_all([finished, stopped])
+    _add_candidate(db_session, "/虚构/甲/ABC-001", selected=True)
+
+    # ABC-002 在网页打开之后已移出清单
+    response = client.post(
+        "/actresses/delete-batches", json={"film_dirs": ["/虚构/甲/ABC-001", "/虚构/乙/ABC-002"]}
+    )
+
+    assert response.status_code == 409
+    assert "清单有变化，请刷新后再确认" in response.json()["detail"]
+    assert db_session.scalars(select(ActressDeleteBatch)).all() == []
+    assert db_session.scalars(select(BackgroundJob)).all() == []
+    assert submitted == []
+
+
+def test_create_batch_drops_batch_when_delete_job_starts_meanwhile(client, db_session, monkeypatch, tmp_path):
+    submitted = _capture_jobs(monkeypatch)
+    _delete_ready(monkeypatch, tmp_path)
+    film_dir = "/虚构/甲/ABC-001"
+    _add_candidate(db_session, film_dir, selected=True)
+
+    def job_already_running(_db, job_type, **_kwargs):
+        raise JobAlreadyRunning(job_type)
+
+    # 建批次之后、建任务之前，另一个删除任务启动了
+    monkeypatch.setattr(f"{_ROUTES}.create_job", job_already_running)
+
+    response = client.post("/actresses/delete-batches", json={"film_dirs": [film_dir]})
+
+    assert response.status_code == 409
+    assert db_session.scalars(select(ActressDeleteBatch)).all() == []
+    assert submitted == []
+
+
+@pytest.mark.parametrize(
+    ("batch_status", "expected"),
+    [("failed", 202), ("interrupted", 202), ("running", 202), ("pending", 400), ("completed", 400)],
+)
+def test_resume_status_rules(client, db_session, monkeypatch, tmp_path, batch_status, expected):
+    submitted = _capture_jobs(monkeypatch)
+    _delete_ready(monkeypatch, tmp_path)
+    batch = ActressDeleteBatch(status=batch_status)
+    db_session.add(batch)
     db_session.commit()
 
-    assert client.post(f"/actresses/delete-batches/{finished.id}/resume").status_code == 400
+    response = client.post(f"/actresses/delete-batches/{batch.id}/resume")
+
+    assert response.status_code == expected, response.text
+    if expected == 202:
+        assert response.json() == {"batch_id": batch.id, "job_id": batch.job_id}
+        assert [job_id for job_id, _work in submitted] == [batch.job_id]
+    else:
+        assert batch.job_id is None
+        assert submitted == []
+        assert db_session.scalars(select(BackgroundJob)).all() == []
+
+
+def test_resume_rejects_missing_batch_and_running_job(client, db_session, monkeypatch, tmp_path):
+    _capture_jobs(monkeypatch)
+    _delete_ready(monkeypatch, tmp_path)
+    stopped = ActressDeleteBatch(status="interrupted")
+    db_session.add(stopped)
+    db_session.commit()
+
     assert client.post("/actresses/delete-batches/9999/resume").status_code == 404
-
-    response = client.post(f"/actresses/delete-batches/{stopped.id}/resume")
-
-    assert response.status_code == 202
-    body = response.json()
-    assert body["batch_id"] == stopped.id
-    assert stopped.job_id == body["job_id"]
-    assert [job_id for job_id, _work in submitted] == [body["job_id"]]
+    assert client.post(f"/actresses/delete-batches/{stopped.id}/resume").status_code == 202
     # 这个删除任务还没结束，不能再续跑
     assert client.post(f"/actresses/delete-batches/{stopped.id}/resume").status_code == 409
 

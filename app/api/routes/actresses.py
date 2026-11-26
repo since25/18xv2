@@ -54,7 +54,7 @@ from app.services.actresses.archive_service import (
     require_strm_roots,
 )
 from app.services.actresses.candidates_service import CandidateService
-from app.services.actresses.delete_batch_service import DeleteBatchService
+from app.services.actresses.delete_batch_service import CandidateListChanged, DeleteBatchService
 from app.services.actresses.delete_guard import PathMapper, parse_path_map
 from app.services.actresses.films import load_films, read_nfo_title
 from app.services.actresses.job_runner import (
@@ -305,21 +305,27 @@ def actors_by_media(
 
     valid_item = (JellyfinMediaItem.source == "strm_115", JellyfinMediaItem.active.is_(True))
     if jellyfin_item_id:
-        item_path = db.scalar(
-            select(JellyfinMediaItem.path)
+        item = db.execute(
+            select(JellyfinMediaItem.id, JellyfinMediaItem.path)
             .where(*valid_item, JellyfinMediaItem.jellyfin_item_id == jellyfin_item_id)
             .limit(1)
-        )
-        film_dir = os.path.dirname(item_path) if item_path else None
+        ).first()
+        film_dir = os.path.dirname(item.path) if item else None
     else:
         normalized = os.path.normpath(path)
-        item_path = db.scalar(select(JellyfinMediaItem.path).where(*valid_item, JellyfinMediaItem.path == normalized))
+        item = db.execute(
+            select(JellyfinMediaItem.id, JellyfinMediaItem.path).where(
+                *valid_item, JellyfinMediaItem.path == normalized
+            )
+        ).first()
         # 传的是 STRM 路径就取它所在的番号目录，否则按番号目录本身查
-        film_dir = os.path.dirname(item_path) if item_path else normalized
+        film_dir = os.path.dirname(item.path) if item else normalized
     films = load_films(db, strm_roots=_strm_roots(settings), film_dirs={film_dir}) if film_dir else []
     if not films:
         raise HTTPException(status_code=404, detail="找不到这部片")
     film = films[0]
+    # 播放器改状态时回传：按条目查的用这个条目，按番号目录查的用这部片第一个条目
+    media_item_id = item.id if item else film.media_item_ids[0]
 
     try:
         actresses = ArchiveService().ensure_actresses(db, list(film.actor_names))
@@ -332,6 +338,7 @@ def actors_by_media(
     return {
         "film_dir": film.film_dir,
         "number": film.number,
+        "media_item_id": media_item_id,
         "in_candidates": in_candidates,
         "actors": [
             {"actress_id": actress.id, "name": name, "status": actress.status}
@@ -365,7 +372,12 @@ def set_actress_status(payload: ActressStatusRequest, db: Session = Depends(get_
 @router.post("/refresh", response_model=ActressJobResponse, status_code=status.HTTP_202_ACCEPTED)
 def trigger_refresh(db: Session = Depends(get_db)) -> dict:
     """手动刷新女优档案和待删清单（与每日任务的女优步骤相同）。"""
-    _require_enabled(get_settings())
+    settings = get_settings()
+    _require_enabled(settings)
+    try:
+        require_strm_roots(_strm_roots(settings), "刷新女优档案")
+    except ActressError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     job_id = _start_job(db, JOB_REFRESH, "女优刷新任务正在运行，请等它结束")
     submit_job(job_id, refresh_work)
     return {"job_id": job_id}
@@ -462,15 +474,22 @@ def list_delete_batches(db: Session = Depends(get_db)) -> dict:
 @router.post(
     "/delete-batches", response_model=ActressDeleteBatchStartResponse, status_code=status.HTTP_202_ACCEPTED
 )
-def create_delete_batch(request: Request, db: Session = Depends(get_db)) -> dict:
-    """把清单里勾选的片子建成删除批次并交给后台执行。"""
+def create_delete_batch(
+    payload: ActressFilmDirsRequest, request: Request, db: Session = Depends(get_db)
+) -> dict:
+    """把网页上勾选并确认的片子建成删除批次并交给后台执行。
+
+    只删请求里的这些片子；其中有已不在待删清单里的（页面过期）返回 409，让用户刷新后再确认。
+    """
     settings = get_settings()
     # 先看删除任务是否在跑：在跑时直接拒绝，不建一个没人执行的批次
     if BackgroundJobService.list_active(db, JOB_DELETE):
         raise HTTPException(status_code=409, detail=_DELETE_RUNNING)
     _require_delete_ready(settings)
     try:
-        batch = DeleteBatchService().create_batch(db, strm_roots=_strm_roots(settings))
+        batch = DeleteBatchService().create_batch(db, strm_roots=_strm_roots(settings), film_dirs=payload.film_dirs)
+    except CandidateListChanged as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ActressError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     try:
@@ -527,9 +546,8 @@ def get_delete_batch(batch_id: int, db: Session = Depends(get_db)) -> dict:
 )
 def resume_delete_batch(batch_id: int, request: Request, db: Session = Depends(get_db)) -> dict:
     """续跑失败、中断或执行被打断的批次：只处理待执行和失败的片子。"""
-    settings = get_settings()
+    _require_delete_ready(get_settings())
     batch = _get_batch(db, batch_id)
-    _require_delete_ready(settings)
     if batch.status not in _RESUMABLE_STATUSES:
         raise HTTPException(
             status_code=400,
