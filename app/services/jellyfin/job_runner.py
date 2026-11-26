@@ -9,6 +9,7 @@ from app.db.session import SessionLocal
 from app.services.jellyfin.client import JellyfinClient
 from app.services.jellyfin.collection_sync_service import CollectionSyncService
 from app.services.jellyfin.cover_service import CoverService
+from app.services.jellyfin.display_name_sync_service import DisplayNameSyncService
 from app.services.jellyfin.scan_service import MediaScanService
 # JobAlreadyRunning 从统一启动器重新导出，保证路由和每日循环捕获的是同一个类
 from app.services.job_runner import JobAlreadyRunning, JobWork, create_job, run_job  # noqa: F401
@@ -19,6 +20,7 @@ logger = logging.getLogger(__name__)
 JOB_SCAN = "jellyfin:scan"
 JOB_SYNC = "jellyfin:sync"
 JOB_COVERS = "jellyfin:covers"
+JOB_NAMES = "jellyfin:names"
 
 
 def jellyfin_scan_enabled(settings: Settings) -> bool:
@@ -33,6 +35,11 @@ def jellyfin_sync_enabled(settings: Settings) -> bool:
         and getattr(settings, "jellyfin_base_url", None)
         and getattr(settings, "jellyfin_api_key", None)
     )
+
+
+def jellyfin_display_names_enabled(settings: Settings) -> bool:
+    """返回每日显示名同步是否开启（需同步可用且开关打开）。"""
+    return bool(jellyfin_sync_enabled(settings) and getattr(settings, "jellyfin_display_names_enabled", False))
 
 
 def jellyfin_cover_enabled(settings: Settings) -> bool:
@@ -82,6 +89,36 @@ def sync_work(db, progress) -> dict:
     return summary
 
 
+def names_work(*, dry_run: bool = False, keyword: str | None = None, restore: bool = False) -> JobWork:
+    """返回显示名同步任务的干活函数；只预览、单关键词、回滚三种选项透传给服务。"""
+
+    def work(db, progress):
+        progress("改名中", 0, 0)
+        settings = get_settings()
+        if not jellyfin_sync_enabled(settings):
+            raise RuntimeError("Jellyfin 同步未启用或缺少地址/API Key")
+        client = JellyfinClient(
+            settings.jellyfin_base_url,
+            settings.jellyfin_api_key,
+            settings.jellyfin_timeout_seconds,
+            settings.jellyfin_page_size,
+        )
+        with client:
+            summary = DisplayNameSyncService().sync(
+                db,
+                client,
+                local_roots=list(getattr(settings, "media_library_local_roots", []) or []),
+                dry_run=dry_run,
+                keyword=keyword,
+                restore=restore,
+                progress=progress,
+            )
+        progress("完成", 1, 1)
+        return summary
+
+    return work
+
+
 def cover_work(db, progress) -> dict:
     """本地视频封面任务的干活函数。"""
     progress("生成封面中", 0, 0)
@@ -106,6 +143,11 @@ def run_scan_job(job_id: str) -> None:
 def run_sync_job(job_id: str) -> None:
     """在独立数据库会话中运行一次合集同步并记录结果。"""
     run_job(job_id, sync_work)
+
+
+def run_names_job(job_id: str, *, dry_run: bool = False, keyword: str | None = None, restore: bool = False) -> None:
+    """在独立数据库会话中运行一次显示名同步并记录结果。"""
+    run_job(job_id, names_work(dry_run=dry_run, keyword=keyword, restore=restore))
 
 
 def run_cover_job(job_id: str) -> None:
@@ -143,6 +185,17 @@ async def jellyfin_daily_loop(settings: Settings) -> None:
                             logger.info("Jellyfin 每日同步已在运行，跳过本次创建")
                     if sync_job_id is not None:
                         await asyncio.to_thread(run_sync_job, sync_job_id)
+
+                # 合集同步之后维护本地视频显示名（开关默认关闭）
+                if jellyfin_display_names_enabled(settings):
+                    names_job_id = None
+                    with SessionLocal() as db:
+                        try:
+                            names_job_id = start_job(db, JOB_NAMES)
+                        except JobAlreadyRunning:
+                            logger.info("Jellyfin 每日显示名同步已在运行，跳过本次创建")
+                    if names_job_id is not None:
+                        await asyncio.to_thread(run_names_job, names_job_id)
             await asyncio.sleep(60)
         except asyncio.CancelledError:
             raise

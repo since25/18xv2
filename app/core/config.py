@@ -84,6 +84,8 @@ class Settings(BaseSettings):
     jellyfin_timeout_seconds: int = Field(default=15, alias="JELLYFIN_TIMEOUT_SECONDS")
     jellyfin_page_size: int = Field(default=500, alias="JELLYFIN_PAGE_SIZE")
     jellyfin_daily_run_hour: int = Field(default=3, alias="JELLYFIN_DAILY_RUN_HOUR")
+    # 每日合集同步后是否自动维护本地视频显示名；命令行手动执行不受它限制
+    jellyfin_display_names_enabled: bool = Field(default=False, alias="JELLYFIN_DISPLAY_NAMES_ENABLED")
     jellyfin_cover_since: str | None = Field(default=None, alias="JELLYFIN_COVER_SINCE")
     jellyfin_cover_run_hour: int = Field(default=2, alias="JELLYFIN_COVER_RUN_HOUR")
     jellyfin_cover_deadline_minute: int = Field(default=25, alias="JELLYFIN_COVER_DEADLINE_MINUTE")

@@ -40,6 +40,15 @@ python scripts/sync_strategy_rules.py --rules-file path/to/rules.yaml
 ```
 将 `examples/rules.yaml` 的规则同步到 `strategy_rules` 表。部署后运行一次。
 
+### jellyfin_display_names.py — Jellyfin 本地视频显示名
+```bash
+python scripts/jellyfin_display_names.py --dry-run            # 只预览
+python scripts/jellyfin_display_names.py --keyword 名字        # 只改一个关键词
+python scripts/jellyfin_display_names.py                      # 全量
+python scripts/jellyfin_display_names.py --restore            # 回滚：改回文件名并解锁
+```
+生产在 `docker exec docker-app-1` 里执行。说明见 `docker/jellyfin/README.md`「本地视频显示名」。
+
 ### 115_real_smoke.py — API 冒烟测试
 ```bash
 python scripts/115_real_smoke.py                            # 只读冒烟

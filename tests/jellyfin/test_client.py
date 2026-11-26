@@ -158,3 +158,96 @@ def test_get_collection_item_ids_reads_members_as_user():
     client = JellyfinClient("http://jellyfin.test", "test-key", 3, 2, httpx.MockTransport(handler), sleep_fn=lambda _: None)
 
     assert client.get_collection_item_ids("collection-1") == {"item-1", "item-2"}
+
+
+def test_iter_media_items_reads_name_and_locks():
+    seen: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(dict(request.url.params))
+        return httpx.Response(
+            200,
+            json={
+                "Items": [
+                    {"Id": "i1", "Path": "/r/甲/包/a.mp4", "Name": "a", "LockedFields": ["Name"]},
+                    {"Id": "i2", "Path": "/r/甲/包/b.mp4", "Name": "b"},
+                ],
+                "TotalRecordCount": 2,
+            },
+        )
+
+    client = JellyfinClient("http://jf.test", "k", 3, 50, httpx.MockTransport(handler), sleep_fn=lambda _: None)
+
+    assert list(client.iter_media_items()) == [
+        {"id": "i1", "path": "/r/甲/包/a.mp4", "name": "a", "locked_fields": ["Name"]},
+        {"id": "i2", "path": "/r/甲/包/b.mp4", "name": "b", "locked_fields": None},
+    ]
+    assert seen[0]["Fields"] == "Path,Settings"
+    assert seen[0]["IsFolder"] == "false"
+
+
+def _item_handler(item: dict, posted: list[dict]):
+    """模拟管理员读写单个条目：GET 必须带管理员 userId，POST 记录提交内容。"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path == "/Users":
+            return httpx.Response(200, json=[{"Id": "user-1", "Policy": {"IsAdministrator": True}}])
+        if request.method == "GET" and request.url.path == f"/Items/{item['Id']}":
+            if request.url.params.get("userId") != "user-1":
+                return httpx.Response(400)
+            return httpx.Response(200, json=dict(item))
+        if request.method == "POST" and request.url.path == f"/Items/{item['Id']}":
+            posted.append(json.loads(request.content))
+            return httpx.Response(204)
+        return httpx.Response(404)
+
+    return handler
+
+
+def test_set_item_name_appends_name_lock():
+    posted: list[dict] = []
+    handler = _item_handler({"Id": "i1", "Name": "old", "LockedFields": ["Overview"]}, posted)
+    client = JellyfinClient("http://jf.test", "k", 3, 2, httpx.MockTransport(handler), sleep_fn=lambda _: None)
+
+    client.set_item_name("i1", "甲/包 · 01")
+
+    assert len(posted) == 1
+    assert posted[0]["Name"] == "甲/包 · 01"
+    assert posted[0]["LockedFields"] == ["Overview", "Name"]
+
+
+def test_set_item_name_does_not_duplicate_lock():
+    posted: list[dict] = []
+    handler = _item_handler({"Id": "i1", "Name": "old", "LockedFields": ["Name"]}, posted)
+    client = JellyfinClient("http://jf.test", "k", 3, 2, httpx.MockTransport(handler), sleep_fn=lambda _: None)
+
+    client.set_item_name("i1", "甲/包 · 01")
+
+    assert posted[0]["LockedFields"] == ["Name"]
+
+
+def test_set_item_name_unlock_removes_name_lock():
+    posted: list[dict] = []
+    handler = _item_handler({"Id": "i1", "Name": "甲/包 · 01", "LockedFields": ["Overview", "Name"]}, posted)
+    client = JellyfinClient("http://jf.test", "k", 3, 2, httpx.MockTransport(handler), sleep_fn=lambda _: None)
+
+    client.set_item_name("i1", "a", lock=False)
+
+    assert posted[0]["Name"] == "a"
+    assert posted[0]["LockedFields"] == ["Overview"]
+
+
+def test_ensure_sort_name_order_writes_only_when_needed():
+    posted: list[dict] = []
+    handler = _item_handler({"Id": "c1", "Name": "甲", "DisplayOrder": "PremiereDate"}, posted)
+    client = JellyfinClient("http://jf.test", "k", 3, 2, httpx.MockTransport(handler), sleep_fn=lambda _: None)
+
+    assert client.ensure_sort_name_order("c1") is True
+    assert posted[0]["DisplayOrder"] == "SortName"
+
+    posted_again: list[dict] = []
+    handler = _item_handler({"Id": "c1", "Name": "甲", "DisplayOrder": "SortName"}, posted_again)
+    client = JellyfinClient("http://jf.test", "k", 3, 2, httpx.MockTransport(handler), sleep_fn=lambda _: None)
+
+    assert client.ensure_sort_name_order("c1") is False
+    assert posted_again == []

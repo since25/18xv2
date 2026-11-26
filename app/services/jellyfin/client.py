@@ -102,8 +102,8 @@ class JellyfinClient:
             raise JellyfinError("Jellyfin 列表格式无效")
         return [item for item in items if isinstance(item, dict)]
 
-    def iter_media_paths(self) -> Iterator[tuple[str, str]]:
-        """分页读取所有媒体路径和 Jellyfin 条目 ID。"""
+    def _iter_media_pages(self, fields: str) -> Iterator[dict[str, Any]]:
+        """分页读取所有非文件夹条目，逐个返回原始条目对象。"""
         start_index = 0
         while True:
             response = self._request(
@@ -112,18 +112,14 @@ class JellyfinClient:
                 params={
                     "Recursive": "true",
                     "IsFolder": "false",
-                    "Fields": "Path",
+                    "Fields": fields,
                     "StartIndex": start_index,
                     "Limit": self.page_size,
                 },
             )
             payload = self._payload(response)
             items = self._items(payload)
-            for item in items:
-                path = item.get("Path", item.get("path"))
-                item_id = item.get("Id", item.get("id"))
-                if isinstance(path, str) and isinstance(item_id, str):
-                    yield path, item_id
+            yield from items
 
             start_index += len(items)
             total = payload.get("TotalRecordCount", payload.get("totalRecordCount"))
@@ -137,6 +133,31 @@ class JellyfinClient:
                     pass
             elif len(items) < self.page_size:
                 break
+
+    def iter_media_paths(self) -> Iterator[tuple[str, str]]:
+        """分页读取所有媒体路径和 Jellyfin 条目 ID。"""
+        for item in self._iter_media_pages("Path"):
+            path = item.get("Path", item.get("path"))
+            item_id = item.get("Id", item.get("id"))
+            if isinstance(path, str) and isinstance(item_id, str):
+                yield path, item_id
+
+    def iter_media_items(self) -> Iterator[dict[str, Any]]:
+        """分页读取条目的 ID、路径、名字和锁定字段；返回里没有锁定字段时为 None。"""
+        # Fields=Settings 才会返回 LockedFields（10.10.7 实测）
+        for item in self._iter_media_pages("Path,Settings"):
+            path = item.get("Path", item.get("path"))
+            item_id = item.get("Id", item.get("id"))
+            if not isinstance(path, str) or not isinstance(item_id, str):
+                continue
+            name = item.get("Name", item.get("name"))
+            locked = item.get("LockedFields", item.get("lockedFields"))
+            yield {
+                "id": item_id,
+                "path": path,
+                "name": name if isinstance(name, str) else "",
+                "locked_fields": [str(field) for field in locked] if isinstance(locked, list) else None,
+            }
 
     def list_collections(self) -> list[dict]:
         """列出 Jellyfin 中的 BoxSet 合集及其标签。"""
@@ -243,6 +264,33 @@ class JellyfinClient:
         payload["Name"] = name
         payload["Tags"] = tags
         self._request("POST", f"/Items/{collection_id}", json=payload)
+
+    def _get_item_as_admin(self, item_id: str) -> dict[str, Any]:
+        """以管理员身份读取单个条目的完整对象，供改写后整体提交。"""
+        response = self._request("GET", f"/Items/{item_id}", params={"userId": self._get_admin_user_id()})
+        return self._payload(response)
+
+    def set_item_name(self, item_id: str, name: str, *, lock: bool = True) -> None:
+        """改条目显示名；lock=True 时锁定名字防止重扫改回，lock=False 时解锁（回滚用）。"""
+        payload = self._get_item_as_admin(item_id)
+        payload["Name"] = name
+        locked = payload.get("LockedFields")
+        locked = [str(field) for field in locked] if isinstance(locked, list) else []
+        if lock and "Name" not in locked:
+            locked.append("Name")
+        if not lock:
+            locked = [field for field in locked if field != "Name"]
+        payload["LockedFields"] = locked
+        self._request("POST", f"/Items/{item_id}", json=payload)
+
+    def ensure_sort_name_order(self, collection_id: str) -> bool:
+        """把合集设为按名字排序；已经是则不写，返回是否改动。"""
+        payload = self._get_item_as_admin(collection_id)
+        if payload.get("DisplayOrder") == "SortName":
+            return False
+        payload["DisplayOrder"] = "SortName"
+        self._request("POST", f"/Items/{collection_id}", json=payload)
+        return True
 
     def delete_item(self, collection_id: str) -> None:
         """删除一个 Jellyfin 合集。"""
