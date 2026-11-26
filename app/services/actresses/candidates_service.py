@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 import os
 
 from sqlalchemy import select
@@ -15,8 +15,11 @@ from sqlalchemy.orm import Session
 
 from app.models.actresses import ActressDeleteCandidate, ActressKeptFilm
 from app.services.actresses.archive_service import require_strm_roots
-from app.services.actresses.films import load_films, read_nfo_title
+from app.services.actresses.delete_guard import PathMapper, read_strm_url
+from app.services.actresses.films import Film, load_films, read_nfo_title
+from app.services.actresses.remote_115 import resolve_115
 from app.services.actresses.rules import RuleContext
+from app.services.client_115.client import Fake115Client, Real115Client
 
 
 @dataclass
@@ -41,6 +44,35 @@ class CandidateView:
 def _normalize_dirs(film_dirs: list[str]) -> list[str]:
     """去掉末尾斜杠等写法差异并去重，与 load_films 对番号目录的处理一致。"""
     return list(dict.fromkeys(os.path.normpath(film_dir) for film_dir in film_dirs if film_dir))
+
+
+def _check_film(
+    film: Film | None, client_115: Real115Client | Fake115Client, mapper: PathMapper
+) -> tuple[str, str | None]:
+    """逐个分段读可写路径上的 STRM 地址并在 115 上解析，返回（remote_state, remote_note）。
+
+    全部 found → found；全部 missing → missing；否则 error。note 写第一个问题，全部 found 时为 None。
+    """
+    if film is None:
+        return "error", "片子已不在扫描结果中"
+    states: list[str] = []
+    problems: list[str] = []
+    for strm_path in film.strm_paths:
+        local_path = mapper.map(strm_path)
+        url = read_strm_url(local_path)
+        if url is None:
+            states.append("error")
+            problems.append(f"读不到 STRM 地址：{local_path}")
+            continue
+        result = resolve_115(client_115, url)
+        states.append(result.state)
+        if result.state != "found":
+            problems.append(f"{result.remote_path or url}：{result.note}")
+    if all(state == "found" for state in states):
+        return "found", None
+    if all(state == "missing" for state in states):
+        return "missing", problems[0]
+    return "error", problems[0]
 
 
 class CandidateService:
@@ -143,4 +175,31 @@ class CandidateService:
             db.delete(row)
         db.commit()
         self.reconcile(db, strm_roots=strm_roots, added_by="mark")
+        return len(rows)
+
+    def check_remote(
+        self,
+        db: Session,
+        film_dirs: list[str],
+        client_115: Real115Client | Fake115Client,
+        *,
+        strm_roots: list[str],
+        mapper: PathMapper,
+    ) -> int:
+        """检查清单里这些片子在 115 上还能不能找到，结果写进清单行，返回处理部数。
+
+        只读：不删任何文件。不在清单里的番号目录跳过；根目录没配置时抛 ActressError，不改任何数据。
+        """
+        require_strm_roots(strm_roots, "检查 115 文件")
+        dirs = _normalize_dirs(film_dirs)
+        rows = db.scalars(select(ActressDeleteCandidate).where(ActressDeleteCandidate.film_dir.in_(dirs))).all()
+        films = {
+            film.film_dir: film
+            for film in load_films(db, strm_roots=strm_roots, film_dirs={row.film_dir for row in rows})
+        }
+        checked_at = datetime.now(UTC)
+        for row in rows:
+            row.remote_state, row.remote_note = _check_film(films.get(row.film_dir), client_115, mapper)
+            row.remote_checked_at = checked_at
+        db.commit()
         return len(rows)

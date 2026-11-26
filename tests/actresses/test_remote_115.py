@@ -1,0 +1,147 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+from sqlalchemy import select
+
+from app.models.actresses import ActressDeleteCandidate
+from app.models.jellyfin import JellyfinMediaItem
+from app.services.actresses.archive_service import ActressError
+from app.services.actresses.candidates_service import CandidateService
+from app.services.actresses.delete_guard import PathMapper
+from app.services.actresses.remote_115 import Remote115, resolve_115
+from app.services.client_115.client import Client115Error
+from app.services.client_115.schemas import NodePayload
+
+BASE = "http://openlist.test/d/115_OPEN/AV/"
+
+
+@pytest.fixture
+def client(fake_client):
+    fake_client.add_node(NodePayload(id="d1", name="AV", path="/AV", parent_id="0", is_file=False))
+    fake_client.add_node(
+        NodePayload(id="f1", name="ABC-001.mp4", path="/AV/ABC-001.mp4", parent_id="d1", is_file=True)
+    )
+    return fake_client
+
+
+class _RaisingClient:
+    """get_file 总是抛给定异常的 115 客户端。"""
+
+    def __init__(self, exc: Exception) -> None:
+        self.exc = exc
+
+    def get_file(self, file_id: str | None = None, path: str | None = None) -> dict:
+        raise self.exc
+
+
+def test_resolve_found(client):
+    assert resolve_115(client, BASE + "ABC-001.mp4") == Remote115(
+        state="found", file_id="f1", remote_path="/AV/ABC-001.mp4", note=None
+    )
+    # 地址里的转义、协议和主机大小写不影响
+    result = resolve_115(client, "HTTP://OpenList.Test/d/115_OPEN/AV/%41BC-001.mp4")
+    assert (result.state, result.file_id) == ("found", "f1")
+
+
+def test_resolve_missing(client):
+    result = resolve_115(client, BASE + "ABC-002.mp4")
+
+    assert result.state == "missing"
+    assert result.file_id is None
+    assert result.remote_path == "/AV/ABC-002.mp4"
+    assert "Node not found" in result.note
+
+
+@pytest.mark.parametrize("message", ["NOT FOUND", "文件不存在"])
+def test_resolve_missing_markers_ignore_case(message):
+    assert resolve_115(_RaisingClient(Client115Error(message)), BASE + "ABC-001.mp4").state == "missing"
+
+
+def test_resolve_rejects_non_115_url(client):
+    for url in (
+        "http://openlist.test/d/other/AV/ABC-001.mp4",
+        "http://openlist.test/AV/ABC-001.mp4",
+        "/mnt/AV/ABC-001.mp4",
+    ):
+        result = resolve_115(client, url)
+        assert result.state == "error"
+        assert result.note == "不是 115_OPEN 地址"
+        assert result.file_id is None
+
+
+def test_resolve_other_failures_are_error(client):
+    # 不认识的报错一律当失败，不当成「115 上已不存在」
+    for exc in (Client115Error("ACCESS_TOKEN is not configured"), RuntimeError("boom")):
+        result = resolve_115(_RaisingClient(exc), BASE + "ABC-001.mp4")
+        assert result.state == "error"
+        assert result.file_id is None
+    # 解析到的是文件夹，不能当成要删的文件
+    folder = resolve_115(client, "http://openlist.test/d/115_OPEN/AV")
+    assert folder.state == "error"
+    assert folder.file_id is None
+
+
+def _add_film(db_session, scan_root: Path, local_root: Path, number: str, parts: dict[str, str | None]) -> str:
+    """插入一部片的扫描条目和清单行，并在本地可写路径写 STRM（内容为 None 的分段不写文件）。"""
+    film_dir = scan_root / "甲" / number
+    for file_name, content in parts.items():
+        db_session.add(JellyfinMediaItem(source="strm_115", path=str(film_dir / file_name), active=True))
+        if content is not None:
+            local_path = local_root / "甲" / number / file_name
+            local_path.parent.mkdir(parents=True, exist_ok=True)
+            local_path.write_text(content + "\n", encoding="utf-8")
+    db_session.add(ActressDeleteCandidate(film_dir=str(film_dir), selected=True, added_by="mark"))
+    db_session.commit()
+    return str(film_dir)
+
+
+def test_check_remote_marks_mixed_as_error(db_session, tmp_path, client):
+    scan_root = tmp_path / "scan"
+    local_root = tmp_path / "local"
+    client.add_node(
+        NodePayload(id="f2", name="ABC-002-CD1.mp4", path="/AV/ABC-002-CD1.mp4", parent_id="d1", is_file=True)
+    )
+    found = _add_film(db_session, scan_root, local_root, "ABC-001", {"ABC-001.strm": BASE + "ABC-001.mp4"})
+    mixed = _add_film(
+        db_session,
+        scan_root,
+        local_root,
+        "ABC-002",
+        {"ABC-002-CD1.strm": BASE + "ABC-002-CD1.mp4", "ABC-002-CD2.strm": BASE + "ABC-002-CD2.mp4"},
+    )
+    missing = _add_film(db_session, scan_root, local_root, "ABC-003", {"ABC-003.strm": BASE + "ABC-003.mp4"})
+    unreadable = _add_film(db_session, scan_root, local_root, "ABC-004", {"ABC-004.strm": None})
+    untouched = _add_film(db_session, scan_root, local_root, "ABC-005", {"ABC-005.strm": BASE + "ABC-001.mp4"})
+    mapper = PathMapper([(str(scan_root), str(local_root))])
+
+    processed = CandidateService().check_remote(
+        db_session,
+        [found, mixed, missing, unreadable + "/", str(scan_root / "甲" / "ABC-009")],
+        client,
+        strm_roots=[str(scan_root)],
+        mapper=mapper,
+    )
+
+    assert processed == 4
+    rows = {row.film_dir: row for row in db_session.scalars(select(ActressDeleteCandidate))}
+    assert (rows[found].remote_state, rows[found].remote_note) == ("found", None)
+    assert rows[mixed].remote_state == "error"
+    assert "/AV/ABC-002-CD2.mp4" in rows[mixed].remote_note
+    assert rows[missing].remote_state == "missing"
+    assert "/AV/ABC-003.mp4" in rows[missing].remote_note
+    assert rows[unreadable].remote_state == "error"
+    assert str(local_root / "甲" / "ABC-004" / "ABC-004.strm") in rows[unreadable].remote_note
+    for film_dir in (found, mixed, missing, unreadable):
+        assert rows[film_dir].remote_checked_at is not None
+    assert (rows[untouched].remote_state, rows[untouched].remote_checked_at) == ("unchecked", None)
+
+
+def test_check_remote_requires_strm_roots(db_session, tmp_path, client):
+    film_dir = _add_film(db_session, tmp_path / "scan", tmp_path / "local", "ABC-001", {"ABC-001.strm": None})
+
+    with pytest.raises(ActressError):
+        CandidateService().check_remote(db_session, [film_dir], client, strm_roots=[""], mapper=PathMapper([]))
+    row = db_session.scalars(select(ActressDeleteCandidate)).one()
+    assert row.remote_state == "unchecked"
