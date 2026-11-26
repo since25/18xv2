@@ -360,7 +360,7 @@ git commit -m "feat: 女优删片的路径守卫与 115 文件解析"
 - Produces:
   - `BatchSummary`（dataclass）：`batch_id: int`、`deleted: int`、`failed: int`、`skipped: int`。
   - `DeleteBatchService`：
-    - `create_batch(db, *, strm_roots) -> ActressDeleteBatch`：把清单里 `selected=True` 的片子快照成批次片子（`status="pending"`，`number` 取番号目录名），批次 `status="pending"`；一部都没勾时抛 `ActressError("没有勾选的片子")`。
+    - `create_batch(db, *, strm_roots, film_dirs: list[str]) -> ActressDeleteBatch`：只把页面上确认的 `film_dirs`（normpath 去重）快照成批次片子（`status="pending"`，`number` 取番号目录名），批次 `status="pending"`；空列表抛 `ActressError("没有勾选的片子")`；其中任一部已不在待删清单 → 抛 `CandidateListChanged`（`ActressError` 子类），一部都不建。（2026-11-26 Task 9 审阅后修改：原先按服务端 `selected=True` 快照，可能删掉用户没在页面上见过的新片。）
     - `run(db, batch_id: int, *, client_115, guard: FilmDeleteGuard, mapper: PathMapper, strm_roots, progress: Callable[[str, int, int], None]) -> BatchSummary`：处理 `status in ("pending", "failed")` 的片子，批次开始置 `running`，全部处理完：有失败 → `failed`，否则 `completed`，写三个计数和 `finished_at`。每部片处理完 commit 一次。
 
 每部片的处理顺序（任何一步失败：片子置 `failed`、写 `error`、进入下一部，**不执行后面的步骤**）：
@@ -526,7 +526,7 @@ git commit -m "feat: 女优功能开关、刷新与删除任务、接入每日�
 | 方法 路径 | 请求 | 返回 |
 |---|---|---|
 | `GET /actresses` | `status`（三选一，可空）、`q`、`sort`（`film_count`\|`name`，默认 `film_count`）、`page`（默认 1）、`page_size`（默认 50，最大 200） | `ActressListResponse{items: list[ActressSummary], total, counts{none, blacklist, whitelist}}`；`ActressSummary{id, canonical_name, aliases: list[str], status, film_count, candidate_count}` |
-| `GET /actresses/by-media` | `jellyfin_item_id` 或 `path`（二选一） | `MediaActorsResponse{film_dir, number, in_candidates, actors: list{actress_id, name, status}}`；按 NFO 顺序，缺档的当场 `ensure_actresses`；找不到片子 404 |
+| `GET /actresses/by-media` | `jellyfin_item_id` 或 `path`（二选一） | `MediaActorsResponse{media_item_id, film_dir, number, in_candidates, actors: list{actress_id, name, status}}`（`media_item_id` 供播放器改状态时回传）；按 NFO 顺序，缺档的当场 `ensure_actresses`；找不到片子 404 |
 | `POST /actresses/status` | `ActressStatusRequest{actress_ids: list[int], status, source: "web"\|"player", media_item_id: int \| None}` | `ActressStatusResponse{changed, candidates_added, candidates_removed}`（先 `set_status` 再 `reconcile(added_by="mark")`） |
 | `POST /actresses/refresh` | — | `{job_id}`（手动触发 `JOB_REFRESH`） |
 | `GET /actresses/candidates` | — | `CandidateListResponse{items: list[CandidateItem], total, selected}` |
@@ -536,7 +536,7 @@ git commit -m "feat: 女优功能开关、刷新与删除任务、接入每日�
 | `GET /actresses/kept` | — | `{items: list{film_dir, number, created_at}}` |
 | `POST /actresses/kept/remove` | `{film_dirs}` | `{count}` |
 | `GET /actresses/delete-batches` | — | 批次列表（id、状态、三个计数、时间） |
-| `POST /actresses/delete-batches` | — | `{batch_id, job_id}`：`create_batch` 后用 `create_job(db, JOB_DELETE)` + `submit_job(job_id, delete_work(batch_id, client_115))`，并把 `job_id` 写回批次 |
+| `POST /actresses/delete-batches` | `{film_dirs}`（页面上勾选并确认的片子） | `{batch_id, job_id}`；清单有变化 409「清单有变化，请刷新后再确认」，空列表 400：`create_batch` 后用 `create_job(db, JOB_DELETE)` + `submit_job(job_id, delete_work(batch_id, client_115))`，并把 `job_id` 写回批次 |
 | `GET /actresses/delete-batches/{batch_id}` | — | 批次详情：片子列表（番号、状态、原因、错误）及每部片的文件行 |
 | `POST /actresses/delete-batches/{batch_id}/resume` | — | `{batch_id, job_id}`；只允许 `failed`、`interrupted`、`running`（且没有运行中的 `JOB_DELETE`） |
 | `GET /actresses/{actress_id}` | — | `ActressDetail{...ActressSummary, marks: list{from_status, to_status, source, media_item_id, created_at}, films: list{film_dir, number, title, actors: list{name, status}, protected: bool, in_candidates: bool}}` |
@@ -681,7 +681,7 @@ git commit -m "feat: 前端女优页"
 
 三个标签页：
 
-- **待删清单**：顶部「待删 N 部，本次勾选 M 部」、全选 / 全不选、「检查 115」（对勾选的片子调 `checkCandidatesRemote`，每次最多 50 部，分批调）、「确认删除」。表格每行：勾选框、番号、标题、因为谁、同片演员及状态、115 状态（未检查 / 可解析 / 已不存在 / 有问题+原因）、「保留」按钮。「确认删除」先弹确认框：「将删除 M 部片子的 115 原文件和本地 STRM，115 文件进回收站。确定？」，确定后 `createDeleteBatch`，切到「历史批次」并打开该批次。
+- **待删清单**：顶部「待删 N 部，本次勾选 M 部」、全选 / 全不选、「检查 115」（对勾选的片子调 `checkCandidatesRemote`，每次最多 50 部，分批调）、「确认删除」。表格每行：勾选框、番号、标题、因为谁、同片演员及状态、115 状态（未检查 / 可解析 / 已不存在 / 有问题+原因）、「保留」按钮。「确认删除」先弹确认框：「将删除 M 部片子的 115 原文件和本地 STRM，115 文件进回收站。确定？」，确定后 `createDeleteBatch(本次勾选的 film_dirs)`；返回 409「清单有变化」时提示用户并重新拉取清单、不切换页面；成功后切到「历史批次」并打开该批次。
 - **历史批次**：批次列表；打开一个批次时每 3 秒刷新一次 `getDeleteBatch` 直到状态不是 `running`，显示每部片的状态、原因、错误和文件行；`failed` / `interrupted` 的批次有「重试失败的」按钮（`resumeDeleteBatch`）。
 - **保留名单**：列表 + 「撤销保留」。
 
@@ -689,7 +689,8 @@ git commit -m "feat: 前端女优页"
 
 ```tsx
 it('只把勾选的片子算进本次删除，不勾选的留在清单')
-it('确认删除前弹确认框，确定后调用 createDeleteBatch')
+it('确认删除前弹确认框，确定后用本次勾选的 film_dirs 调用 createDeleteBatch')
+it('createDeleteBatch 返回 409 时提示清单有变化并重新拉取清单')
 it('点保留后调用 keepCandidates 并从列表移除')
 it('批次运行中轮询，完成后停止')
 it('失败批次显示重试按钮')
