@@ -7,6 +7,162 @@ export interface components {
       scan: components['schemas']['JobFrame'] | null
       submit: components['schemas']['JobFrame'] | null
     }
+    'ActressAliasRequest': {
+      alias: string
+    }
+    'ActressCandidateItem': {
+      film_dir: string
+      number: string
+      title: string | null
+      selected: boolean
+      added_by: "mark" | "daily"
+      added_at: string
+      black_names: string[]
+      other_actors: components['schemas']['ActressFilmActor'][]
+      remote_state: "unchecked" | "found" | "missing" | "error"
+      remote_note: string | null
+    }
+    'ActressCandidateListResponse': {
+      items: components['schemas']['ActressCandidateItem'][]
+      total: number
+      selected: number
+    }
+    'ActressCandidateSelectRequest': {
+      film_dirs: string[]
+      selected: boolean
+    }
+    'ActressCountResponse': {
+      count: number
+    }
+    'ActressDeleteBatchDetail': {
+      id: number
+      job_id: string | null
+      status: "pending" | "running" | "completed" | "failed" | "interrupted"
+      created_at: string
+      started_at: string | null
+      finished_at: string | null
+      deleted_films: number
+      failed_films: number
+      skipped_films: number
+      jellyfin_refresh: "done" | "skipped" | "error" | null
+      note: string | null
+      films: components['schemas']['ActressDeleteBatchFilmItem'][]
+    }
+    'ActressDeleteBatchFileItem': {
+      id: number
+      group: "remote_115" | "source_strm" | "organized_dir"
+      target: string
+      remote_file_id: string | null
+      status: "pending" | "deleted" | "missing" | "failed"
+      error: string | null
+      executed_at: string | null
+    }
+    'ActressDeleteBatchFilmItem': {
+      id: number
+      film_dir: string
+      number: string
+      status: "pending" | "deleted" | "skipped" | "failed"
+      reason: string | null
+      error: string | null
+      finished_at: string | null
+      files: components['schemas']['ActressDeleteBatchFileItem'][]
+    }
+    'ActressDeleteBatchListResponse': {
+      items: components['schemas']['ActressDeleteBatchSummary'][]
+    }
+    'ActressDeleteBatchStartResponse': {
+      batch_id: number
+      job_id: string
+    }
+    'ActressDeleteBatchSummary': {
+      id: number
+      job_id: string | null
+      status: "pending" | "running" | "completed" | "failed" | "interrupted"
+      created_at: string
+      started_at: string | null
+      finished_at: string | null
+      deleted_films: number
+      failed_films: number
+      skipped_films: number
+      jellyfin_refresh: "done" | "skipped" | "error" | null
+      note: string | null
+    }
+    'ActressDetail': {
+      id: number
+      canonical_name: string
+      aliases: string[]
+      status: "none" | "blacklist" | "whitelist"
+      film_count: number
+      candidate_count: number
+      marks: components['schemas']['ActressMarkItem'][]
+      films: components['schemas']['ActressFilmItem'][]
+    }
+    'ActressFilmActor': {
+      name: string
+      status: "none" | "blacklist" | "whitelist"
+    }
+    'ActressFilmDirsRequest': {
+      film_dirs: string[]
+    }
+    'ActressFilmItem': {
+      film_dir: string
+      number: string
+      title: string | null
+      actors: components['schemas']['ActressFilmActor'][]
+      protected: boolean
+      in_candidates: boolean
+    }
+    'ActressJobResponse': {
+      job_id: string
+    }
+    'ActressKeptItem': {
+      film_dir: string
+      number: string
+      created_at: string
+    }
+    'ActressKeptListResponse': {
+      items: components['schemas']['ActressKeptItem'][]
+    }
+    'ActressListResponse': {
+      items: components['schemas']['ActressSummary'][]
+      total: number
+      counts: components['schemas']['ActressStatusCounts']
+    }
+    'ActressMarkItem': {
+      from_status: "none" | "blacklist" | "whitelist"
+      to_status: "none" | "blacklist" | "whitelist"
+      source: string
+      media_item_id: number | null
+      note: string | null
+      created_at: string
+    }
+    'ActressMergeRequest': {
+      into_id: number
+    }
+    'ActressStatusCounts': {
+      none: number
+      blacklist: number
+      whitelist: number
+    }
+    'ActressStatusRequest': {
+      actress_ids: number[]
+      status: "none" | "blacklist" | "whitelist"
+      source: "web" | "player"
+      media_item_id?: number | null
+    }
+    'ActressStatusResponse': {
+      changed: number
+      candidates_added: number
+      candidates_removed: number
+    }
+    'ActressSummary': {
+      id: number
+      canonical_name: string
+      aliases: string[]
+      status: "none" | "blacklist" | "whitelist"
+      film_count: number
+      candidate_count: number
+    }
     'AmbiguousConflictItem': {
       source_path: string
       keyword_options: components['schemas']['AmbiguousKeywordOption'][]
@@ -952,6 +1108,17 @@ export interface components {
     }
     'MeResponse': {
       username: string
+    }
+    'MediaActor': {
+      actress_id: number
+      name: string
+      status: "none" | "blacklist" | "whitelist"
+    }
+    'MediaActorsResponse': {
+      film_dir: string
+      number: string
+      in_candidates: boolean
+      actors: components['schemas']['MediaActor'][]
     }
     'NodeDetailItem': {
       raw_name: string

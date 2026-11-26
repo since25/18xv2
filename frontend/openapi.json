@@ -27,6 +27,1011 @@
         "title": "ActiveJobsResponse",
         "type": "object"
       },
+      "ActressAliasRequest": {
+        "properties": {
+          "alias": {
+            "title": "Alias",
+            "type": "string"
+          }
+        },
+        "required": [
+          "alias"
+        ],
+        "title": "ActressAliasRequest",
+        "type": "object"
+      },
+      "ActressCandidateItem": {
+        "properties": {
+          "added_at": {
+            "format": "date-time",
+            "title": "Added At",
+            "type": "string"
+          },
+          "added_by": {
+            "enum": [
+              "mark",
+              "daily"
+            ],
+            "title": "Added By",
+            "type": "string"
+          },
+          "black_names": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Black Names",
+            "type": "array"
+          },
+          "film_dir": {
+            "title": "Film Dir",
+            "type": "string"
+          },
+          "number": {
+            "title": "Number",
+            "type": "string"
+          },
+          "other_actors": {
+            "items": {
+              "$ref": "#/components/schemas/ActressFilmActor"
+            },
+            "title": "Other Actors",
+            "type": "array"
+          },
+          "remote_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Remote Note"
+          },
+          "remote_state": {
+            "enum": [
+              "unchecked",
+              "found",
+              "missing",
+              "error"
+            ],
+            "title": "Remote State",
+            "type": "string"
+          },
+          "selected": {
+            "title": "Selected",
+            "type": "boolean"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          }
+        },
+        "required": [
+          "film_dir",
+          "number",
+          "selected",
+          "added_by",
+          "added_at",
+          "black_names",
+          "other_actors",
+          "remote_state"
+        ],
+        "title": "ActressCandidateItem",
+        "type": "object"
+      },
+      "ActressCandidateListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ActressCandidateItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "selected": {
+            "title": "Selected",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "selected"
+        ],
+        "title": "ActressCandidateListResponse",
+        "type": "object"
+      },
+      "ActressCandidateSelectRequest": {
+        "properties": {
+          "film_dirs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Film Dirs",
+            "type": "array"
+          },
+          "selected": {
+            "title": "Selected",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "film_dirs",
+          "selected"
+        ],
+        "title": "ActressCandidateSelectRequest",
+        "type": "object"
+      },
+      "ActressCountResponse": {
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "count"
+        ],
+        "title": "ActressCountResponse",
+        "type": "object"
+      },
+      "ActressDeleteBatchDetail": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "deleted_films": {
+            "title": "Deleted Films",
+            "type": "integer"
+          },
+          "failed_films": {
+            "title": "Failed Films",
+            "type": "integer"
+          },
+          "films": {
+            "items": {
+              "$ref": "#/components/schemas/ActressDeleteBatchFilmItem"
+            },
+            "title": "Films",
+            "type": "array"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "jellyfin_refresh": {
+            "anyOf": [
+              {
+                "enum": [
+                  "done",
+                  "skipped",
+                  "error"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Jellyfin Refresh"
+          },
+          "job_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job Id"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "skipped_films": {
+            "title": "Skipped Films",
+            "type": "integer"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "running",
+              "completed",
+              "failed",
+              "interrupted"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "created_at",
+          "deleted_films",
+          "failed_films",
+          "skipped_films",
+          "films"
+        ],
+        "title": "ActressDeleteBatchDetail",
+        "type": "object"
+      },
+      "ActressDeleteBatchFileItem": {
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "executed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Executed At"
+          },
+          "group": {
+            "enum": [
+              "remote_115",
+              "source_strm",
+              "organized_dir"
+            ],
+            "title": "Group",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "remote_file_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Remote File Id"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "deleted",
+              "missing",
+              "failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "target": {
+            "title": "Target",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "group",
+          "target",
+          "status"
+        ],
+        "title": "ActressDeleteBatchFileItem",
+        "type": "object"
+      },
+      "ActressDeleteBatchFilmItem": {
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "files": {
+            "items": {
+              "$ref": "#/components/schemas/ActressDeleteBatchFileItem"
+            },
+            "title": "Files",
+            "type": "array"
+          },
+          "film_dir": {
+            "title": "Film Dir",
+            "type": "string"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "number": {
+            "title": "Number",
+            "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "deleted",
+              "skipped",
+              "failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "film_dir",
+          "number",
+          "status",
+          "files"
+        ],
+        "title": "ActressDeleteBatchFilmItem",
+        "type": "object"
+      },
+      "ActressDeleteBatchListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ActressDeleteBatchSummary"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "ActressDeleteBatchListResponse",
+        "type": "object"
+      },
+      "ActressDeleteBatchStartResponse": {
+        "properties": {
+          "batch_id": {
+            "title": "Batch Id",
+            "type": "integer"
+          },
+          "job_id": {
+            "title": "Job Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "batch_id",
+          "job_id"
+        ],
+        "title": "ActressDeleteBatchStartResponse",
+        "type": "object"
+      },
+      "ActressDeleteBatchSummary": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "deleted_films": {
+            "title": "Deleted Films",
+            "type": "integer"
+          },
+          "failed_films": {
+            "title": "Failed Films",
+            "type": "integer"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "jellyfin_refresh": {
+            "anyOf": [
+              {
+                "enum": [
+                  "done",
+                  "skipped",
+                  "error"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Jellyfin Refresh"
+          },
+          "job_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job Id"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "skipped_films": {
+            "title": "Skipped Films",
+            "type": "integer"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "running",
+              "completed",
+              "failed",
+              "interrupted"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "created_at",
+          "deleted_films",
+          "failed_films",
+          "skipped_films"
+        ],
+        "title": "ActressDeleteBatchSummary",
+        "type": "object"
+      },
+      "ActressDetail": {
+        "properties": {
+          "aliases": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Aliases",
+            "type": "array"
+          },
+          "candidate_count": {
+            "title": "Candidate Count",
+            "type": "integer"
+          },
+          "canonical_name": {
+            "title": "Canonical Name",
+            "type": "string"
+          },
+          "film_count": {
+            "title": "Film Count",
+            "type": "integer"
+          },
+          "films": {
+            "items": {
+              "$ref": "#/components/schemas/ActressFilmItem"
+            },
+            "title": "Films",
+            "type": "array"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "marks": {
+            "items": {
+              "$ref": "#/components/schemas/ActressMarkItem"
+            },
+            "title": "Marks",
+            "type": "array"
+          },
+          "status": {
+            "enum": [
+              "none",
+              "blacklist",
+              "whitelist"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "canonical_name",
+          "aliases",
+          "status",
+          "film_count",
+          "candidate_count",
+          "marks",
+          "films"
+        ],
+        "title": "ActressDetail",
+        "type": "object"
+      },
+      "ActressFilmActor": {
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "none",
+              "blacklist",
+              "whitelist"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "status"
+        ],
+        "title": "ActressFilmActor",
+        "type": "object"
+      },
+      "ActressFilmDirsRequest": {
+        "properties": {
+          "film_dirs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Film Dirs",
+            "type": "array"
+          }
+        },
+        "required": [
+          "film_dirs"
+        ],
+        "title": "ActressFilmDirsRequest",
+        "type": "object"
+      },
+      "ActressFilmItem": {
+        "properties": {
+          "actors": {
+            "items": {
+              "$ref": "#/components/schemas/ActressFilmActor"
+            },
+            "title": "Actors",
+            "type": "array"
+          },
+          "film_dir": {
+            "title": "Film Dir",
+            "type": "string"
+          },
+          "in_candidates": {
+            "title": "In Candidates",
+            "type": "boolean"
+          },
+          "number": {
+            "title": "Number",
+            "type": "string"
+          },
+          "protected": {
+            "title": "Protected",
+            "type": "boolean"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          }
+        },
+        "required": [
+          "film_dir",
+          "number",
+          "actors",
+          "protected",
+          "in_candidates"
+        ],
+        "title": "ActressFilmItem",
+        "type": "object"
+      },
+      "ActressJobResponse": {
+        "properties": {
+          "job_id": {
+            "title": "Job Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "job_id"
+        ],
+        "title": "ActressJobResponse",
+        "type": "object"
+      },
+      "ActressKeptItem": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "film_dir": {
+            "title": "Film Dir",
+            "type": "string"
+          },
+          "number": {
+            "title": "Number",
+            "type": "string"
+          }
+        },
+        "required": [
+          "film_dir",
+          "number",
+          "created_at"
+        ],
+        "title": "ActressKeptItem",
+        "type": "object"
+      },
+      "ActressKeptListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ActressKeptItem"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "ActressKeptListResponse",
+        "type": "object"
+      },
+      "ActressListResponse": {
+        "properties": {
+          "counts": {
+            "$ref": "#/components/schemas/ActressStatusCounts"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ActressSummary"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "counts"
+        ],
+        "title": "ActressListResponse",
+        "type": "object"
+      },
+      "ActressMarkItem": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "from_status": {
+            "enum": [
+              "none",
+              "blacklist",
+              "whitelist"
+            ],
+            "title": "From Status",
+            "type": "string"
+          },
+          "media_item_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Media Item Id"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "to_status": {
+            "enum": [
+              "none",
+              "blacklist",
+              "whitelist"
+            ],
+            "title": "To Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "from_status",
+          "to_status",
+          "source",
+          "created_at"
+        ],
+        "title": "ActressMarkItem",
+        "type": "object"
+      },
+      "ActressMergeRequest": {
+        "properties": {
+          "into_id": {
+            "title": "Into Id",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "into_id"
+        ],
+        "title": "ActressMergeRequest",
+        "type": "object"
+      },
+      "ActressStatusCounts": {
+        "properties": {
+          "blacklist": {
+            "title": "Blacklist",
+            "type": "integer"
+          },
+          "none": {
+            "title": "None",
+            "type": "integer"
+          },
+          "whitelist": {
+            "title": "Whitelist",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "none",
+          "blacklist",
+          "whitelist"
+        ],
+        "title": "ActressStatusCounts",
+        "type": "object"
+      },
+      "ActressStatusRequest": {
+        "properties": {
+          "actress_ids": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Actress Ids",
+            "type": "array"
+          },
+          "media_item_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Media Item Id"
+          },
+          "source": {
+            "enum": [
+              "web",
+              "player"
+            ],
+            "title": "Source",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "none",
+              "blacklist",
+              "whitelist"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "actress_ids",
+          "status",
+          "source"
+        ],
+        "title": "ActressStatusRequest",
+        "type": "object"
+      },
+      "ActressStatusResponse": {
+        "properties": {
+          "candidates_added": {
+            "title": "Candidates Added",
+            "type": "integer"
+          },
+          "candidates_removed": {
+            "title": "Candidates Removed",
+            "type": "integer"
+          },
+          "changed": {
+            "title": "Changed",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "changed",
+          "candidates_added",
+          "candidates_removed"
+        ],
+        "title": "ActressStatusResponse",
+        "type": "object"
+      },
+      "ActressSummary": {
+        "properties": {
+          "aliases": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Aliases",
+            "type": "array"
+          },
+          "candidate_count": {
+            "title": "Candidate Count",
+            "type": "integer"
+          },
+          "canonical_name": {
+            "title": "Canonical Name",
+            "type": "string"
+          },
+          "film_count": {
+            "title": "Film Count",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "none",
+              "blacklist",
+              "whitelist"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "canonical_name",
+          "aliases",
+          "status",
+          "film_count",
+          "candidate_count"
+        ],
+        "title": "ActressSummary",
+        "type": "object"
+      },
       "AmbiguousConflictItem": {
         "properties": {
           "keyword_options": {
@@ -6039,6 +7044,65 @@
         "title": "MeResponse",
         "type": "object"
       },
+      "MediaActor": {
+        "properties": {
+          "actress_id": {
+            "title": "Actress Id",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "none",
+              "blacklist",
+              "whitelist"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "actress_id",
+          "name",
+          "status"
+        ],
+        "title": "MediaActor",
+        "type": "object"
+      },
+      "MediaActorsResponse": {
+        "properties": {
+          "actors": {
+            "items": {
+              "$ref": "#/components/schemas/MediaActor"
+            },
+            "title": "Actors",
+            "type": "array"
+          },
+          "film_dir": {
+            "title": "Film Dir",
+            "type": "string"
+          },
+          "in_candidates": {
+            "title": "In Candidates",
+            "type": "boolean"
+          },
+          "number": {
+            "title": "Number",
+            "type": "string"
+          }
+        },
+        "required": [
+          "film_dir",
+          "number",
+          "in_candidates",
+          "actors"
+        ],
+        "title": "MediaActorsResponse",
+        "type": "object"
+      },
       "NodeDetailItem": {
         "properties": {
           "cid": {
@@ -9603,6 +10667,821 @@
         "summary": "Get File Info",
         "tags": [
           "115"
+        ]
+      }
+    },
+    "/actresses": {
+      "get": {
+        "operationId": "list_actresses_actresses_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "none",
+                    "blacklist",
+                    "whitelist"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Q"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sort",
+            "required": false,
+            "schema": {
+              "default": "film_count",
+              "enum": [
+                "film_count",
+                "name"
+              ],
+              "title": "Sort",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "minimum": 1,
+              "title": "Page",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_size",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Page Size",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActressListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Actresses",
+        "tags": [
+          "actresses"
+        ]
+      }
+    },
+    "/actresses/by-media": {
+      "get": {
+        "description": "按片查演员（给播放器）：按 NFO 顺序返回演员和状态，档案里没有的当场建档（未标）。",
+        "operationId": "actors_by_media_actresses_by_media_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "jellyfin_item_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Jellyfin Item Id"
+            }
+          },
+          {
+            "description": "STRM 文件路径或番号目录",
+            "in": "query",
+            "name": "path",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "STRM 文件路径或番号目录",
+              "title": "Path"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MediaActorsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Actors By Media",
+        "tags": [
+          "actresses"
+        ]
+      }
+    },
+    "/actresses/candidates": {
+      "get": {
+        "operationId": "list_candidates_actresses_candidates_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActressCandidateListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Candidates",
+        "tags": [
+          "actresses"
+        ]
+      }
+    },
+    "/actresses/candidates/check-remote": {
+      "post": {
+        "description": "只读检查这些片子在 115 上还能不能找到，一次最多 50 部；不删任何文件。",
+        "operationId": "check_candidates_remote_actresses_candidates_check_remote_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ActressFilmDirsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActressCountResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Check Candidates Remote",
+        "tags": [
+          "actresses"
+        ]
+      }
+    },
+    "/actresses/candidates/keep": {
+      "post": {
+        "operationId": "keep_candidates_actresses_candidates_keep_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ActressFilmDirsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActressCountResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Keep Candidates",
+        "tags": [
+          "actresses"
+        ]
+      }
+    },
+    "/actresses/candidates/select": {
+      "post": {
+        "operationId": "select_candidates_actresses_candidates_select_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ActressCandidateSelectRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActressCountResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Select Candidates",
+        "tags": [
+          "actresses"
+        ]
+      }
+    },
+    "/actresses/delete-batches": {
+      "get": {
+        "operationId": "list_delete_batches_actresses_delete_batches_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActressDeleteBatchListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Delete Batches",
+        "tags": [
+          "actresses"
+        ]
+      },
+      "post": {
+        "description": "把清单里勾选的片子建成删除批次并交给后台执行。",
+        "operationId": "create_delete_batch_actresses_delete_batches_post",
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActressDeleteBatchStartResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Create Delete Batch",
+        "tags": [
+          "actresses"
+        ]
+      }
+    },
+    "/actresses/delete-batches/{batch_id}": {
+      "get": {
+        "description": "批次详情：每部片的状态、跳过原因、错误和文件行。",
+        "operationId": "get_delete_batch_actresses_delete_batches__batch_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "batch_id",
+            "required": true,
+            "schema": {
+              "title": "Batch Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActressDeleteBatchDetail"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Delete Batch",
+        "tags": [
+          "actresses"
+        ]
+      }
+    },
+    "/actresses/delete-batches/{batch_id}/resume": {
+      "post": {
+        "description": "续跑失败、中断或执行被打断的批次：只处理待执行和失败的片子。",
+        "operationId": "resume_delete_batch_actresses_delete_batches__batch_id__resume_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "batch_id",
+            "required": true,
+            "schema": {
+              "title": "Batch Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActressDeleteBatchStartResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resume Delete Batch",
+        "tags": [
+          "actresses"
+        ]
+      }
+    },
+    "/actresses/kept": {
+      "get": {
+        "operationId": "list_kept_actresses_kept_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActressKeptListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Kept",
+        "tags": [
+          "actresses"
+        ]
+      }
+    },
+    "/actresses/kept/remove": {
+      "post": {
+        "description": "撤销保留，仍应删的片子重新回到清单。",
+        "operationId": "remove_kept_actresses_kept_remove_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ActressFilmDirsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActressCountResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Remove Kept",
+        "tags": [
+          "actresses"
+        ]
+      }
+    },
+    "/actresses/refresh": {
+      "post": {
+        "description": "手动刷新女优档案和待删清单（与每日任务的女优步骤相同）。",
+        "operationId": "trigger_refresh_actresses_refresh_post",
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActressJobResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Trigger Refresh",
+        "tags": [
+          "actresses"
+        ]
+      }
+    },
+    "/actresses/status": {
+      "post": {
+        "description": "批量改状态，再重算待删清单，返回状态有变化的人数和清单增减部数。",
+        "operationId": "set_actress_status_actresses_status_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ActressStatusRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActressStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Actress Status",
+        "tags": [
+          "actresses"
+        ]
+      }
+    },
+    "/actresses/{actress_id}": {
+      "get": {
+        "operationId": "get_actress_actresses__actress_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "actress_id",
+            "required": true,
+            "schema": {
+              "title": "Actress Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActressDetail"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Actress",
+        "tags": [
+          "actresses"
+        ]
+      }
+    },
+    "/actresses/{actress_id}/aliases": {
+      "post": {
+        "description": "加别名后重算清单（别名会改变演员归属）。",
+        "operationId": "add_actress_alias_actresses__actress_id__aliases_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "actress_id",
+            "required": true,
+            "schema": {
+              "title": "Actress Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ActressAliasRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActressDetail"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Add Actress Alias",
+        "tags": [
+          "actresses"
+        ]
+      }
+    },
+    "/actresses/{actress_id}/aliases/{alias_id}": {
+      "delete": {
+        "description": "删别名后重算清单。",
+        "operationId": "remove_actress_alias_actresses__actress_id__aliases__alias_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "actress_id",
+            "required": true,
+            "schema": {
+              "title": "Actress Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "alias_id",
+            "required": true,
+            "schema": {
+              "title": "Alias Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActressDetail"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Remove Actress Alias",
+        "tags": [
+          "actresses"
+        ]
+      }
+    },
+    "/actresses/{actress_id}/image": {
+      "get": {
+        "description": "按规范名转发 Jellyfin 人物主图；Jellyfin 未配置或取不到都返回 404，网页显示占位。",
+        "operationId": "get_actress_image_actresses__actress_id__image_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "actress_id",
+            "required": true,
+            "schema": {
+              "title": "Actress Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Actress Image",
+        "tags": [
+          "actresses"
+        ]
+      }
+    },
+    "/actresses/{actress_id}/merge": {
+      "post": {
+        "description": "把这位女优合并进 into_id，返回合并后的女优详情，并重算清单。",
+        "operationId": "merge_actress_actresses__actress_id__merge_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "actress_id",
+            "required": true,
+            "schema": {
+              "title": "Actress Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ActressMergeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActressDetail"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Merge Actress",
+        "tags": [
+          "actresses"
         ]
       }
     },

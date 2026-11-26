@@ -222,6 +222,7 @@ if get_settings().auth_trust_proxy:
     app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
 
 from app.api.routes import (  # noqa: E402 — import after app creation
+    actresses,
     auth,
     auth_code,
     cleanup,
@@ -279,6 +280,7 @@ app.include_router(cleanup.router)
 app.include_router(dedupe.router)
 app.include_router(downloader.router)
 app.include_router(jellyfin.router)
+app.include_router(actresses.router)
 app.include_router(local_cleanup.router)
 app.include_router(local_organize.router)
 app.include_router(local_tree_export.router)
