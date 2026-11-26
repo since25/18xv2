@@ -80,6 +80,7 @@ STRM 里是内网 OpenList 地址。Emby 的播放信息带 `DirectStreamUrl`，
 - **规则**：本地已整理库的视频在 Jellyfin 里显示为 `序号 · 关键词/资源包`（直接放在关键词下的显示为 `序号 · 关键词`），同一资源包按文件名自然排序编号。另写入强制排序名 `关键词/资源包 · 序号`（数字补零），合集仍一个包一个包地按序号排列。详见 `docs/superpowers/specs/2026-11-25-jellyfin-display-names-design.md`。
 - **只改 Jellyfin 数据库**：通过接口改名字并锁定名字字段，文件、目录、硬链接都不动；115 番号库不处理。18x 合集同时设为按名字排序。
 - **开关**：18x `.env` 的 `JELLYFIN_DISPLAY_NAMES_ENABLED=true` 时，每天合集同步之后自动执行（默认关闭）。
+- **读取范围**：全量只读「本地已整理」这一个库（按 `MEDIA_LIBRARY_LOCAL_ROOTS` 对应的库位置找库；找不到时退回读全部）；`--keyword` 只读该关键词的 18x 合集成员（没有合集时退回读本地库）。每页条数 `JELLYFIN_DISPLAY_NAMES_PAGE_SIZE`（默认 5000）、超时 `JELLYFIN_DISPLAY_NAMES_TIMEOUT_SECONDS`（默认 30 秒），与合集同步的 `JELLYFIN_PAGE_SIZE` 分开。2026-11-26 实测：读全部条目每页 500 条约 5 秒、全库约 9 分钟；只读本地库每页 5000 条约 3.6 秒、全库约 35 秒。
 - **手动命令**（在生产机执行，不受开关限制）：
   - 只预览：`docker exec docker-app-1 python scripts/jellyfin_display_names.py --dry-run`
   - 只改一个关键词：`docker exec docker-app-1 python scripts/jellyfin_display_names.py --keyword <名字>`

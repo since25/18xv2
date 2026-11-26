@@ -264,3 +264,68 @@ def test_ensure_sort_name_order_writes_only_when_needed():
 
     assert client.ensure_sort_name_order("c1") is False
     assert posted_again == []
+
+
+def test_find_library_id_matches_location():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/Library/VirtualFolders"
+        return httpx.Response(
+            200,
+            json=[
+                {"Name": "115番号", "ItemId": "lib-115", "Locations": ["/mnt/user/docker1/alist-strm/video/302porn_tv1"]},
+                {"Name": "本地已整理", "ItemId": "lib-local", "Locations": ["/mnt/disk2/qbbtdn/已整理"]},
+            ],
+        )
+
+    client = JellyfinClient("http://jf.test", "k", 3, 2, httpx.MockTransport(handler), sleep_fn=lambda _: None)
+
+    # 根目录带不带结尾 / 都能对上
+    assert client.find_library_id(["/mnt/disk2/qbbtdn/已整理/"]) == "lib-local"
+    assert client.find_library_id(["/别处"]) is None
+
+
+def _listing_handler(seen: list[dict], items: list[dict]):
+    """模拟管理员用户和一页条目列表，记录每次列表请求的参数。"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/Users":
+            return httpx.Response(200, json=[{"Id": "user-1", "Policy": {"IsAdministrator": True}}])
+        seen.append(dict(request.url.params))
+        return httpx.Response(200, json={"Items": items, "TotalRecordCount": len(items)})
+
+    return handler
+
+
+def test_iter_media_items_can_limit_to_one_library():
+    seen: list[dict] = []
+    handler = _listing_handler(seen, [{"Id": "i1", "Path": "/r/甲/包/a.mp4", "Name": "a"}])
+    client = JellyfinClient("http://jf.test", "k", 3, 50, httpx.MockTransport(handler), sleep_fn=lambda _: None)
+
+    assert [item["id"] for item in client.iter_media_items(parent_id="lib-local")] == ["i1"]
+    assert seen[0]["ParentId"] == "lib-local"
+    assert seen[0]["userId"] == "user-1"
+    assert seen[0]["Fields"] == "Path,Settings,SortName"
+
+
+def test_iter_media_items_without_library_reads_everything():
+    seen: list[dict] = []
+    handler = _listing_handler(seen, [])
+    client = JellyfinClient("http://jf.test", "k", 3, 50, httpx.MockTransport(handler), sleep_fn=lambda _: None)
+
+    assert list(client.iter_media_items()) == []
+    assert "ParentId" not in seen[0]
+
+
+def test_iter_collection_media_items_reads_member_details_as_admin():
+    seen: list[dict] = []
+    handler = _listing_handler(
+        seen, [{"Id": "i1", "Path": "/r/甲/包/a.mp4", "Name": "01 · 甲/包", "LockedFields": ["Name"]}]
+    )
+    client = JellyfinClient("http://jf.test", "k", 3, 50, httpx.MockTransport(handler), sleep_fn=lambda _: None)
+
+    assert list(client.iter_collection_media_items("c-jia")) == [
+        {"id": "i1", "path": "/r/甲/包/a.mp4", "name": "01 · 甲/包", "locked_fields": ["Name"], "sort_name": None}
+    ]
+    # Jellyfin 10.10 不带用户读合集成员会返回空
+    assert seen[0]["ParentId"] == "c-jia"
+    assert seen[0]["userId"] == "user-1"

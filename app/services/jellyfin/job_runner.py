@@ -97,11 +97,12 @@ def names_work(*, dry_run: bool = False, keyword: str | None = None, restore: bo
         settings = get_settings()
         if not jellyfin_sync_enabled(settings):
             raise RuntimeError("Jellyfin 同步未启用或缺少地址/API Key")
+        # 显示名用自己的每页条数和超时，不影响合集同步的 JELLYFIN_PAGE_SIZE
         client = JellyfinClient(
             settings.jellyfin_base_url,
             settings.jellyfin_api_key,
-            settings.jellyfin_timeout_seconds,
-            settings.jellyfin_page_size,
+            settings.jellyfin_display_names_timeout_seconds,
+            settings.jellyfin_display_names_page_size,
         )
         with client:
             summary = DisplayNameSyncService().sync(

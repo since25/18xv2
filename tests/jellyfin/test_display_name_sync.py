@@ -30,20 +30,37 @@ class FakeDisplayClient:
     items 的值为 (id, 名字, 锁定字段) 或 (id, 名字, 锁定字段, 强制排序名)。
     """
 
-    def __init__(self, items: dict[str, tuple]):
+    def __init__(self, items: dict[str, tuple], *, library_id: str | None = "lib-local"):
         self.items = {}
         for path, (item_id, name, locked, *rest) in items.items():
             self.items[path] = {"id": item_id, "name": name, "locked_fields": locked, "sort_name": rest[0] if rest else None}
+        self.library_id = library_id
+        # 合集 ID → 成员路径
+        self.collections: dict[str, set[str]] = {}
+        self.listing_calls: list[tuple[str, str | None]] = []
         self.set_calls: list[tuple[str, str, str | None, bool]] = []
         self.order_calls: list[str] = []
         self.fail_ids: set[str] = set()
         self.fail_listing = False
         self.fail_order = False
 
-    def iter_media_items(self):
+    def find_library_id(self, locations) -> str | None:
+        return self.library_id
+
+    def iter_media_items(self, parent_id: str | None = None):
+        self.listing_calls.append(("library", parent_id))
+        yield from self._rows(None)
+
+    def iter_collection_media_items(self, collection_id: str):
+        self.listing_calls.append(("collection", collection_id))
+        yield from self._rows(self.collections.get(collection_id, set()))
+
+    def _rows(self, only_paths: set[str] | None):
         if self.fail_listing:
             raise JellyfinError("列表暂不可用")
         for path, item in self.items.items():
+            if only_paths is not None and path not in only_paths:
+                continue
             locked = item["locked_fields"]
             yield {
                 "id": item["id"],
@@ -212,12 +229,64 @@ def test_keyword_filter_only_touches_that_keyword(db_session):
     _mapping(db_session, jia, "c-jia")
     _mapping(db_session, yi, "c-yi")
     client = FakeDisplayClient({f"{ROOT}/甲/包/a.mp4": ("i1", "a", []), f"{ROOT}/乙/包/a.mp4": ("i2", "a", [])})
+    client.collections = {"c-jia": {f"{ROOT}/甲/包/a.mp4"}, "c-yi": {f"{ROOT}/乙/包/a.mp4"}}
 
     result = _sync(db_session, client, keyword="甲")
 
     assert client.set_calls == [("i1", _name(1), _sort(1), True)]
     assert client.order_calls == ["c-jia"]
     assert result["updated"] == 1
+
+
+def test_full_run_reads_only_local_library(db_session):
+    entry = _entry(db_session, "甲")
+    _media(db_session, f"{ROOT}/甲/包/a.mp4", entry)
+    client = FakeDisplayClient({f"{ROOT}/甲/包/a.mp4": ("i1", "a", [])})
+
+    _sync(db_session, client)
+
+    # 只读「本地已整理」这一个库，不把 115 和文件夹也翻一遍
+    assert client.listing_calls == [("library", "lib-local")]
+
+
+def test_full_run_reads_everything_when_library_unknown(db_session):
+    entry = _entry(db_session, "甲")
+    _media(db_session, f"{ROOT}/甲/包/a.mp4", entry)
+    client = FakeDisplayClient({f"{ROOT}/甲/包/a.mp4": ("i1", "a", [])}, library_id=None)
+
+    _sync(db_session, client)
+
+    assert client.listing_calls == [("library", None)]
+    assert client.set_calls == [("i1", _name(1), _sort(1), True)]
+
+
+def test_keyword_run_reads_only_its_collection(db_session):
+    jia = _entry(db_session, "甲")
+    yi = _entry(db_session, "乙")
+    _media(db_session, f"{ROOT}/甲/包/a.mp4", jia)
+    _media(db_session, f"{ROOT}/甲/包/b.mp4", jia)
+    _media(db_session, f"{ROOT}/乙/包/a.mp4", yi)
+    _mapping(db_session, jia, "c-jia")
+    client = FakeDisplayClient({f"{ROOT}/甲/包/a.mp4": ("i1", "a", []), f"{ROOT}/乙/包/a.mp4": ("i3", "a", [])})
+    client.collections = {"c-jia": {f"{ROOT}/甲/包/a.mp4"}}
+
+    result = _sync(db_session, client, keyword="甲")
+
+    assert client.listing_calls == [("collection", "c-jia")]
+    assert client.set_calls == [("i1", _name(1), _sort(1), True)]
+    # 只统计这个关键词的视频：b 还没进合集，乙 的视频不算
+    assert result["not_in_jellyfin"] == 1
+
+
+def test_keyword_without_collection_falls_back_to_library(db_session):
+    jia = _entry(db_session, "甲")
+    _media(db_session, f"{ROOT}/甲/包/a.mp4", jia)
+    client = FakeDisplayClient({f"{ROOT}/甲/包/a.mp4": ("i1", "a", [])})
+
+    _sync(db_session, client, keyword="甲")
+
+    assert client.listing_calls == [("library", "lib-local")]
+    assert client.set_calls == [("i1", _name(1), _sort(1), True)]
 
 
 def test_keyword_filter_accepts_alias(db_session):

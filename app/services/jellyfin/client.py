@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from typing import Any, Callable, Iterator
+from typing import Any, Callable, Iterator, Sequence
 
 import httpx
 
@@ -102,20 +102,19 @@ class JellyfinClient:
             raise JellyfinError("Jellyfin 列表格式无效")
         return [item for item in items if isinstance(item, dict)]
 
-    def _iter_media_pages(self, fields: str) -> Iterator[dict[str, Any]]:
-        """分页读取所有非文件夹条目，逐个返回原始条目对象。"""
+    def _iter_media_pages(self, fields: str, *, parent_id: str | None = None) -> Iterator[dict[str, Any]]:
+        """分页读取非文件夹条目，逐个返回原始条目对象；给了 parent_id 时只读这个库或合集。"""
+        params: dict[str, Any] = {"Recursive": "true", "IsFolder": "false", "Fields": fields}
+        if parent_id:
+            # Jellyfin 10.10 用 API Key 按上级读取时要带用户，否则合集成员为空
+            params["ParentId"] = parent_id
+            params["userId"] = self._get_admin_user_id()
         start_index = 0
         while True:
             response = self._request(
                 "GET",
                 "/Items",
-                params={
-                    "Recursive": "true",
-                    "IsFolder": "false",
-                    "Fields": fields,
-                    "StartIndex": start_index,
-                    "Limit": self.page_size,
-                },
+                params={**params, "StartIndex": start_index, "Limit": self.page_size},
             )
             payload = self._payload(response)
             items = self._items(payload)
@@ -142,10 +141,36 @@ class JellyfinClient:
             if isinstance(path, str) and isinstance(item_id, str):
                 yield path, item_id
 
-    def iter_media_items(self) -> Iterator[dict[str, Any]]:
-        """分页读取条目的 ID、路径、名字、锁定字段和强制排序名；返回里没有的为 None。"""
+    def find_library_id(self, locations: Sequence[str]) -> str | None:
+        """按媒体库的文件夹位置找库 ID；找不到时返回 None。"""
+        wanted = {location.rstrip("/") for location in locations if location and location.rstrip("/")}
+        response = self._request("GET", "/Library/VirtualFolders")
+        try:
+            libraries = response.json()
+        except ValueError as exc:
+            raise JellyfinError("Jellyfin 返回格式无效") from exc
+        if not isinstance(libraries, list):
+            raise JellyfinError("Jellyfin 媒体库列表格式无效")
+        for library in libraries:
+            if not isinstance(library, dict):
+                continue
+            library_locations = {str(path).rstrip("/") for path in library.get("Locations") or []}
+            library_id = library.get("ItemId")
+            if wanted & library_locations and isinstance(library_id, str):
+                return library_id
+        return None
+
+    def iter_collection_media_items(self, collection_id: str) -> Iterator[dict[str, Any]]:
+        """读取一个合集成员的 ID、路径、名字、锁定字段和强制排序名。"""
+        return self.iter_media_items(parent_id=collection_id)
+
+    def iter_media_items(self, parent_id: str | None = None) -> Iterator[dict[str, Any]]:
+        """分页读取条目的 ID、路径、名字、锁定字段和强制排序名；返回里没有的为 None。
+
+        parent_id 为媒体库或合集 ID 时只读它下面的条目，为 None 时读全部。
+        """
         # Fields=Settings 才返回 LockedFields，Fields=SortName 才返回 ForcedSortName（10.10.7 实测，未设置时不返回该键）
-        for item in self._iter_media_pages("Path,Settings,SortName"):
+        for item in self._iter_media_pages("Path,Settings,SortName", parent_id=parent_id):
             path = item.get("Path", item.get("path"))
             item_id = item.get("Id", item.get("id"))
             if not isinstance(path, str) or not isinstance(item_id, str):

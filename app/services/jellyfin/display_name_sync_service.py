@@ -69,18 +69,27 @@ class DisplayNameSyncService:
             .order_by(JellyfinMediaItem.id)
             .options(selectinload(JellyfinMediaItem.keyword_links))
         ).all()
-        # 拿不到完整列表时直接抛出：一条都不改，任务按失败收尾
-        remote = {item["path"]: item for item in client.iter_media_items()}
+        collection_id = None
+        if keyword_entry_id is not None:
+            # 一个资源包在同一个关键词目录下，包里的视频关联的关键词相同，
+            # 所以只按这个关键词的视频编号，结果与全量编号一致
+            media_items = [
+                item for item in media_items if any(link.keyword_entry_id == keyword_entry_id for link in item.keyword_links)
+            ]
+            collection_id = self._collection_id(db, keyword_entry_id)
+
+        # Jellyfin 读一页约 4 秒且与每页条数基本无关：按关键词只读它的合集，全量只读本地库
+        # 拿不到列表时直接抛出：一条都不改，任务按失败收尾
+        if collection_id:
+            rows = client.iter_collection_media_items(collection_id)
+        else:
+            rows = client.iter_media_items(parent_id=client.find_library_id(local_roots))
+        remote = {row["path"]: row for row in rows}
 
         present = [item for item in media_items if item.path in remote]
         result["not_in_jellyfin"] = len(media_items) - len(present)
-        # 编号按全部已入库的本地视频算，按关键词试跑时也不影响序号
         names = compute_display_names([item.path for item in present], local_roots)
         targets = present
-        if keyword_entry_id is not None:
-            targets = [
-                item for item in present if any(link.keyword_entry_id == keyword_entry_id for link in item.keyword_links)
-            ]
 
         total = len(targets)
         consecutive_failures = 0
@@ -179,6 +188,18 @@ class DisplayNameSyncService:
             consecutive_failures = 0
             if changed:
                 result["collections_ordered"] += 1
+
+    @staticmethod
+    def _collection_id(db: Session, keyword_entry_id: int) -> str | None:
+        """这个关键词当前有效的 18x 合集 ID；没有时返回 None（退回读整个本地库）。"""
+        mapping = db.scalars(
+            select(JellyfinKeywordCollection).where(
+                JellyfinKeywordCollection.keyword_entry_id == keyword_entry_id,
+                JellyfinKeywordCollection.status == "active",
+                JellyfinKeywordCollection.jellyfin_collection_id.is_not(None),
+            )
+        ).first()
+        return mapping.jellyfin_collection_id if mapping is not None else None
 
     @staticmethod
     def _resolve_keyword(db: Session, keyword: str) -> int:

@@ -107,10 +107,41 @@ def _names_settings(**overrides):
         jellyfin_api_key="test-key",
         jellyfin_timeout_seconds=3,
         jellyfin_page_size=50,
+        jellyfin_display_names_page_size=5000,
+        jellyfin_display_names_timeout_seconds=60,
         media_library_local_roots=["/r/已整理"],
     )
     values.update(overrides)
     return SimpleNamespace(**values)
+
+
+def test_names_work_uses_its_own_page_size_and_timeout(db_session, monkeypatch):
+    job_id = job_runner.start_job(db_session, job_runner.JOB_NAMES)
+    created: dict = {}
+
+    class SessionFactory:
+        def __call__(self):
+            return db_session
+
+    class RecordingClient:
+        def __init__(self, base_url, api_key, timeout, page_size, *args, **kwargs):
+            created.update(timeout=timeout, page_size=page_size)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return None
+
+    monkeypatch.setattr("app.db.session.SessionLocal", SessionFactory())
+    monkeypatch.setattr(job_runner, "get_settings", lambda: _names_settings())
+    monkeypatch.setattr(job_runner, "JellyfinClient", RecordingClient)
+    monkeypatch.setattr(job_runner.DisplayNameSyncService, "sync", lambda *_args, **_kwargs: {"to_update": 0})
+
+    job_runner.run_names_job(job_id)
+
+    # 显示名用自己的每页条数和超时，合集同步的 JELLYFIN_PAGE_SIZE 不受影响
+    assert created == {"timeout": 60, "page_size": 5000}
 
 
 def test_run_names_job_records_summary_and_passes_options(db_session, monkeypatch):
