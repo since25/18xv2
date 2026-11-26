@@ -264,16 +264,17 @@ class MediaScanService:
             seen_names: set[str] = set()
             position = 0
             for raw_name in actors:
-                name_normalized = normalize_actress_name(raw_name)
-                # 同一条目内归一化后重复的名字只保留第一次出现
-                if name_normalized in seen_names:
+                # 列宽 255，超长写入会让 PostgreSQL 报错、整次扫描失败，所以先截断
+                name_normalized = normalize_actress_name(raw_name)[:255]
+                # 全是标点等归一化后为空的名字不写；同一条目内重复的名字只保留第一次出现
+                if not name_normalized or name_normalized in seen_names:
                     continue
                 seen_names.add(name_normalized)
                 db.add(
                     JellyfinMediaActor(
                         media_item_id=item.id,
                         position=position,
-                        raw_name=raw_name,
+                        raw_name=raw_name[:255],
                         name_normalized=name_normalized,
                     )
                 )

@@ -216,6 +216,36 @@ def test_scan_keeps_first_of_duplicate_actor_names(db_session, tmp_path):
     ]
 
 
+def test_scan_skips_actor_names_that_normalize_to_empty(db_session, tmp_path):
+    root = tmp_path / "strm"
+    strm_path = root / "甲" / "ABC-001" / "ABC-001.strm"
+    _write_media(strm_path, "http://jellyfin.test/ABC-001")
+    _write_media(strm_path.with_suffix(".nfo"), _nfo_with_actors("！？", "甲"))
+
+    MediaScanService().scan(db_session, local_roots=[], strm_roots=[str(root)])
+
+    item = db_session.scalar(select(JellyfinMediaItem).where(JellyfinMediaItem.path == str(strm_path)))
+    assert item is not None
+    assert _actor_rows(db_session, item.id) == [(0, "甲", "甲")]
+
+
+def test_scan_truncates_long_actor_names(db_session, tmp_path):
+    root = tmp_path / "strm"
+    strm_path = root / "甲" / "ABC-001" / "ABC-001.strm"
+    _write_media(strm_path, "http://jellyfin.test/ABC-001")
+    _write_media(strm_path.with_suffix(".nfo"), _nfo_with_actors("甲" * 300))
+
+    MediaScanService().scan(db_session, local_roots=[], strm_roots=[str(root)])
+
+    item = db_session.scalar(select(JellyfinMediaItem).where(JellyfinMediaItem.path == str(strm_path)))
+    assert item is not None
+    rows = _actor_rows(db_session, item.id)
+    assert len(rows) == 1
+    position, raw_name, name_normalized = rows[0]
+    assert position == 0
+    assert len(raw_name) == 255
+    assert len(name_normalized) == 255
+
 def test_scan_no_actor_rows_when_nfo_missing_or_broken(db_session, tmp_path):
     strm_root = tmp_path / "strm"
     missing_path = strm_root / "甲" / "ABC-001" / "ABC-001.strm"
