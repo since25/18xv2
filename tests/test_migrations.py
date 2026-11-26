@@ -199,3 +199,47 @@ def test_script_jobs_migration_upgrades_and_downgrades():
         assert {"script_runs", "script_run_items"}.issubset(tables)
         run_columns = {column["name"] for column in inspector.get_columns("script_runs")}
         assert not {"trigger", "dry_run", "log_path", "error_reason", "pid"} & run_columns
+
+
+ACTRESS_TABLES = {
+    "actresses",
+    "actress_aliases",
+    "actress_marks",
+    "jellyfin_media_actors",
+    "actress_delete_candidates",
+    "actress_kept_films",
+    "actress_delete_batches",
+    "actress_delete_batch_films",
+    "actress_delete_batch_files",
+    "jellyfin_actress_collections",
+}
+
+
+def test_actresses_migration_upgrades_and_downgrades():
+    from app.db.base import Base
+    import app.models.actresses  # noqa: F401
+
+    base = _load_migration("alembic/versions/20261101_0016_jellyfin_media.py", "jellyfin_media_migration_base")
+    migration = _load_migration("alembic/versions/20261126_0019_actresses.py", "actresses_migration")
+    assert migration.down_revision == "20261125_0018"
+
+    engine = sa.create_engine("sqlite:///:memory:")
+    with engine.begin() as connection:
+        ops = Operations(MigrationContext.configure(connection))
+        base.op = ops
+        migration.op = ops
+        base.upgrade()
+        migration.upgrade()
+
+        inspector = sa.inspect(connection)
+        tables = set(inspector.get_table_names())
+        assert ACTRESS_TABLES.issubset(tables)
+        # 迁移建出的列与模型一致，避免两边写漏
+        for table_name in ACTRESS_TABLES:
+            migrated = {column["name"] for column in inspector.get_columns(table_name)}
+            assert migrated == set(Base.metadata.tables[table_name].columns.keys()), table_name
+
+        migration.downgrade()
+        tables = set(sa.inspect(connection).get_table_names())
+        assert not ACTRESS_TABLES & tables
+        assert "jellyfin_media_items" in tables
