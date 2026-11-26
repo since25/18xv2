@@ -15,6 +15,7 @@
 - **旧 Emby 名单导入**：`scripts/actress_import_emby_lists.py`，默认只列出，`--apply` 才写。
 - **前端**：「流程」导航下新增「女优」和「女优删除」两页；重新生成前端接口类型。
 - **文档**：新增 `docs/actresses.md`；设计文档状态改为「已实施（待上线）」，5.4 补一句确认删除的实施时改动。
+- **终审修复**：18x 重启时把执行中 / 待开始的删除批次标为中断（备注「服务重启时中断」），页面上可点「重试失败的」续跑；执行前删除根目录还要可写，否则整批失败、不调 115；换算后的 STRM 本身是符号链接、或番号目录里有扫描之后新加的 STRM 分段时，这部片判失败，不调 115；`porn_tv1` 里按地址找不到 STRM 时记一条已不存在的文件行；合并确认框显示选中时的目标名（之后再搜别的名字也不变），并说明对方是未标时会继承她的黑 / 白名单状态；建删除批次请求在途时女优删除页的勾选和按钮一律不可点；文档改正：收紧 `MISSING_MARKERS` 是首次真实删除前的硬性前提。
 
 实施中相对设计 / 计划的改动（都已写进 `docs/actresses.md`）：
 
@@ -35,6 +36,7 @@
   - `scripts/remote-test.sh backend` → 退出码 0，925 passed，18 warnings，用时约 3 分钟。18 个警告都是既有的、与本功能无关：`StarletteDeprecationWarning` ×16（`fastapi/testclient.py` 提示改用 httpx2）、alembic `path_separator` 的 `DeprecationWarning` ×2。日志 `~/ci/18x_v2/magical-morse-7b759f/.remote-test-logs/20261126-173720-backend.log`。
   - `scripts/remote-test.sh frontend` → test 退出码 0（31 个测试文件、159 passed），build 退出码 0，lint 退出码 0。build 只有既有的 Vite 打包体积提示（chunkSizeWarningLimit）。日志 `~/ci/18x_v2/magical-morse-7b759f/.remote-test-logs/20261126-174035-frontend.log`。
   - 已知偶发问题：`MagnetTasksPage.test.tsx` 偶尔报「window is not defined」让 vitest 退出码为 1，是既有问题、与本功能无关；本次全量没有出现。
+- 终审修复后再跑全量（Spark，依次各一次）：`scripts/remote-test.sh backend` → 退出码 0，931 passed，18 warnings（同上，都是既有的），日志 `~/ci/18x_v2/magical-morse-7b759f/.remote-test-logs/20261126-180340-backend.log`；`scripts/remote-test.sh frontend` → test 退出码 0（161 passed），build 0，lint 0，日志 `~/ci/18x_v2/magical-morse-7b759f/.remote-test-logs/20261126-180649-frontend.log`。每个修复项都先补测试、确认失败后再改。
 - 迁移只在 SQLite 上测过（`tests/test_migrations.py` 升降级），PostgreSQL 上要部署时确认。
 - 生产上没有做任何操作：没部署、没开开关、没删过任何真实文件。
 
@@ -49,15 +51,15 @@
   - 配置：`app/core/config.py`、`.env.example`
   - 脚本：`scripts/actress_import_emby_lists.py`（新增）
   - 前端：`frontend/src/App.tsx`、`frontend/src/layout/navigation.tsx`、`frontend/src/api/actresses.ts`（新增）、`frontend/src/pages/ActressesPage.tsx`（新增）、`frontend/src/pages/ActressDeletePage.tsx`（新增）
-  - 测试：`tests/actresses/`（新增 14 个文件）、`tests/conftest.py`、`tests/jellyfin/test_client.py`、`tests/jellyfin/test_job_runner.py`、`tests/jellyfin/test_scan_service.py`、`tests/test_migrations.py`、`frontend/src/pages/ActressesPage.test.tsx`（新增）、`frontend/src/pages/ActressDeletePage.test.tsx`（新增）
+  - 测试：`tests/actresses/`（新增 15 个文件）、`tests/conftest.py`、`tests/jellyfin/test_client.py`、`tests/jellyfin/test_job_runner.py`、`tests/jellyfin/test_scan_service.py`、`tests/test_migrations.py`、`frontend/src/pages/ActressesPage.test.tsx`（新增）、`frontend/src/pages/ActressDeletePage.test.tsx`（新增）
   - 生成的接口类型：`frontend/openapi.json`、`frontend/src/api/schema.gen.ts`
   - 文档：`docs/actresses.md`（新增）、`docs/superpowers/specs/2026-11-25-actress-archive-design.md`、`docs/superpowers/plans/2026-11-25-actress-archive.md`、本日志（新增）
 - 未部署、未合并。上线按 `docs/actresses.md` 的「上线检查清单」逐项找用户批准：只读统计生产数据并核实路径换算和 115 报错文本 → 备份数据库后部署、配置并打开开关 → 首次真实删除只删 1 部 → 首删之后再导入旧 Emby 名单。
 - 已知遗留的小问题（审查时记下、暂缓）：
   - 女优功能开着而 `MEDIA_LIBRARY_STRM_ROOTS` 没配置时，女优合集同步报错会让整个合集同步任务记为失败（关键词合集已先同步完），更合适的做法是只记进摘要；
-  - 删除批次：18x 重启后，执行中的批次会停在「运行中」（页面上没有「重试失败的」按钮，接口续跑可以），待修；`_read_urls` 没有单独拒绝本身是链接的 STRM 子文件；删完番号目录、还没落库时进程被杀，续跑会判「本地目录不存在」失败（次日扫描后这部片失效，会被跳过并移出清单）；
+  - 删除批次：删完番号目录、还没落库时进程被杀，续跑会判「本地目录不存在」失败（次日扫描后这部片失效，会被跳过并移出清单）；
   - 女优页：合并搜索没有防抖，每次搜索都会读全清单；
-  - 女优删除页：删除请求在途时按 ESC 关掉确认框，勾选框会重新可用；批次详情轮询出错一次就停；
+  - 女优删除页：批次详情轮询出错一次就停；
   - 迁移只在 SQLite 上验证过。
 - Rollback：
   - 只想停用：把 `ACTRESS_ENABLED` 改回 `false` 并重建 18x 容器让配置生效，不动代码和库。每日链不再跑女优步骤，删除接口返回 409。
