@@ -16,15 +16,25 @@ from app.services.keywords.registry_service import normalize_keyword_text
 ROOT = "/r/已整理"
 
 
-class FakeDisplayClient:
-    """测试用的内存 Jellyfin：只实现显示名同步用到的三个方法。"""
+def _name(index: int, group: str = "甲/包") -> str:
+    return f"{index:02d} · {group}"
 
-    def __init__(self, items: dict[str, tuple[str, str, list[str] | None]]):
-        self.items = {
-            path: {"id": item_id, "name": name, "locked_fields": locked}
-            for path, (item_id, name, locked) in items.items()
-        }
-        self.set_calls: list[tuple[str, str, bool]] = []
+
+def _sort(index: int, group: str = "甲/包") -> str:
+    return f"{group} · {index:010d}"
+
+
+class FakeDisplayClient:
+    """测试用的内存 Jellyfin：只实现显示名同步用到的三个方法。
+
+    items 的值为 (id, 名字, 锁定字段) 或 (id, 名字, 锁定字段, 强制排序名)。
+    """
+
+    def __init__(self, items: dict[str, tuple]):
+        self.items = {}
+        for path, (item_id, name, locked, *rest) in items.items():
+            self.items[path] = {"id": item_id, "name": name, "locked_fields": locked, "sort_name": rest[0] if rest else None}
+        self.set_calls: list[tuple[str, str, str | None, bool]] = []
         self.order_calls: list[str] = []
         self.fail_ids: set[str] = set()
         self.fail_listing = False
@@ -35,15 +45,22 @@ class FakeDisplayClient:
             raise JellyfinError("列表暂不可用")
         for path, item in self.items.items():
             locked = item["locked_fields"]
-            yield {"id": item["id"], "path": path, "name": item["name"], "locked_fields": list(locked) if locked is not None else None}
+            yield {
+                "id": item["id"],
+                "path": path,
+                "name": item["name"],
+                "locked_fields": list(locked) if locked is not None else None,
+                "sort_name": item["sort_name"],
+            }
 
-    def set_item_name(self, item_id: str, name: str, *, lock: bool = True) -> None:
-        self.set_calls.append((item_id, name, lock))
+    def set_item_name(self, item_id: str, name: str, *, sort_name: str | None = None, lock: bool = True) -> None:
+        self.set_calls.append((item_id, name, sort_name, lock))
         if item_id in self.fail_ids:
             raise JellyfinError("改名失败")
         for item in self.items.values():
             if item["id"] == item_id:
                 item["name"] = name
+                item["sort_name"] = sort_name
                 locked = [field for field in (item["locked_fields"] or []) if field != "Name"]
                 item["locked_fields"] = [*locked, "Name"] if lock else locked
 
@@ -116,7 +133,7 @@ def test_dry_run_reports_without_writing(db_session):
     assert result["updated"] == 0
     assert client.set_calls == []
     assert client.order_calls == []
-    assert result["samples"][0] == {"path": f"{ROOT}/甲/包/a.mp4", "old": "a", "new": "甲/包 · 01"}
+    assert result["samples"][0] == {"path": f"{ROOT}/甲/包/a.mp4", "old": "a", "new": _name(1)}
 
 
 def test_apply_renames_and_second_run_is_idempotent(db_session):
@@ -129,7 +146,7 @@ def test_apply_renames_and_second_run_is_idempotent(db_session):
     second = _sync(db_session, client)
 
     assert first["updated"] == 2
-    assert client.set_calls == [("i1", "甲/包 · 01", True), ("i2", "甲/包 · 02", True)]
+    assert client.set_calls == [("i1", _name(1), _sort(1), True), ("i2", _name(2), _sort(2), True)]
     assert second["to_update"] == 0
     assert second["unchanged"] == 2
     assert len(client.set_calls) == 2
@@ -141,15 +158,37 @@ def test_relocks_when_name_correct_but_unlocked(db_session):
     _media(db_session, f"{ROOT}/甲/包/b.mp4", entry)
     client = FakeDisplayClient(
         {
-            f"{ROOT}/甲/包/a.mp4": ("i1", "甲/包 · 01", []),
-            f"{ROOT}/甲/包/b.mp4": ("i2", "甲/包 · 02", None),
+            f"{ROOT}/甲/包/a.mp4": ("i1", _name(1), [], _sort(1)),
+            f"{ROOT}/甲/包/b.mp4": ("i2", _name(2), None, _sort(2)),
         }
     )
 
     result = _sync(db_session, client)
 
-    assert client.set_calls == [("i1", "甲/包 · 01", True)]
+    assert client.set_calls == [("i1", _name(1), _sort(1), True)]
     assert result["unchanged"] == 1
+
+
+def test_rewrites_when_sort_name_missing(db_session):
+    # 名字对、也锁了，但排序名没设：合集会按显示名排，各包的 01 会排在一起
+    entry = _entry(db_session, "甲")
+    _media(db_session, f"{ROOT}/甲/包/a.mp4", entry)
+    client = FakeDisplayClient({f"{ROOT}/甲/包/a.mp4": ("i1", _name(1), ["Name"], None)})
+
+    _sync(db_session, client)
+
+    assert client.set_calls == [("i1", _name(1), _sort(1), True)]
+
+
+def test_old_format_names_are_rewritten_to_number_first(db_session):
+    # 2026-11-26 试跑时用过「关键词/资源包 · 序号」，改格式后要能改过来
+    entry = _entry(db_session, "甲")
+    _media(db_session, f"{ROOT}/甲/包/a.mp4", entry)
+    client = FakeDisplayClient({f"{ROOT}/甲/包/a.mp4": ("i1", "甲/包 · 01", ["Name"])})
+
+    _sync(db_session, client)
+
+    assert client.set_calls == [("i1", "01 · 甲/包", _sort(1), True)]
 
 
 def test_items_missing_in_jellyfin_do_not_take_numbers(db_session):
@@ -160,8 +199,8 @@ def test_items_missing_in_jellyfin_do_not_take_numbers(db_session):
 
     result = _sync(db_session, client)
 
-    assert ("i1", "甲/包 · 01", True) in client.set_calls
-    assert ("i3", "甲/包 · 02", True) in client.set_calls
+    assert ("i1", _name(1), _sort(1), True) in client.set_calls
+    assert ("i3", _name(2), _sort(2), True) in client.set_calls
     assert result["not_in_jellyfin"] == 1
 
 
@@ -176,7 +215,7 @@ def test_keyword_filter_only_touches_that_keyword(db_session):
 
     result = _sync(db_session, client, keyword="甲")
 
-    assert client.set_calls == [("i1", "甲/包 · 01", True)]
+    assert client.set_calls == [("i1", _name(1), _sort(1), True)]
     assert client.order_calls == ["c-jia"]
     assert result["updated"] == 1
 
@@ -190,7 +229,7 @@ def test_keyword_filter_accepts_alias(db_session):
 
     _sync(db_session, client, keyword="甲酱")
 
-    assert client.set_calls == [("i1", "甲/包 · 01", True)]
+    assert client.set_calls == [("i1", _name(1), _sort(1), True)]
 
 
 def test_unknown_keyword_raises(db_session):
@@ -211,7 +250,7 @@ def test_single_failure_does_not_stop_others(db_session):
 
     assert result["failed"] == 1
     assert result["updated"] == 1
-    assert ("i2", "甲/包 · 02", True) in client.set_calls
+    assert ("i2", _name(2), _sort(2), True) in client.set_calls
 
 
 def test_listing_failure_raises_without_writes(db_session):
@@ -306,7 +345,7 @@ def test_inactive_and_115_items_untouched(db_session):
 
     _sync(db_session, client)
 
-    assert client.set_calls == [("i1", "甲/包 · 01", True)]
+    assert client.set_calls == [("i1", _name(1), _sort(1), True)]
 
 
 def test_orders_only_active_mapped_collections(db_session):
@@ -326,11 +365,22 @@ def test_restore_sets_stem_and_unlocks(db_session):
     entry = _entry(db_session, "甲")
     _media(db_session, f"{ROOT}/甲/包/a.mp4", entry)
     _mapping(db_session, entry, "c1")
-    client = FakeDisplayClient({f"{ROOT}/甲/包/a.mp4": ("i1", "甲/包 · 01", ["Name"])})
+    client = FakeDisplayClient({f"{ROOT}/甲/包/a.mp4": ("i1", _name(1), ["Name"], _sort(1))})
 
     result = _sync(db_session, client, restore=True)
 
     assert result["restore"] is True
-    assert client.set_calls == [("i1", "a", False)]
+    assert client.set_calls == [("i1", "a", None, False)]
     assert result["updated"] == 1
     assert client.order_calls == []
+
+
+def test_restore_clears_leftover_sort_name(db_session):
+    # 名字已是文件名且没锁，但还留着强制排序名：回滚要把它清掉
+    entry = _entry(db_session, "甲")
+    _media(db_session, f"{ROOT}/甲/包/a.mp4", entry)
+    client = FakeDisplayClient({f"{ROOT}/甲/包/a.mp4": ("i1", "a", [], _sort(1))})
+
+    _sync(db_session, client, restore=True)
+
+    assert client.set_calls == [("i1", "a", None, False)]

@@ -77,14 +77,14 @@ STRM 里是内网 OpenList 地址。Emby 的播放信息带 `DirectStreamUrl`，
 
 ## 本地视频显示名
 
-- **规则**：本地已整理库的视频在 Jellyfin 里显示为 `关键词/资源包 · 序号`（直接放在关键词下的显示为 `关键词 · 序号`），同一资源包按文件名自然排序编号。详见 `docs/superpowers/specs/2026-11-25-jellyfin-display-names-design.md`。
+- **规则**：本地已整理库的视频在 Jellyfin 里显示为 `序号 · 关键词/资源包`（直接放在关键词下的显示为 `序号 · 关键词`），同一资源包按文件名自然排序编号。另写入强制排序名 `关键词/资源包 · 序号`（数字补零），合集仍一个包一个包地按序号排列。详见 `docs/superpowers/specs/2026-11-25-jellyfin-display-names-design.md`。
 - **只改 Jellyfin 数据库**：通过接口改名字并锁定名字字段，文件、目录、硬链接都不动；115 番号库不处理。18x 合集同时设为按名字排序。
 - **开关**：18x `.env` 的 `JELLYFIN_DISPLAY_NAMES_ENABLED=true` 时，每天合集同步之后自动执行（默认关闭）。
 - **手动命令**（在生产机执行，不受开关限制）：
   - 只预览：`docker exec docker-app-1 python scripts/jellyfin_display_names.py --dry-run`
   - 只改一个关键词：`docker exec docker-app-1 python scripts/jellyfin_display_names.py --keyword <名字>`
   - 全量：`docker exec docker-app-1 python scripts/jellyfin_display_names.py`
-  - 回滚（名字改回文件名并解锁，可加 `--keyword`）：`docker exec docker-app-1 python scripts/jellyfin_display_names.py --restore`
+  - 回滚（名字改回文件名、清掉强制排序名并解锁，可加 `--keyword`）：`docker exec docker-app-1 python scripts/jellyfin_display_names.py --restore`
 - **前提**：「本地已整理」库的元数据保存器必须为空、不保存本地元数据（`GET /Library/VirtualFolders` 里 `MetadataSavers: []`、`SaveLocalMetadata: false`；2026-11-25 已核对）。否则 Jellyfin 改名时会尝试往视频旁写 `.nfo`。
 - **出错时**：连续 20 次写入 Jellyfin 失败会停止本轮并记为失败（多半是 Jellyfin 重启或卡住），恢复后重新运行即可；命令行在有失败条目时返回非 0；按 Ctrl+C 中断会把任务记为失败，不会挡住下一次运行。
 - **回滚顺序**：先把开关改回 `false` 并重建 18x，再执行回滚命令，否则第二天又会改回来。回滚把名字改成「文件名去掉扩展名」，个别名字可能和 Jellyfin 原来自动起的名字略有不同；合集的排序方式不会改回。**不要用 `MetadataRefreshMode=FullRefresh`**。

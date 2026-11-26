@@ -143,20 +143,22 @@ class JellyfinClient:
                 yield path, item_id
 
     def iter_media_items(self) -> Iterator[dict[str, Any]]:
-        """分页读取条目的 ID、路径、名字和锁定字段；返回里没有锁定字段时为 None。"""
-        # Fields=Settings 才会返回 LockedFields（10.10.7 实测）
-        for item in self._iter_media_pages("Path,Settings"):
+        """分页读取条目的 ID、路径、名字、锁定字段和强制排序名；返回里没有的为 None。"""
+        # Fields=Settings 才返回 LockedFields，Fields=SortName 才返回 ForcedSortName（10.10.7 实测，未设置时不返回该键）
+        for item in self._iter_media_pages("Path,Settings,SortName"):
             path = item.get("Path", item.get("path"))
             item_id = item.get("Id", item.get("id"))
             if not isinstance(path, str) or not isinstance(item_id, str):
                 continue
             name = item.get("Name", item.get("name"))
             locked = item.get("LockedFields", item.get("lockedFields"))
+            sort_name = item.get("ForcedSortName", item.get("forcedSortName"))
             yield {
                 "id": item_id,
                 "path": path,
                 "name": name if isinstance(name, str) else "",
                 "locked_fields": [str(field) for field in locked] if isinstance(locked, list) else None,
+                "sort_name": sort_name if isinstance(sort_name, str) and sort_name else None,
             }
 
     def list_collections(self) -> list[dict]:
@@ -270,10 +272,12 @@ class JellyfinClient:
         response = self._request("GET", f"/Items/{item_id}", params={"userId": self._get_admin_user_id()})
         return self._payload(response)
 
-    def set_item_name(self, item_id: str, name: str, *, lock: bool = True) -> None:
-        """改条目显示名；lock=True 时锁定名字防止重扫改回，lock=False 时解锁（回滚用）。"""
+    def set_item_name(self, item_id: str, name: str, *, sort_name: str | None = None, lock: bool = True) -> None:
+        """改条目显示名和强制排序名（None 表示清掉，按名字自动排序）；
+        lock=True 时锁定名字防止重扫改回，lock=False 时解锁（回滚用）。"""
         payload = self._get_item_as_admin(item_id)
         payload["Name"] = name
+        payload["ForcedSortName"] = sort_name
         locked = payload.get("LockedFields")
         locked = [str(field) for field in locked] if isinstance(locked, list) else []
         if lock and "Name" not in locked:

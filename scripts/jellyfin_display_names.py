@@ -1,5 +1,5 @@
 """
-手动维护本地已整理视频在 Jellyfin 里的显示名（关键词/资源包 · 序号）。
+手动维护本地已整理视频在 Jellyfin 里的显示名（序号 · 关键词/资源包）。
 不受 JELLYFIN_DISPLAY_NAMES_ENABLED 开关限制，但需要 Jellyfin 地址和 API Key。
 
 用法（在生产容器内执行）：

@@ -169,7 +169,13 @@ def test_iter_media_items_reads_name_and_locks():
             200,
             json={
                 "Items": [
-                    {"Id": "i1", "Path": "/r/甲/包/a.mp4", "Name": "a", "LockedFields": ["Name"]},
+                    {
+                        "Id": "i1",
+                        "Path": "/r/甲/包/a.mp4",
+                        "Name": "a",
+                        "LockedFields": ["Name"],
+                        "ForcedSortName": "甲/包 · 0000000001",
+                    },
                     {"Id": "i2", "Path": "/r/甲/包/b.mp4", "Name": "b"},
                 ],
                 "TotalRecordCount": 2,
@@ -179,10 +185,11 @@ def test_iter_media_items_reads_name_and_locks():
     client = JellyfinClient("http://jf.test", "k", 3, 50, httpx.MockTransport(handler), sleep_fn=lambda _: None)
 
     assert list(client.iter_media_items()) == [
-        {"id": "i1", "path": "/r/甲/包/a.mp4", "name": "a", "locked_fields": ["Name"]},
-        {"id": "i2", "path": "/r/甲/包/b.mp4", "name": "b", "locked_fields": None},
+        {"id": "i1", "path": "/r/甲/包/a.mp4", "name": "a", "locked_fields": ["Name"], "sort_name": "甲/包 · 0000000001"},
+        {"id": "i2", "path": "/r/甲/包/b.mp4", "name": "b", "locked_fields": None, "sort_name": None},
     ]
-    assert seen[0]["Fields"] == "Path,Settings"
+    # SortName 字段才会返回 ForcedSortName（10.10.7 实测，未设置时不返回该键）
+    assert seen[0]["Fields"] == "Path,Settings,SortName"
     assert seen[0]["IsFolder"] == "false"
 
 
@@ -209,10 +216,11 @@ def test_set_item_name_appends_name_lock():
     handler = _item_handler({"Id": "i1", "Name": "old", "LockedFields": ["Overview"]}, posted)
     client = JellyfinClient("http://jf.test", "k", 3, 2, httpx.MockTransport(handler), sleep_fn=lambda _: None)
 
-    client.set_item_name("i1", "甲/包 · 01")
+    client.set_item_name("i1", "01 · 甲/包", sort_name="甲/包 · 0000000001")
 
     assert len(posted) == 1
-    assert posted[0]["Name"] == "甲/包 · 01"
+    assert posted[0]["Name"] == "01 · 甲/包"
+    assert posted[0]["ForcedSortName"] == "甲/包 · 0000000001"
     assert posted[0]["LockedFields"] == ["Overview", "Name"]
 
 
@@ -221,19 +229,24 @@ def test_set_item_name_does_not_duplicate_lock():
     handler = _item_handler({"Id": "i1", "Name": "old", "LockedFields": ["Name"]}, posted)
     client = JellyfinClient("http://jf.test", "k", 3, 2, httpx.MockTransport(handler), sleep_fn=lambda _: None)
 
-    client.set_item_name("i1", "甲/包 · 01")
+    client.set_item_name("i1", "01 · 甲/包", sort_name="甲/包 · 0000000001")
 
     assert posted[0]["LockedFields"] == ["Name"]
 
 
 def test_set_item_name_unlock_removes_name_lock():
     posted: list[dict] = []
-    handler = _item_handler({"Id": "i1", "Name": "甲/包 · 01", "LockedFields": ["Overview", "Name"]}, posted)
+    handler = _item_handler(
+        {"Id": "i1", "Name": "01 · 甲/包", "ForcedSortName": "甲/包 · 0000000001", "LockedFields": ["Overview", "Name"]},
+        posted,
+    )
     client = JellyfinClient("http://jf.test", "k", 3, 2, httpx.MockTransport(handler), sleep_fn=lambda _: None)
 
-    client.set_item_name("i1", "a", lock=False)
+    client.set_item_name("i1", "a", sort_name=None, lock=False)
 
     assert posted[0]["Name"] == "a"
+    # 回滚时清掉强制排序名，排序回到 Jellyfin 按名字自动计算
+    assert posted[0]["ForcedSortName"] is None
     assert posted[0]["LockedFields"] == ["Overview"]
 
 

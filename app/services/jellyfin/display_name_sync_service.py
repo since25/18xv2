@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.models.jellyfin import JellyfinKeywordCollection, JellyfinMediaItem
 from app.models.keywords import KeywordAlias, KeywordEntry
-from app.services.jellyfin.display_names import compute_display_names
+from app.services.jellyfin.display_names import DisplayName, compute_display_names
 from app.services.keywords.registry_service import normalize_keyword_text
 
 
@@ -104,7 +104,7 @@ class DisplayNameSyncService:
     def _sync_item(
         client: Any,
         path: str,
-        display_name: str | None,
+        display_name: DisplayName | None,
         remote_item: dict[str, Any],
         result: dict[str, Any],
         dry_run: bool,
@@ -117,14 +117,23 @@ class DisplayNameSyncService:
             return "skipped"
         locked = remote_item.get("locked_fields")
         current = remote_item.get("name")
+        current_sort = remote_item.get("sort_name")
         if restore:
-            # 回滚：名字改回文件名（去掉扩展名）并解锁
+            # 回滚：名字改回文件名（去掉扩展名）、清掉强制排序名并解锁
             desired = PurePosixPath(path).stem
-            needs_write = current != desired or (locked is not None and "Name" in locked)
+            desired_sort = None
+            needs_write = (
+                current != desired or current_sort is not None or (locked is not None and "Name" in locked)
+            )
         else:
-            desired = display_name
-            # 名字对但锁被去掉时也要重新上锁，否则重扫会改回文件名
-            needs_write = current != desired or (locked is not None and "Name" not in locked)
+            desired = display_name.name
+            desired_sort = display_name.sort_name
+            # 名字对但锁被去掉、或排序名不对时也要写：前者重扫会改回文件名，后者合集里各包会交错
+            needs_write = (
+                current != desired
+                or current_sort != desired_sort
+                or (locked is not None and "Name" not in locked)
+            )
         if not needs_write:
             result["unchanged"] += 1
             return "unchanged"
@@ -135,7 +144,7 @@ class DisplayNameSyncService:
         if dry_run:
             return "planned"
         try:
-            client.set_item_name(remote_item["id"], desired, lock=not restore)
+            client.set_item_name(remote_item["id"], desired, sort_name=desired_sort, lock=not restore)
         except Exception:  # noqa: BLE001 - 单条失败只计数，连续失败由调用方判断是否停止
             result["failed"] += 1
             return "failed"
