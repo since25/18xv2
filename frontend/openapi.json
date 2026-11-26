@@ -27,6 +27,24 @@
         "title": "ActiveJobsResponse",
         "type": "object"
       },
+      "ActressAliasItem": {
+        "properties": {
+          "alias": {
+            "title": "Alias",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "alias"
+        ],
+        "title": "ActressAliasItem",
+        "type": "object"
+      },
       "ActressAliasRequest": {
         "properties": {
           "alias": {
@@ -596,6 +614,13 @@
       },
       "ActressDetail": {
         "properties": {
+          "alias_items": {
+            "items": {
+              "$ref": "#/components/schemas/ActressAliasItem"
+            },
+            "title": "Alias Items",
+            "type": "array"
+          },
           "aliases": {
             "items": {
               "type": "string"
@@ -650,6 +675,7 @@
           "status",
           "film_count",
           "candidate_count",
+          "alias_items",
           "marks",
           "films"
         ],

@@ -45,6 +45,7 @@ function makeDetail(overrides: Partial<ActressDetail> = {}): ActressDetail {
     id: 1,
     canonical_name: '甲',
     aliases: ['甲二'],
+    alias_items: [{ id: 7, alias: '甲二' }],
     status: 'none',
     film_count: 1,
     candidate_count: 0,
@@ -125,7 +126,15 @@ describe('ActressesPage', () => {
   })
 
   it('详情抽屉里添加别名', async () => {
-    addActressAlias.mockResolvedValue(makeDetail({ aliases: ['甲二', '甲三'] }))
+    addActressAlias.mockResolvedValue(
+      makeDetail({
+        aliases: ['甲二', '甲三'],
+        alias_items: [
+          { id: 7, alias: '甲二' },
+          { id: 8, alias: '甲三' },
+        ],
+      }),
+    )
     render(<ActressesPage />)
     fireEvent.click(await screen.findByText('甲'))
     await waitFor(() => expect(getActress).toHaveBeenCalledWith(1))
@@ -138,5 +147,16 @@ describe('ActressesPage', () => {
     fireEvent.click(screen.getByRole('button', { name: buttonName('添加') }))
     await waitFor(() => expect(addActressAlias).toHaveBeenCalledWith(1, '甲三'))
     expect(await screen.findByText('甲三')).toBeInTheDocument()
+  })
+
+  it('详情抽屉里删除别名', async () => {
+    removeActressAlias.mockResolvedValue(makeDetail({ aliases: [], alias_items: [] }))
+    render(<ActressesPage />)
+    fireEvent.click(await screen.findByText('甲'))
+    fireEvent.click(await screen.findByRole('button', { name: '删除别名 甲二' }))
+    await waitFor(() => expect(removeActressAlias).toHaveBeenCalledWith(1, 7))
+    // 用接口返回的新详情刷新抽屉，并重新拉取列表
+    expect(await screen.findByText('没有别名')).toBeInTheDocument()
+    await waitFor(() => expect(listActresses.mock.calls.length).toBeGreaterThan(1))
   })
 })

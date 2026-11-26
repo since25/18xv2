@@ -7,6 +7,10 @@ export interface components {
       scan: components['schemas']['JobFrame'] | null
       submit: components['schemas']['JobFrame'] | null
     }
+    'ActressAliasItem': {
+      id: number
+      alias: string
+    }
     'ActressAliasRequest': {
       alias: string
     }
@@ -94,6 +98,7 @@ export interface components {
       status: "none" | "blacklist" | "whitelist"
       film_count: number
       candidate_count: number
+      alias_items: components['schemas']['ActressAliasItem'][]
       marks: components['schemas']['ActressMarkItem'][]
       films: components['schemas']['ActressFilmItem'][]
     }

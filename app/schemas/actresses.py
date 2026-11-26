@@ -61,7 +61,14 @@ class ActressFilmItem(BaseModel):
     in_candidates: bool
 
 
+class ActressAliasItem(BaseModel):
+    id: int
+    alias: str
+
+
 class ActressDetail(ActressSummary):
+    # 与 aliases 同序，带 id 供网页删除别名
+    alias_items: list[ActressAliasItem]
     # 新的在前
     marks: list[ActressMarkItem]
     films: list[ActressFilmItem]

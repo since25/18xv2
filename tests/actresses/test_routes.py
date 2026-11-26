@@ -628,14 +628,18 @@ def test_alias_changes_rerun_candidates_and_return_detail(client, db_session, st
     ]
     assert detail["films"][0]["actors"] == [{"name": "戊", "status": "blacklist"}]
 
+    # 详情带别名 id，网页用它调删除接口
+    alias_id = db_session.scalar(select(ActressAlias.id))
+    assert detail["alias_items"] == [{"id": alias_id, "alias": "戊"}]
+
     duplicate = client.post(f"/actresses/{black}/aliases", json={"alias": "戊"})
     assert duplicate.status_code == 400
 
-    alias_id = db_session.scalar(select(ActressAlias.id))
-    response = client.delete(f"/actresses/{black}/aliases/{alias_id}")
+    response = client.delete(f"/actresses/{black}/aliases/{detail['alias_items'][0]['id']}")
 
     assert response.status_code == 200
     assert response.json()["aliases"] == []
+    assert response.json()["alias_items"] == []
     assert response.json()["films"] == []
     assert db_session.scalars(select(ActressDeleteCandidate)).all() == []
     assert client.get("/actresses/9999").status_code == 404

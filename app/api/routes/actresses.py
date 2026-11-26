@@ -181,7 +181,7 @@ def _summaries(db: Session, actresses: list[Actress], candidate_counts: Counter[
 
 
 def _detail(db: Session, actress: Actress, strm_roots: list[str]) -> dict:
-    """女优详情：列表行字段 + 标记记录（新的在前）+ 她的片子（同片演员状态、是否受保护、是否在清单里）。"""
+    """女优详情：列表行字段 + 带 id 的别名 + 标记记录（新的在前）+ 她的片子（同片演员状态、是否受保护、是否在清单里）。"""
     context = RuleContext.load(db)
     candidate_dirs = set(db.scalars(select(ActressDeleteCandidate.film_dir)))
     films = []
@@ -204,9 +204,16 @@ def _detail(db: Session, actress: Actress, strm_roots: list[str]) -> dict:
         .where(ActressMark.actress_id == actress.id)
         .order_by(ActressMark.created_at.desc(), ActressMark.id.desc())
     ).all()
+    # 与 _summaries 里 aliases 同样按 id 排序
+    alias_rows = db.execute(
+        select(ActressAlias.id, ActressAlias.alias)
+        .where(ActressAlias.actress_id == actress.id)
+        .order_by(ActressAlias.id)
+    ).all()
     summary = _summaries(db, [actress], _candidate_counts(db, strm_roots))[0]
     return {
         **summary,
+        "alias_items": [{"id": alias_id, "alias": alias} for alias_id, alias in alias_rows],
         "marks": [
             {
                 "from_status": mark.from_status,

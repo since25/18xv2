@@ -8,7 +8,9 @@ import {
   getActress,
   listActresses,
   mergeActress,
+  removeActressAlias,
   setActressStatus,
+  type ActressAliasItem,
   type ActressDetail,
   type ActressFilmActor,
   type ActressFilmItem,
@@ -168,6 +170,14 @@ function ActressDetailBody({
       onChanged()
     },
   })
+  const removeAliasAction = useApiAction((item: ActressAliasItem) => removeActressAlias(actressId, item.id), {
+    successMessage: (_data, item) => `已删除别名 ${item.alias}`,
+    onSuccess: (data) => {
+      // 用接口返回的新详情刷新抽屉
+      setData(data)
+      onChanged()
+    },
+  })
 
   if (error) return <Alert type="error" showIcon title={`详情加载失败：${error.message}`} />
   if (!detail) return <Spin />
@@ -213,8 +223,23 @@ function ActressDetailBody({
 
       <Title level={5}>别名</Title>
       <div style={{ marginBottom: 8 }}>
-        {detail.aliases.length ? (
-          detail.aliases.map((alias) => <Tag key={alias}>{alias}</Tag>)
+        {detail.alias_items.length ? (
+          <Space wrap size={[12, 4]}>
+            {detail.alias_items.map((item) => (
+              <span key={item.id}>
+                <Tag>{item.alias}</Tag>
+                <Button
+                  type="link"
+                  size="small"
+                  aria-label={`删除别名 ${item.alias}`}
+                  disabled={removeAliasAction.loading}
+                  onClick={() => void removeAliasAction.run(item)}
+                >
+                  删除
+                </Button>
+              </span>
+            ))}
+          </Space>
         ) : (
           <Text type="secondary">没有别名</Text>
         )}
