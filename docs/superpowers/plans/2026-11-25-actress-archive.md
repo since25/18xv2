@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-11-25-actress-archive-design.md`（必须先读）。
 
-**执行前准备：** 本计划和设计文档提交在分支 `claude/magical-morse-7b759f` 上，这个分支基于较旧的提交。执行时从最新 `main` 拉新工作区，先把该分支合进来（只带进这两份文档），再开始 Task 1。所有路径以 `main` 为准。
+**执行位置：** 工作区 `.claude/worktrees/magical-morse-7b759f`，分支 `claude/magical-morse-7b759f`，已变基到最新 `main`（a0977f3b）之上，设计和计划两份文档是最前面的两个提交。
 
 ## Global Constraints
 
