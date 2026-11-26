@@ -97,6 +97,34 @@ def test_emby_whitelist_alias_protects(db_session):
     assert verdict.protected_by == ("乙 A",)
 
 
+def test_keyword_whitelist_protects_archive_alias_in_nfo(db_session):
+    _add_actress(db_session, "甲", status="blacklist")
+    # 乙在档案里未标、有别名「乙乙」；关键词白名单只写了规范名「乙」
+    _add_actress(db_session, "乙", aliases=("乙乙",))
+    _add_keyword(db_session, "乙", "whitelist")
+
+    verdict = RuleContext.load(db_session).verdict(_film("ABC-001", ("甲", "乙 乙")))
+
+    assert verdict.deletable is False
+    # 显示 NFO 原名
+    assert verdict.protected_by == ("乙 乙",)
+
+
+def test_keyword_whitelist_on_archive_alias_protects_canonical_in_nfo(db_session):
+    _add_actress(db_session, "甲", status="blacklist")
+    # 反过来：关键词白名单只写了别名「乙乙」，NFO 写的是规范名「乙」
+    _add_actress(db_session, "乙", aliases=("乙乙",))
+    _add_keyword(db_session, "乙乙", "emby_whitelist")
+    context = RuleContext.load(db_session)
+
+    verdict = context.verdict(_film("ABC-001", ("甲", "乙")))
+
+    assert verdict.deletable is False
+    assert verdict.protected_by == ("乙",)
+    # 不相干的未标演员不受影响
+    assert context.verdict(_film("ABC-002", ("甲", "丙"))).deletable is True
+
+
 def test_unmarked_costar_does_not_protect(db_session):
     _add_actress(db_session, "甲", status="blacklist")
     _add_actress(db_session, "乙")
