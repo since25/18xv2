@@ -527,3 +527,113 @@ def test_delete_node_unsuccessful_keeps_local_files(env, monkeypatch):
     assert film.status == "failed"
     assert "115 拒绝删除" in film.error
     assert [(file.group, file.status) for file in film.files] == [("remote_115", "failed")]
+
+
+def test_symlinked_strm_blocks_before_115(env, monkeypatch):
+    """换算后的 STRM 本身是符号链接：这部片判失败，不调用任何 115 接口，什么都不删。"""
+    batch_id = _prepare(env)
+    calls: list[str] = []
+
+    def no_115(*args, **kwargs):
+        calls.append("115")
+        raise AssertionError("不应调用 115")
+
+    monkeypatch.setattr(env.client, "get_file", no_115)
+    monkeypatch.setattr(env.client, "delete_node", no_115)
+    real = env.tmp / "real" / "ABC-001.strm"
+    real.parent.mkdir()
+    real.write_text(BASE + "ABC-001.mp4\n", encoding="utf-8")
+    link = env.organized / "甲" / "ABC-001" / "ABC-001.strm"
+    link.unlink()
+    link.symlink_to(real)
+
+    summary = env.run(batch_id)
+
+    assert summary.failed == 1
+    assert calls == []
+    assert "f1" in env.client.nodes
+    assert (env.source / "AV" / "ABC-001.strm").exists()
+    assert link.is_symlink()
+    film = _batch(env.db, batch_id).films[0]
+    assert film.status == "failed"
+    assert "符号链接" in film.error
+    assert film.files == []
+
+
+def test_unwritable_root_fails_batch_before_any_115_call(env, monkeypatch):
+    """删除根目录可读但不可写：整批失败，不调用任何 115 接口。"""
+    batch_id = _prepare(env)
+    calls: list[str] = []
+
+    def no_115(*args, **kwargs):
+        calls.append("115")
+        raise AssertionError("不应调用 115")
+
+    monkeypatch.setattr(env.client, "get_file", no_115)
+    monkeypatch.setattr(env.client, "delete_node", no_115)
+    real_access = delete_batch_service.os.access
+    organized = str(env.organized)
+
+    def fake_access(path, mode, *args, **kwargs):
+        if str(path) == organized and mode & delete_batch_service.os.W_OK:
+            return False
+        return real_access(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(delete_batch_service.os, "access", fake_access)
+
+    summary = env.run(batch_id)
+
+    assert summary == BatchSummary(batch_id=batch_id, deleted=0, failed=0, skipped=0)
+    assert calls == []
+    _assert_untouched(env)
+    batch = _batch(env.db, batch_id)
+    assert batch.status == "failed"
+    assert "写不了" in batch.note
+    assert organized in batch.note
+    assert [film.status for film in batch.films] == ["pending"]
+
+
+def test_source_strm_not_found_records_missing_row(env):
+    """porn_tv1 里按地址找不到对应 STRM：记一条 source_strm / missing 文件行，片子照常删完。"""
+    batch_id = _prepare(env)
+    (env.source / "AV" / "ABC-001.strm").unlink()
+
+    summary = env.run(batch_id)
+
+    assert summary.deleted == 1
+    film = _batch(env.db, batch_id).films[0]
+    assert film.status == "deleted"
+    assert [(file.group, file.status) for file in film.files] == [
+        ("remote_115", "deleted"),
+        ("source_strm", "missing"),
+        ("organized_dir", "deleted"),
+    ]
+    missing_row = film.files[1]
+    assert missing_row.target == BASE + "ABC-001.mp4"
+    assert "porn_tv1 里没找到对应 STRM" in missing_row.error
+
+
+def test_new_part_added_after_scan_blocks_before_115(env, monkeypatch):
+    """番号目录里有扫描结果里没有的 STRM（扫描后新加的分段）：这部片判失败，不调用任何 115 接口。"""
+    batch_id = _prepare(env)
+    calls: list[str] = []
+
+    def no_115(*args, **kwargs):
+        calls.append("115")
+        raise AssertionError("不应调用 115")
+
+    monkeypatch.setattr(env.client, "get_file", no_115)
+    monkeypatch.setattr(env.client, "delete_node", no_115)
+    extra = env.organized / "甲" / "ABC-001" / "ABC-001-CD2.strm"
+    extra.write_text(BASE + "ABC-001-CD2.mp4\n", encoding="utf-8")
+
+    summary = env.run(batch_id)
+
+    assert summary.failed == 1
+    assert calls == []
+    _assert_untouched(env)
+    assert extra.exists()
+    film = _batch(env.db, batch_id).films[0]
+    assert film.status == "failed"
+    assert "番号目录里有扫描之后新加的分段，请等下次扫描" in film.error
+    assert film.files == []

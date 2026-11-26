@@ -63,12 +63,28 @@ def _now() -> datetime:
 
 
 def _check_root(root: str) -> str | None:
-    """根目录不是可读目录时返回中文原因，正常返回 None。"""
+    """根目录不是可读可写目录时返回中文原因，正常返回 None。"""
     if not os.path.isdir(root):
         return f"删除根目录不存在或不是目录：{root}"
     if not os.access(root, os.R_OK | os.X_OK):
         return f"删除根目录读不了：{root}"
+    # 只读挂载时 115 删完、本地删不掉，所以开始前就要确认能写
+    if not os.access(root, os.W_OK):
+        return f"删除根目录写不了：{root}"
     return None
+
+
+def recover_interrupted_batches(db: Session) -> int:
+    """服务启动时把停在执行中 / 待开始的删除批次标为中断（不 commit），返回改了几个。
+
+    进程退出后这些批次不会再有人执行，标为中断后网页上可以点「重试失败的」续跑。
+    """
+    batches = db.scalars(select(ActressDeleteBatch).where(ActressDeleteBatch.status.in_(("running", "pending")))).all()
+    for batch in batches:
+        batch.status = "interrupted"
+        batch.note = "服务重启时中断"
+        batch.finished_at = _now()
+    return len(batches)
 
 
 class DeleteBatchService:
@@ -237,19 +253,34 @@ class DeleteBatchService:
     def _read_urls(film: Film, mapper: PathMapper, local_dir: str) -> list[str]:
         """读每个分段 STRM 的地址，任一读不到就失败；没有分段也算失败。
 
-        换算后的 STRM 必须是已校验番号目录 local_dir 的直接子文件，否则失败。
+        换算后的 STRM 必须是已校验番号目录 local_dir 的直接子文件、且本身不是符号链接，否则失败。
+        番号目录里还有扫描结果之外的 STRM（扫描之后新加的分段）也失败：那一段的 115 文件不会被删，
+        本地目录却会整个删掉。
         """
         if not film.strm_paths:
             raise _FilmFailed("片子没有 STRM 文件")
         urls: list[str] = []
+        known: set[str] = set()
         for strm_path in film.strm_paths:
-            local_path = mapper.map(strm_path)
-            if os.path.dirname(os.path.abspath(local_path)) != local_dir:
+            local_path = os.path.abspath(mapper.map(strm_path))
+            if os.path.dirname(local_path) != local_dir:
                 raise _FilmFailed(f"STRM 不在本地番号目录里：{local_path}（检查路径换算）")
+            if os.path.islink(local_path):
+                raise _FilmFailed(f"STRM 是符号链接，拒绝删除：{local_path}")
             url = read_strm_url(local_path)
             if url is None:
                 raise _FilmFailed(f"读不到 STRM 地址：{local_path}")
             urls.append(url)
+            known.add(local_path)
+        try:
+            names = os.listdir(local_dir)
+        except OSError as exc:
+            raise _FilmFailed(f"读不了本地番号目录：{local_dir}：{exc}") from exc
+        extra = sorted(
+            name for name in names if name.lower().endswith(".strm") and os.path.join(local_dir, name) not in known
+        )
+        if extra:
+            raise _FilmFailed(f"番号目录里有扫描之后新加的分段，请等下次扫描：{'、'.join(extra)}")
         return urls
 
     @staticmethod
@@ -312,7 +343,18 @@ class DeleteBatchService:
         url_index: dict[str, list[str]],
         urls: list[str],
     ) -> None:
-        """删 porn_tv1 里地址相同的 STRM。"""
+        """删 porn_tv1 里地址相同的 STRM；某个地址一个都没找到时记一条 missing 行（不算失败）。
+
+        missing 行只在第一次走到这一步时记：续跑时上次已删掉的 STRM 本来就找不到，不能再记成没找到。
+        """
+        first_attempt = not any(row.group == "source_strm" for row in batch_film.files)
+        for url in dict.fromkeys(urls):
+            if not first_attempt or url_index.get(normalize_stream_url(url)):
+                continue
+            row = self._file_row(batch_film, "source_strm", url)
+            row.executed_at = _now()
+            row.status = "missing"
+            row.error = "porn_tv1 里没找到对应 STRM"
         paths = sorted({path for url in urls for path in url_index.get(normalize_stream_url(url), [])})
         for path in paths:
             row = self._file_row(batch_film, "source_strm", path)

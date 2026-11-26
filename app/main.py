@@ -113,6 +113,10 @@ async def lifespan(app: FastAPI):
     from app.models.emby_media_actions import EmbyDeletePlan as _EmbyDeletePlan
     from app.models.dedupe import DedupeDeletePlan as _DedupeDeletePlan
     from app.services.background_job_service import BackgroundJobService as _BackgroundJobService
+    from app.models.actresses import ActressDeleteBatch as _ActressDeleteBatch
+    from app.services.actresses.delete_batch_service import (
+        recover_interrupted_batches as _recover_actress_delete_batches,
+    )
     with _SessionLocal() as _s:
         # 测试环境或旧版本数据库可能尚未创建全部可选业务表，恢复逻辑不能阻止服务启动。
         from sqlalchemy import inspect as _inspect
@@ -122,6 +126,7 @@ async def lifespan(app: FastAPI):
         interrupted_emby = 0
         interrupted_dedupe = 0
         interrupted_background_jobs = 0
+        interrupted_actress_batches = 0
         if _TreeImport.__tablename__ in table_names:
             interrupted_imports = (
                 _s.query(_TreeImport)
@@ -148,15 +153,18 @@ async def lifespan(app: FastAPI):
             )
         if _BackgroundJobService.__module__.endswith("background_job_service") and "background_jobs" in table_names:
             interrupted_background_jobs = _BackgroundJobService.recover_running(_s)
+        if _ActressDeleteBatch.__tablename__ in table_names:
+            interrupted_actress_batches = _recover_actress_delete_batches(_s)
         _s.commit()
-        if interrupted_imports or interrupted_jobs or interrupted_emby:
+        if interrupted_imports or interrupted_jobs or interrupted_emby or interrupted_actress_batches:
             logger.info(
-                "lifespan: 恢复中断记录 imports=%d jobs=%d emby=%d dedupe=%d background=%d",
+                "lifespan: 恢复中断记录 imports=%d jobs=%d emby=%d dedupe=%d background=%d actress_batches=%d",
                 interrupted_imports,
                 interrupted_jobs,
                 interrupted_emby,
                 interrupted_dedupe,
                 interrupted_background_jobs,
+                interrupted_actress_batches,
             )
 
     # 启动后台任务记录清理循环（所有长任务共用一个）
