@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from typing import Any, Callable, Iterator, Sequence
+from urllib.parse import quote
 
 import httpx
 
@@ -324,3 +325,36 @@ class JellyfinClient:
     def delete_item(self, collection_id: str) -> None:
         """删除一个 Jellyfin 合集。"""
         self._request("DELETE", f"/Items/{collection_id}")
+
+    def refresh_library(self, library_id: str) -> None:
+        """扫描媒体库里新增和更新的文件（即界面里的「扫描新增和更新的文件」）。
+
+        不做全量刷新：元数据和图片都用 Default 模式，不替换已有元数据和图片。
+        """
+        self._request(
+            "POST",
+            f"/Items/{library_id}/Refresh",
+            params={
+                "Recursive": "true",
+                "MetadataRefreshMode": "Default",
+                "ImageRefreshMode": "Default",
+                "ReplaceAllMetadata": "false",
+                "ReplaceAllImages": "false",
+            },
+        )
+
+    def get_person_image(self, name: str) -> tuple[bytes, str] | None:
+        """按人名取 Jellyfin 人物主图，返回（内容, Content-Type）。
+
+        人物不存在、返回里没有 Id、没有主图或请求失败时返回 None，不抛错。
+        """
+        try:
+            # 名字整体编码，含斜杠或空格时也不会拆开路径
+            response = self._request("GET", f"/Persons/{quote(name, safe='')}")
+            person_id = self._payload(response).get("Id")
+            if not isinstance(person_id, str) or not person_id:
+                return None
+            image = self._request("GET", f"/Items/{person_id}/Images/Primary")
+        except JellyfinError:
+            return None
+        return image.content, image.headers.get("Content-Type", "application/octet-stream")

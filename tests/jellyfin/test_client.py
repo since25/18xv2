@@ -329,3 +329,63 @@ def test_iter_collection_media_items_reads_member_details_as_admin():
     # Jellyfin 10.10 不带用户读合集成员会返回空
     assert seen[0]["ParentId"] == "c-jia"
     assert seen[0]["userId"] == "user-1"
+
+
+def test_refresh_library_uses_default_modes():
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(204)
+
+    client = JellyfinClient("http://jf.test", "k", 3, 2, httpx.MockTransport(handler), sleep_fn=lambda _: None)
+
+    client.refresh_library("lib-115")
+
+    assert len(requests) == 1
+    request = requests[0]
+    assert request.method == "POST"
+    assert request.url.path == "/Items/lib-115/Refresh"
+    # 界面里的「扫描新增和更新的文件」，不是全量刷新
+    assert dict(request.url.params) == {
+        "Recursive": "true",
+        "MetadataRefreshMode": "Default",
+        "ImageRefreshMode": "Default",
+        "ReplaceAllMetadata": "false",
+        "ReplaceAllImages": "false",
+    }
+    assert "FullRefresh" not in str(request.url)
+
+
+def test_get_person_image_returns_content_and_type():
+    seen: list[bytes] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.raw_path)
+        if request.url.path == "/Persons/甲 乙/丙":
+            return httpx.Response(200, json={"Id": "person-1", "Name": "甲 乙/丙"})
+        if request.url.path == "/Items/person-1/Images/Primary":
+            return httpx.Response(200, content=b"img-bytes", headers={"Content-Type": "image/jpeg"})
+        return httpx.Response(404)
+
+    client = JellyfinClient("http://jf.test", "k", 3, 2, httpx.MockTransport(handler), sleep_fn=lambda _: None)
+
+    assert client.get_person_image("甲 乙/丙") == (b"img-bytes", "image/jpeg")
+    # 名字整体 URL 编码，斜杠和空格都不能拆开路径
+    assert seen[0] == b"/Persons/%E7%94%B2%20%E4%B9%99%2F%E4%B8%99"
+
+
+def test_get_person_image_returns_none_when_missing():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/Persons/有人无图":
+            return httpx.Response(200, json={"Id": "person-2"})
+        if request.url.path == "/Persons/无编号":
+            return httpx.Response(200, json={"Name": "无编号"})
+        return httpx.Response(404)
+
+    client = JellyfinClient("http://jf.test", "k", 3, 2, httpx.MockTransport(handler), sleep_fn=lambda _: None)
+
+    # 人物不存在、人物没有图、返回里没有 Id 都返回 None，不抛错
+    assert client.get_person_image("查无此人") is None
+    assert client.get_person_image("有人无图") is None
+    assert client.get_person_image("无编号") is None
