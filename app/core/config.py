@@ -108,6 +108,9 @@ class Settings(BaseSettings):
     actress_organized_root: str | None = Field(default=None, alias="ACTRESS_ORGANIZED_ROOT")
     # 扫描路径（只读挂载）到可写路径的换算，"旧前缀=>新前缀"，多条用逗号分隔
     actress_path_map: str = Field(default="", alias="ACTRESS_PATH_MAP")
+    # OpenList 地址和令牌：女优删片删完 115 文件后强制刷新 OpenList 目录缓存；两项都配了才刷新
+    openlist_url: str | None = Field(default=None, alias="OPENLIST_URL")
+    openlist_token: str | None = Field(default=None, alias="OPENLIST_TOKEN")
 
     # 脚本中心：每次运行的日志和输入输出文件都放在这里（保留 30 天）
     script_jobs_dir: str = Field(default="data/script-jobs", alias="SCRIPT_JOBS_DIR")

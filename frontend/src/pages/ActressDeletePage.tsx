@@ -73,10 +73,12 @@ const FILE_STATUS: Record<FileStatus, [string, Tone]> = {
   pending: ['待执行', 'neutral'],
   deleted: ['已删除', 'success'],
   missing: ['已不存在', 'neutral'],
+  refreshed: ['已刷新', 'success'],
   failed: ['失败', 'danger'],
 }
 const FILE_GROUP_LABELS: Record<FileGroup, string> = {
   remote_115: '115 原文件',
+  openlist_dir: 'OpenList 目录刷新',
   source_strm: 'porn_tv1 STRM',
   organized_dir: '302porn_tv1 目录',
 }

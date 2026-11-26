@@ -80,7 +80,7 @@ class _Env:
         """当前待删清单里的全部番号目录，相当于网页上全选后确认。"""
         return list(self.db.scalars(select(ActressDeleteCandidate.film_dir)))
 
-    def run(self, batch_id: int, *, client=None, guard=None, mapper=None) -> BatchSummary:
+    def run(self, batch_id: int, *, client=None, guard=None, mapper=None, openlist=None) -> BatchSummary:
         return DeleteBatchService().run(
             self.db,
             batch_id,
@@ -89,6 +89,7 @@ class _Env:
             mapper=mapper or self.mapper,
             strm_roots=self.strm_roots,
             progress=lambda message, done, total: self.progress_calls.append((message, done, total)),
+            openlist=openlist,
         )
 
 
@@ -242,8 +243,12 @@ def test_missing_root_fails_batch_before_any_115_call(env):
     assert [film.status for film in batch.films] == ["pending"]
 
 
+# 真实 115 对不存在路径的报错（430004）
+MISSING_ERROR = "[Errno 2] {'state': False, 'message': '文件（夹）不存在或已删除。', 'code': 430004}"
+
+
 class _StubClient:
-    """按路径返回文件；没有的路径抛「文件不存在」，删除时记录调用。"""
+    """按路径返回文件；没有的路径抛 115 的 430004 报错，删除时记录调用。"""
 
     def __init__(self, files: dict[str, str]) -> None:
         self.files = files
@@ -251,7 +256,7 @@ class _StubClient:
 
     def get_file(self, file_id: str | None = None, path: str | None = None) -> dict:
         if path not in self.files:
-            raise Client115Error("文件不存在")
+            raise Client115Error(MISSING_ERROR)
         return {"state": True, "data": {"file_id": self.files[path], "file_category": "1"}}
 
     def delete_node(self, file_id: str, dry_run: bool = True):
@@ -637,3 +642,110 @@ def test_new_part_added_after_scan_blocks_before_115(env, monkeypatch):
     assert film.status == "failed"
     assert "番号目录里有扫描之后新加的分段，请等下次扫描" in film.error
     assert film.files == []
+
+
+class _FakeOpenList:
+    """记录刷新调用的 OpenList 客户端；同时记下刷新那一刻 porn_tv1 的 STRM 还在不在。"""
+
+    def __init__(self, env: _Env, *, errors: list[Exception] | None = None) -> None:
+        self.env = env
+        self.errors = list(errors or [])
+        self.calls: list[tuple[str, bool]] = []
+
+    def refresh_dir(self, path: str) -> None:
+        self.calls.append((path, (self.env.source / "AV" / "ABC-001.strm").exists()))
+        if self.errors:
+            raise self.errors.pop(0)
+
+
+class _BusyDirGuard(FilmDeleteGuard):
+    """删番号目录总是失败的守卫，用来制造「115 已删、本地失败」的续跑场景。"""
+
+    def delete_film_dir(self, path: str) -> str:
+        raise OSError("目录正被占用")
+
+
+def _blacklisted_batch(env: _Env, *, node_id: str | None = "f1") -> int:
+    env.add_film("ABC-001", ("甲",), node_id=node_id)
+    env.set_status("甲", "blacklist")
+    env.reconcile()
+    return DeleteBatchService().create_batch(env.db, strm_roots=env.strm_roots, film_dirs=env.candidate_dirs()).id
+
+
+def test_refreshes_openlist_dir_after_115_before_local(env):
+    batch_id = _blacklisted_batch(env)
+    openlist = _FakeOpenList(env)
+
+    summary = env.run(batch_id, openlist=openlist)
+
+    assert summary.deleted == 1
+    # 115 删完后、删本地 STRM 之前刷新 OpenList 里这部片所在的目录，避免按旧缓存重新生成 STRM
+    assert openlist.calls == [("/115_OPEN/AV", True)]
+    film = _batch(env.db, batch_id).films[0]
+    assert [(file.group, file.target, file.status) for file in film.files] == [
+        ("remote_115", BASE + "ABC-001.mp4", "deleted"),
+        ("openlist_dir", "/115_OPEN/AV", "refreshed"),
+        ("source_strm", str(env.source / "AV" / "ABC-001.strm"), "deleted"),
+        ("organized_dir", str(env.organized / "甲" / "ABC-001"), "deleted"),
+    ]
+
+
+def test_without_openlist_client_no_refresh_row(env):
+    batch_id = _blacklisted_batch(env)
+
+    assert env.run(batch_id).deleted == 1
+
+    film = _batch(env.db, batch_id).films[0]
+    assert [file.group for file in film.files] == ["remote_115", "source_strm", "organized_dir"]
+
+
+def test_refreshes_openlist_when_115_already_missing(env):
+    batch_id = _blacklisted_batch(env, node_id=None)
+    openlist = _FakeOpenList(env)
+
+    summary = env.run(batch_id, client=_StubClient({}), openlist=openlist)
+
+    # 115 上已不存在时 OpenList 缓存里也可能还有它，照样刷新
+    assert summary.deleted == 1
+    assert openlist.calls == [("/115_OPEN/AV", True)]
+
+
+def test_openlist_refresh_failure_does_not_fail_film(env):
+    batch_id = _blacklisted_batch(env)
+    openlist = _FakeOpenList(env, errors=[RuntimeError("虚构：OpenList 连不上")])
+
+    summary = env.run(batch_id, openlist=openlist)
+
+    assert summary == BatchSummary(batch_id=batch_id, deleted=1, failed=0, skipped=0)
+    assert not (env.organized / "甲" / "ABC-001").exists()
+    batch = _batch(env.db, batch_id)
+    assert batch.status == "completed"
+    row = next(file for file in batch.films[0].files if file.group == "openlist_dir")
+    assert row.status == "failed"
+    assert "OpenList 连不上" in row.error
+
+
+def test_resume_refreshes_openlist_again_if_last_refresh_failed(env):
+    batch_id = _blacklisted_batch(env)
+    failing = _FakeOpenList(env, errors=[RuntimeError("虚构：超时")])
+
+    first = env.run(batch_id, guard=_BusyDirGuard(str(env.source), str(env.organized)), openlist=failing)
+    assert first.failed == 1
+    assert len(failing.calls) == 1
+
+    retry = _FakeOpenList(env)
+    assert env.run(batch_id, openlist=retry).deleted == 1
+    assert [path for path, _ in retry.calls] == ["/115_OPEN/AV"]
+    row = next(file for file in _batch(env.db, batch_id).films[0].files if file.group == "openlist_dir")
+    assert (row.status, row.error) == ("refreshed", None)
+
+
+def test_resume_does_not_refresh_openlist_twice(env):
+    batch_id = _blacklisted_batch(env)
+    first = _FakeOpenList(env)
+    env.run(batch_id, guard=_BusyDirGuard(str(env.source), str(env.organized)), openlist=first)
+    assert len(first.calls) == 1
+
+    second = _FakeOpenList(env)
+    assert env.run(batch_id, openlist=second).deleted == 1
+    assert second.calls == []

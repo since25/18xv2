@@ -33,6 +33,8 @@ def _settings(tmp_path: Path, **overrides) -> SimpleNamespace:
         actress_source_root=str(tmp_path / "source"),
         actress_organized_root=str(tmp_path / "organized"),
         actress_path_map=f"{tmp_path / 'scan'}=>{tmp_path / 'organized'}",
+        openlist_url=None,
+        openlist_token=None,
     )
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -210,6 +212,34 @@ def test_delete_work_refreshes_jellyfin_only_when_something_deleted(
     scan_dir = str(tmp_path / "scan" / "甲" / "ABC-001")
     assert received["mapper"].map(scan_dir) == str(tmp_path / "organized" / "甲" / "ABC-001")
     assert received["strm_roots"] == [str(tmp_path / "scan")]
+
+
+@pytest.mark.parametrize(
+    ("url", "token", "expected"),
+    [
+        ("http://openlist.test:5244", "test-token", True),
+        ("http://openlist.test:5244", None, False),
+        (None, "test-token", False),
+    ],
+    ids=["configured", "no-token", "no-url"],
+)
+def test_delete_work_passes_openlist_only_when_configured(
+    db_session, tmp_path, monkeypatch, fake_client, url, token, expected
+):
+    settings = _settings(tmp_path, openlist_url=url, openlist_token=token)
+    monkeypatch.setattr(job_runner, "get_settings", lambda: settings)
+    received: dict = {}
+    _fake_run(monkeypatch, deleted=0, received=received)
+    batch_id = _new_batch(db_session)
+
+    job_runner.delete_work(batch_id, fake_client)(db_session, lambda *_args: None)
+
+    openlist = received["openlist"]
+    if expected:
+        assert openlist is not None
+        assert openlist.base_url == "http://openlist.test:5244"
+    else:
+        assert openlist is None
 
 
 @pytest.mark.parametrize(

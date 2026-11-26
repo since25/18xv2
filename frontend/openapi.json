@@ -349,6 +349,7 @@
           "group": {
             "enum": [
               "remote_115",
+              "openlist_dir",
               "source_strm",
               "organized_dir"
             ],
@@ -375,6 +376,7 @@
               "pending",
               "deleted",
               "missing",
+              "refreshed",
               "failed"
             ],
             "title": "Status",

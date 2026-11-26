@@ -36,8 +36,15 @@ class _RaisingClient:
         raise self.exc
 
 
+# 真实 115 对不存在的目录的报错原文（2026-11-26 只读核实）
+MISSING_ERROR = (
+    "[Errno 2] {'state': False, 'message': '文件（夹）不存在或已删除。', 'code': 430004, "
+    "'data': [], 'errno': 430004, 'error': '文件（夹）不存在或已删除。'}"
+)
+
+
 class _StubClient:
-    """按路径返回文件；没有的路径抛「文件不存在」（模拟 115 对不存在路径的中文报错）。"""
+    """按路径返回文件；没有的路径抛真实 115 的 430004 报错。"""
 
     def __init__(self, files: dict[str, str]) -> None:
         # 115 路径 → file_id
@@ -45,8 +52,18 @@ class _StubClient:
 
     def get_file(self, file_id: str | None = None, path: str | None = None) -> dict:
         if path not in self.files:
-            raise Client115Error("文件不存在")
+            raise Client115Error(MISSING_ERROR)
         return {"state": True, "data": {"file_id": self.files[path], "file_category": "1"}}
+
+
+class _PayloadClient:
+    """get_file 总是返回给定内容的 115 客户端。"""
+
+    def __init__(self, payload) -> None:
+        self.payload = payload
+
+    def get_file(self, file_id: str | None = None, path: str | None = None):
+        return self.payload
 
 
 def test_resolve_found(client):
@@ -64,7 +81,35 @@ def test_resolve_missing():
     assert result.state == "missing"
     assert result.file_id is None
     assert result.remote_path == "/AV/ABC-002.mp4"
-    assert "文件不存在" in result.note
+    assert "430004" in result.note
+
+
+@pytest.mark.parametrize("data", [[], {}, None])
+def test_resolve_empty_result_is_missing(data):
+    # 目录还在、文件已没了时 115 不报错，返回成功和空结果（2026-11-26 只读核实）
+    result = resolve_115(_PayloadClient({"state": True, "code": 0, "data": data}), BASE + "ABC-002.mp4")
+
+    assert result.state == "missing"
+    assert result.file_id is None
+    assert result.remote_path == "/AV/ABC-002.mp4"
+    assert "空" in result.note
+
+
+@pytest.mark.parametrize(
+    "message",
+    ["文件不存在", "access_token 不存在", "用户不存在", "[Errno 2] {'code': 40140116, 'message': '令牌不存在'}"],
+)
+def test_resolve_bare_chinese_not_exist_is_error(message):
+    # 只认 430004：鉴权类报错里也可能有「不存在」，误判成已不存在会让本地文件被删而 115 原文件还在
+    result = resolve_115(_RaisingClient(Client115Error(message)), BASE + "ABC-001.mp4")
+    assert result.state == "error"
+    assert result.file_id is None
+
+
+def test_resolve_dict_without_file_id_is_error():
+    result = resolve_115(_PayloadClient({"state": True, "data": {"file_name": "x"}}), BASE + "ABC-001.mp4")
+    assert result.state == "error"
+    assert result.note == "115 没有返回 file_id"
 
 
 @pytest.mark.parametrize("message", ["Node not found", "404 Not Found", "HTTP Error 404: NOT FOUND"])

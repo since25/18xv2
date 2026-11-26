@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 
 from app.services.client_115.client import Client115Error, Fake115Client, Real115Client
 from app.services.emby_media_actions.strm_mapping_service import decode_115_open_path
 
-# 115 对不存在路径的报错里会出现的文字（不分大小写）。
-# 不收英文「not found」：接口地址错误等 HTTP 404 也会报它，误判成「已不存在」会让本地文件被删而 115 原文件还在。
-# 上线第 1 步只读核实真实 115 对不存在路径的报错文本后再按实际补充；没核实前宁可判成 error（这部片什么都不删）。
-MISSING_MARKERS = ("不存在",)
+# 115 对不存在路径的报错只认错误码 430004（「文件（夹）不存在或已删除。」，2026-11-26 只读核实）。
+# 不认裸的「不存在」：鉴权类报错（如令牌不存在）也可能带这几个字；也不认英文 not found（接口地址错误等）。
+# 误判成「已不存在」会让本地文件被删而 115 原文件还在，所以认不出来的一律当 error（这部片什么都不删）。
+MISSING_ERROR_CODE = re.compile(r"(?<!\d)430004(?!\d)")
 
 
 @dataclass
@@ -35,13 +36,16 @@ def resolve_115(client: Real115Client | Fake115Client, url: str) -> Remote115:
         payload = client.get_file(path=remote_path)
     except Client115Error as exc:
         text = str(exc)
-        if any(marker.casefold() in text.casefold() for marker in MISSING_MARKERS):
+        if MISSING_ERROR_CODE.search(text):
             return Remote115(state="missing", remote_path=remote_path, note=f"115 上已不存在：{text}")
         return Remote115(state="error", remote_path=remote_path, note=f"115 查询失败：{text}")
     except Exception as exc:  # noqa: BLE001 — 任何其他异常都只记失败，不当成已不存在
         return Remote115(state="error", remote_path=remote_path, note=f"115 查询失败：{exc}")
 
     data = payload.get("data") if isinstance(payload, dict) else None
+    # 目录还在、文件已没了时 115 不报错，返回成功和空结果（2026-11-26 只读核实）
+    if isinstance(payload, dict) and payload.get("state") is True and not data:
+        return Remote115(state="missing", remote_path=remote_path, note="115 上已不存在：按路径查询返回空结果")
     file_id = str(data.get("file_id") or "") if isinstance(data, dict) else ""
     if not file_id:
         return Remote115(state="error", remote_path=remote_path, note="115 没有返回 file_id")

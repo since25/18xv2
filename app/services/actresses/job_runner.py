@@ -18,6 +18,7 @@ from app.services.actresses.archive_service import ArchiveService
 from app.services.actresses.candidates_service import CandidateService
 from app.services.actresses.delete_batch_service import BatchSummary, DeleteBatchService
 from app.services.actresses.delete_guard import FilmDeleteGuard, PathMapper, parse_path_map
+from app.services.actresses.openlist import OpenListClient
 from app.services.client_115.client import Fake115Client, Real115Client
 from app.services.jellyfin.client import JellyfinClient
 from app.services.jellyfin.job_runner import jellyfin_scan_enabled, jellyfin_sync_enabled
@@ -89,6 +90,7 @@ def delete_work(batch_id: int, client_115: Real115Client | Fake115Client) -> Job
                 mapper=mapper,
                 strm_roots=strm_roots,
                 progress=progress,
+                openlist=_openlist_client(settings),
             )
         except Exception as exc:
             _mark_interrupted(db, batch_id, exc)
@@ -98,6 +100,15 @@ def delete_work(batch_id: int, client_115: Real115Client | Fake115Client) -> Job
         return dataclasses.asdict(summary)
 
     return work
+
+
+def _openlist_client(settings: Settings) -> OpenListClient | None:
+    """OpenList 地址和令牌都配了才在删除后刷新目录缓存；没配齐就不刷新。"""
+    url = getattr(settings, "openlist_url", None)
+    token = getattr(settings, "openlist_token", None)
+    if not url or not token:
+        return None
+    return OpenListClient(url, token)
 
 
 def _mark_interrupted(db: Session, batch_id: int, exc: Exception) -> None:

@@ -31,6 +31,7 @@ from app.services.actresses.delete_guard import (
     read_strm_url,
 )
 from app.services.actresses.films import Film, load_films
+from app.services.actresses.openlist import OpenListClient, openlist_dir_for
 from app.services.actresses.remote_115 import Remote115, resolve_115
 from app.services.actresses.rules import RuleContext, skip_reason
 from app.services.client_115.client import Fake115Client, Real115Client
@@ -125,11 +126,13 @@ class DeleteBatchService:
         mapper: PathMapper,
         strm_roots: list[str],
         progress: Callable[[str, int, int], None],
+        openlist: OpenListClient | None = None,
     ) -> BatchSummary:
         """执行（或续跑）批次：处理待执行和上次失败的片子，返回整个批次的计数。
 
         开始前先确认两个删除根目录都在、并建好 porn_tv1 的地址索引；
         做不到就把批次置为失败、不动任何片子，也不调用任何 115 接口。
+        给了 openlist 时，每部片删完 115 文件后刷新 OpenList 里对应的目录（失败不影响删除）。
         """
         require_strm_roots(strm_roots, "执行删除")
         batch = db.get(ActressDeleteBatch, batch_id)
@@ -166,6 +169,7 @@ class DeleteBatchService:
                 mapper=mapper,
                 strm_roots=strm_roots,
                 url_index=url_index,
+                openlist=openlist,
             )
             batch_film.finished_at = _now()
             db.commit()
@@ -199,6 +203,7 @@ class DeleteBatchService:
         mapper: PathMapper,
         strm_roots: list[str],
         url_index: dict[str, list[str]],
+        openlist: OpenListClient | None = None,
     ) -> None:
         """处理一部片，结果写在 batch_film 上（不 commit）。"""
         batch_film.reason = None
@@ -220,6 +225,8 @@ class DeleteBatchService:
             local_dir = self._check_local(film, mapper, guard)
             urls = self._read_urls(film, mapper, local_dir)
             self._delete_remote(db, batch_film, client_115, urls)
+            if openlist is not None:
+                self._refresh_openlist(batch_film, openlist, urls)
             self._delete_source_strm(batch_film, guard, url_index, urls)
             self._delete_film_dir(batch_film, guard, local_dir)
         except _FilmFailed as exc:
@@ -335,6 +342,26 @@ class DeleteBatchService:
             row.error = None
             # 立刻落库：之后崩溃也不会再删同一个 115 文件
             db.commit()
+
+    def _refresh_openlist(self, batch_film: ActressDeleteBatchFilm, openlist: OpenListClient, urls: list[str]) -> None:
+        """强制刷新 OpenList 里这部片的 115 文件所在目录，避免 alist-strm 按旧缓存把 STRM 生成回来。
+
+        同一目录只刷一次；续跑时已刷新过的目录不再刷。刷新失败只记在这一行上，不让这部片失败。
+        """
+        dirs = dict.fromkeys(openlist_dir_for(url) for url in urls)
+        for path in dirs:
+            row = self._file_row(batch_film, "openlist_dir", path)
+            if row.status == "refreshed":
+                continue
+            row.executed_at = _now()
+            try:
+                openlist.refresh_dir(path)
+            except Exception as exc:  # noqa: BLE001 — 刷新失败不影响删除，最坏是片子回来后再删一次本地
+                row.status = "failed"
+                row.error = str(exc)
+                continue
+            row.status = "refreshed"
+            row.error = None
 
     def _delete_source_strm(
         self,
