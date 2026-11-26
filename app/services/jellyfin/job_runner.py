@@ -71,7 +71,11 @@ def scan_work(job_id: str) -> JobWork:
 
 
 def sync_work(db, progress) -> dict:
-    """合集同步任务的干活函数。"""
+    """合集同步任务的干活函数；女优功能开启时，关键词合集之后再同步白名单女优合集。"""
+    # 函数内导入：女优任务模块会从本模块导入开关函数，顶层导入会循环
+    from app.services.actresses.collection_sync import ActressCollectionSyncService
+    from app.services.actresses.job_runner import actress_enabled
+
     progress("同步中", 0, 0)
     settings = get_settings()
     if not jellyfin_sync_enabled(settings):
@@ -85,6 +89,14 @@ def sync_work(db, progress) -> dict:
     # with 块保证成功或失败都会关闭客户端
     with client:
         summary = CollectionSyncService().sync(db, client)
+        # 女优合集的成员取关键词同步写入的 Jellyfin 条目 ID，必须排在它之后
+        if actress_enabled(settings):
+            actress_summary = ActressCollectionSyncService().sync(
+                db,
+                client,
+                strm_roots=list(getattr(settings, "media_library_strm_roots", []) or []),
+            )
+            summary.update({f"actress_{key}": value for key, value in actress_summary.items()})
     progress("完成", 1, 1)
     return summary
 
@@ -157,7 +169,10 @@ def run_cover_job(job_id: str) -> None:
 
 
 async def jellyfin_daily_loop(settings: Settings) -> None:
-    """按本地时间每天运行一次扫描，并在可用时运行合集同步。"""
+    """按本地时间每天运行一次扫描，女优功能开启时接着刷新女优档案和待删清单，再在可用时运行合集同步。"""
+    # 函数内导入：女优任务模块会从本模块导入开关函数，顶层导入会循环
+    from app.services.actresses import job_runner as actress_jobs
+
     run_hour = int(getattr(settings, "jellyfin_daily_run_hour", -1))
     if run_hour == -1 or not jellyfin_sync_enabled(settings):
         return
@@ -176,6 +191,18 @@ async def jellyfin_daily_loop(settings: Settings) -> None:
                         logger.info("Jellyfin 每日扫描已在运行，跳过本次创建")
                 if scan_job_id is not None:
                     await asyncio.to_thread(run_scan_job, scan_job_id)
+
+                # 扫描之后、合集同步之前：用本次扫描的演员名单刷新档案和待删清单（总开关默认关闭）
+                # 这一步失败只记在它自己的任务上，不影响后面的合集同步
+                if actress_jobs.actress_enabled(settings):
+                    refresh_job_id = None
+                    with SessionLocal() as db:
+                        try:
+                            refresh_job_id = start_job(db, actress_jobs.JOB_REFRESH)
+                        except JobAlreadyRunning:
+                            logger.info("女优档案刷新已在运行，跳过本次创建")
+                    if refresh_job_id is not None:
+                        await asyncio.to_thread(run_job, refresh_job_id, actress_jobs.refresh_work)
 
                 if jellyfin_sync_enabled(settings):
                     sync_job_id = None

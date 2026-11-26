@@ -100,6 +100,15 @@ class Settings(BaseSettings):
         default_factory=list, alias="MEDIA_LIBRARY_STRM_ROOTS"
     )
 
+    # 女优档案与联动删片：总开关默认关闭；删片只在两个可写根目录里动文件
+    actress_enabled: bool = Field(default=False, alias="ACTRESS_ENABLED")
+    # porn_tv1 的可写根目录（删 STRM）
+    actress_source_root: str | None = Field(default=None, alias="ACTRESS_SOURCE_ROOT")
+    # 302porn_tv1 的可写根目录（删番号目录）
+    actress_organized_root: str | None = Field(default=None, alias="ACTRESS_ORGANIZED_ROOT")
+    # 扫描路径（只读挂载）到可写路径的换算，"旧前缀=>新前缀"，多条用逗号分隔
+    actress_path_map: str = Field(default="", alias="ACTRESS_PATH_MAP")
+
     # 脚本中心：每次运行的日志和输入输出文件都放在这里（保留 30 天）
     script_jobs_dir: str = Field(default="data/script-jobs", alias="SCRIPT_JOBS_DIR")
     # sehuatang：qB 接口凭证（只放 .env，页面不显示）；站点 cookie 和 User-Agent 存在这个文件里
