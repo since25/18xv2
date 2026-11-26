@@ -10,6 +10,7 @@ const setActressStatus = vi.fn()
 const addActressAlias = vi.fn()
 const removeActressAlias = vi.fn()
 const mergeActress = vi.fn()
+const refreshActressAvatars = vi.fn()
 
 vi.mock('@/api/actresses', () => ({
   listActresses: (...args: unknown[]) => listActresses(...args),
@@ -18,6 +19,7 @@ vi.mock('@/api/actresses', () => ({
   addActressAlias: (...args: unknown[]) => addActressAlias(...args),
   removeActressAlias: (...args: unknown[]) => removeActressAlias(...args),
   mergeActress: (...args: unknown[]) => mergeActress(...args),
+  refreshActressAvatars: (...args: unknown[]) => refreshActressAvatars(...args),
   actressImageUrl: (id: number) => `/api/actresses/${id}/image`,
 }))
 
@@ -72,6 +74,9 @@ function makeDetail(overrides: Partial<ActressDetail> = {}): ActressDetail {
         in_candidates: false,
       },
     ],
+    avatar_state: 'pending',
+    avatar_note: null,
+    avatar_checked_at: null,
     ...overrides,
   }
 }
@@ -147,6 +152,29 @@ describe('ActressesPage', () => {
     fireEvent.click(screen.getByRole('button', { name: buttonName('添加') }))
     await waitFor(() => expect(addActressAlias).toHaveBeenCalledWith(1, '甲三'))
     expect(await screen.findByText('甲三')).toBeInTheDocument()
+  })
+
+  it('点补头像后以空参数调用接口并提示', async () => {
+    refreshActressAvatars.mockResolvedValue({ job_id: 'job-1' })
+    render(<ActressesPage />)
+    fireEvent.click(await screen.findByRole('button', { name: buttonName('补头像') }))
+    await waitFor(() => expect(refreshActressAvatars).toHaveBeenCalledWith())
+    await waitFor(() => expect(message.success).toHaveBeenCalledWith('已开始补头像，稍后刷新查看'))
+  })
+
+  it('详情里显示头像状态和原因', async () => {
+    getActress.mockResolvedValue(makeDetail({ avatar_state: 'not_found', avatar_note: '名字没对上' }))
+    render(<ActressesPage />)
+    fireEvent.click(await screen.findByText('甲'))
+    expect(await screen.findByText('头像：Gfriends 里找不到（名字没对上）')).toBeInTheDocument()
+  })
+
+  it('详情里点重新找头像只处理她一个人', async () => {
+    refreshActressAvatars.mockResolvedValue({ job_id: 'job-2' })
+    render(<ActressesPage />)
+    fireEvent.click(await screen.findByText('甲'))
+    fireEvent.click(await screen.findByRole('button', { name: '重新找头像' }))
+    await waitFor(() => expect(refreshActressAvatars).toHaveBeenCalledWith({ actress_ids: [1] }))
   })
 
   it('详情抽屉里删除别名', async () => {

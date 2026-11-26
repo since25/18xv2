@@ -690,3 +690,104 @@ def test_image_returns_jellyfin_bytes(client, db_session, monkeypatch):
     assert response.content == b"image-bytes"
     assert response.headers["content-type"] == "image/jpeg"
     assert client.get("/actresses/9999/image").status_code == 404
+
+
+def test_image_falls_back_to_alias(client, db_session, monkeypatch):
+    actress_id = _actress(db_session, "甲")
+    ArchiveService().add_alias(db_session, actress_id, "乙")
+    asked: list[str] = []
+
+    class AliasOnlyClient:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc) -> None:
+            return None
+
+        def get_person_image(self, name: str):
+            asked.append(name)
+            return (b"alias-image", "image/png") if name == "乙" else None
+
+    monkeypatch.setattr(f"{_ROUTES}.JellyfinClient", AliasOnlyClient)
+    _configure(monkeypatch, JELLYFIN_BASE_URL="http://jellyfin.test", JELLYFIN_API_KEY="test-key")
+
+    response = client.get(f"/actresses/{actress_id}/image")
+
+    assert response.status_code == 200
+    assert response.content == b"alias-image"
+    assert asked == ["甲", "乙"]
+
+
+def _jellyfin_ready(monkeypatch) -> None:
+    _configure(monkeypatch, JELLYFIN_BASE_URL="http://jellyfin.test", JELLYFIN_API_KEY="test-key")
+
+
+def _avatar_jobs(db_session) -> list[BackgroundJob]:
+    return list(db_session.scalars(select(BackgroundJob).where(BackgroundJob.job_type == "actress:avatars")))
+
+
+def test_avatar_refresh_ignores_avatar_switch(client, db_session, monkeypatch):
+    submitted = _capture_jobs(monkeypatch)
+    _jellyfin_ready(monkeypatch)
+    _configure(monkeypatch, ACTRESS_AVATARS_ENABLED="false")
+
+    response = client.post("/actresses/avatars/refresh", json={})
+
+    assert response.status_code == 202
+    job_id = response.json()["job_id"]
+    assert [job_id for job_id, _ in submitted] == [job_id]
+    assert [job.job_id for job in _avatar_jobs(db_session)] == [job_id]
+    # 上一个头像任务还没结束
+    busy = client.post("/actresses/avatars/refresh", json={})
+    assert busy.status_code == 409
+    assert "头像任务正在运行" in busy.json()["detail"]
+
+
+def test_avatar_refresh_passes_ids_and_limit(client, db_session, monkeypatch):
+    _capture_jobs(monkeypatch)
+    _jellyfin_ready(monkeypatch)
+    received: list[dict] = []
+    monkeypatch.setattr(f"{_ROUTES}.avatars_work", lambda **kwargs: received.append(kwargs) or (lambda *_: None))
+
+    response = client.post("/actresses/avatars/refresh", json={"actress_ids": [3, 5], "limit": 2})
+
+    assert response.status_code == 202
+    assert received == [{"actress_ids": [3, 5], "limit": 2}]
+
+
+def test_avatar_refresh_requires_actress_enabled(client, db_session, monkeypatch):
+    submitted = _capture_jobs(monkeypatch)
+    _jellyfin_ready(monkeypatch)
+    _configure(monkeypatch, ACTRESS_ENABLED="false")
+
+    assert client.post("/actresses/avatars/refresh", json={}).status_code == 409
+    assert submitted == []
+    assert _avatar_jobs(db_session) == []
+
+
+def test_avatar_refresh_requires_jellyfin(client, db_session, monkeypatch):
+    submitted = _capture_jobs(monkeypatch)
+
+    response = client.post("/actresses/avatars/refresh", json={})
+
+    assert response.status_code == 409
+    assert "Jellyfin 未配置" in response.json()["detail"]
+    assert submitted == []
+
+
+def test_avatar_refresh_rejects_bad_limit(client, db_session, monkeypatch):
+    _capture_jobs(monkeypatch)
+    _jellyfin_ready(monkeypatch)
+
+    assert client.post("/actresses/avatars/refresh", json={"limit": 0}).status_code == 422
+
+
+def test_detail_includes_avatar_fields(client, db_session):
+    actress_id = _actress(db_session, "甲")
+
+    detail = client.get(f"/actresses/{actress_id}").json()
+
+    assert (detail["avatar_state"], detail["avatar_note"], detail["avatar_checked_at"]) == ("pending", None, None)

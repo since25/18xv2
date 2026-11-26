@@ -8,9 +8,10 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 ActressStatus = Literal["none", "blacklist", "whitelist"]
+ActressAvatarState = Literal["pending", "uploaded", "present", "not_found", "no_person", "error"]
 BatchStatus = Literal["pending", "running", "completed", "failed", "interrupted"]
 
 
@@ -72,6 +73,10 @@ class ActressDetail(ActressSummary):
     # 新的在前
     marks: list[ActressMarkItem]
     films: list[ActressFilmItem]
+    # 头像：从 Gfriends 找图、上传 Jellyfin 人物主图的状态
+    avatar_state: ActressAvatarState
+    avatar_note: str | None = None
+    avatar_checked_at: datetime | None = None
 
 
 class MediaActor(BaseModel):
@@ -106,6 +111,13 @@ class ActressStatusResponse(BaseModel):
 
 class ActressJobResponse(BaseModel):
     job_id: str
+
+
+class ActressAvatarRefreshRequest(BaseModel):
+    # 只处理这几个人，且不管当前头像状态都重做一次；不传时按规则挑一批
+    actress_ids: list[int] | None = None
+    # 本次最多处理几人；不传时用 ACTRESS_AVATARS_PER_RUN
+    limit: int | None = Field(default=None, ge=1, le=2000)
 
 
 class ActressCandidateItem(BaseModel):

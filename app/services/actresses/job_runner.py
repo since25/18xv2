@@ -9,15 +9,24 @@ from __future__ import annotations
 import dataclasses
 from datetime import UTC, datetime
 import logging
+from pathlib import Path
 
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
 from app.models.actresses import ActressDeleteBatch
 from app.services.actresses.archive_service import ArchiveService
+from app.services.actresses.avatar_service import AvatarService
 from app.services.actresses.candidates_service import CandidateService
 from app.services.actresses.delete_batch_service import BatchSummary, DeleteBatchService
 from app.services.actresses.delete_guard import FilmDeleteGuard, PathMapper, parse_path_map
+from app.services.actresses.gfriends import (
+    GfriendsIndex,
+    download_image,
+    fetch_filetree,
+    load_filetree,
+    load_name_map,
+)
 from app.services.actresses.openlist import OpenListClient
 from app.services.client_115.client import Fake115Client, Real115Client
 from app.services.jellyfin.client import JellyfinClient
@@ -29,6 +38,10 @@ logger = logging.getLogger(__name__)
 
 JOB_REFRESH = "actress:refresh"
 JOB_DELETE = "actress:delete"
+JOB_AVATARS = "actress:avatars"
+
+# Gfriends 索引缓存（相对 18x 工作目录，容器里是 /app/data，已持久化）
+AVATAR_FILETREE_CACHE = Path("data/actress-avatars/Filetree.json")
 
 
 def actress_enabled(settings: Settings) -> bool:
@@ -43,6 +56,55 @@ def actress_delete_ready(settings: Settings) -> bool:
         and getattr(settings, "actress_source_root", None)
         and getattr(settings, "actress_organized_root", None)
     )
+
+
+def actress_avatars_enabled(settings: Settings) -> bool:
+    """每日自动补头像：女优功能开启、Jellyfin 地址和 API Key 已配置、头像开关打开。手动触发不看头像开关。"""
+    return bool(
+        actress_enabled(settings)
+        and jellyfin_sync_enabled(settings)
+        and getattr(settings, "actress_avatars_enabled", False)
+    )
+
+
+def avatars_work(*, actress_ids: list[int] | None = None, limit: int | None = None) -> JobWork:
+    """返回补头像的干活函数：读 Gfriends 索引和 MDC 对照表，再交给头像服务处理一批女优。"""
+
+    def work(db: Session, progress: ProgressCallback) -> dict:
+        settings = get_settings()
+        progress("读取 Gfriends 索引", 0, 0)
+        now = datetime.now(UTC)
+        filetree = load_filetree(AVATAR_FILETREE_CACHE, fetch=fetch_filetree, now=datetime.now())
+        map_path = getattr(settings, "actress_avatar_name_map", None)
+        name_map = load_name_map(map_path)
+        map_note = None
+        if map_path and not name_map:
+            # 配了却读不到（文件缺失、被挂成目录、内容坏了）：覆盖率会掉一半，必须让人看得见
+            map_note = f"对照表 {map_path} 读取失败，本次只按原名匹配"
+            logger.warning("女优头像：%s", map_note)
+        index = GfriendsIndex.from_filetree(filetree, name_map)
+        progress("补头像", 0, 0)
+        with JellyfinClient(
+            settings.jellyfin_base_url,
+            settings.jellyfin_api_key,
+            settings.jellyfin_timeout_seconds,
+            settings.jellyfin_page_size,
+        ) as client:
+            summary = AvatarService().run(
+                db,
+                index=index,
+                client=client,
+                fetch_image=download_image,
+                now=now,
+                limit=limit or settings.actress_avatars_per_run,
+                actress_ids=actress_ids,
+            )
+        if map_note:
+            summary["name_map_note"] = map_note
+        progress("完成", 1, 1)
+        return summary
+
+    return work
 
 
 def _strm_roots(settings: Settings) -> list[str]:

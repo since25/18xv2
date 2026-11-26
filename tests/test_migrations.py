@@ -215,21 +215,28 @@ ACTRESS_TABLES = {
 }
 
 
+AVATAR_COLUMNS = {"avatar_state", "avatar_source", "avatar_note", "avatar_checked_at"}
+
+
 def test_actresses_migration_upgrades_and_downgrades():
     from app.db.base import Base
     import app.models.actresses  # noqa: F401
 
     base = _load_migration("alembic/versions/20261101_0016_jellyfin_media.py", "jellyfin_media_migration_base")
     migration = _load_migration("alembic/versions/20261126_0019_actresses.py", "actresses_migration")
+    avatars = _load_migration("alembic/versions/20261126_0020_actress_avatars.py", "actress_avatars_migration")
     assert migration.down_revision == "20261125_0018"
+    assert avatars.down_revision == "20261126_0019"
 
     engine = sa.create_engine("sqlite:///:memory:")
     with engine.begin() as connection:
         ops = Operations(MigrationContext.configure(connection))
         base.op = ops
         migration.op = ops
+        avatars.op = ops
         base.upgrade()
         migration.upgrade()
+        avatars.upgrade()
 
         inspector = sa.inspect(connection)
         tables = set(inspector.get_table_names())
@@ -238,6 +245,12 @@ def test_actresses_migration_upgrades_and_downgrades():
         for table_name in ACTRESS_TABLES:
             migrated = {column["name"] for column in inspector.get_columns(table_name)}
             assert migrated == set(Base.metadata.tables[table_name].columns.keys()), table_name
+
+        # 头像四列降级后消失，其余列不变
+        avatars.downgrade()
+        actress_columns = {column["name"] for column in sa.inspect(connection).get_columns("actresses")}
+        assert not AVATAR_COLUMNS & actress_columns
+        assert {"canonical_name", "status", "film_count"} <= actress_columns
 
         migration.downgrade()
         tables = set(sa.inspect(connection).get_table_names())

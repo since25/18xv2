@@ -14,6 +14,10 @@ export interface components {
     'ActressAliasRequest': {
       alias: string
     }
+    'ActressAvatarRefreshRequest': {
+      actress_ids?: number[] | null
+      limit?: number | null
+    }
     'ActressCandidateItem': {
       film_dir: string
       number: string
@@ -101,6 +105,9 @@ export interface components {
       alias_items: components['schemas']['ActressAliasItem'][]
       marks: components['schemas']['ActressMarkItem'][]
       films: components['schemas']['ActressFilmItem'][]
+      avatar_state: "pending" | "uploaded" | "present" | "not_found" | "no_person" | "error"
+      avatar_note: string | null
+      avatar_checked_at: string | null
     }
     'ActressFilmActor': {
       name: string

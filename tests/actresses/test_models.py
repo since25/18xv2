@@ -97,3 +97,13 @@ def test_batch_films_and_files_cascade(db_session):
     assert _count(db_session, ActressDeleteBatch) == 0
     assert _count(db_session, ActressDeleteBatchFilm) == 0
     assert _count(db_session, ActressDeleteBatchFile) == 0
+
+
+def test_actress_avatar_defaults(db_session):
+    actress = Actress(canonical_name="甲", canonical_name_normalized="甲")
+    db_session.add(actress)
+    db_session.commit()
+    db_session.refresh(actress)
+
+    assert actress.avatar_state == "pending"
+    assert (actress.avatar_source, actress.avatar_note, actress.avatar_checked_at) == (None, None, None)

@@ -204,6 +204,17 @@ async def jellyfin_daily_loop(settings: Settings) -> None:
                     if refresh_job_id is not None:
                         await asyncio.to_thread(run_job, refresh_job_id, actress_jobs.refresh_work)
 
+                # 女优刷新之后补头像（头像开关默认关闭）；失败只记在自己的任务上
+                if actress_jobs.actress_avatars_enabled(settings):
+                    avatars_job_id = None
+                    with SessionLocal() as db:
+                        try:
+                            avatars_job_id = start_job(db, actress_jobs.JOB_AVATARS)
+                        except JobAlreadyRunning:
+                            logger.info("女优头像任务已在运行，跳过本次创建")
+                    if avatars_job_id is not None:
+                        await asyncio.to_thread(run_job, avatars_job_id, actress_jobs.avatars_work())
+
                 if jellyfin_sync_enabled(settings):
                     sync_job_id = None
                     with SessionLocal() as db:

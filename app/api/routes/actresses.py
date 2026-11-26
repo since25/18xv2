@@ -30,6 +30,7 @@ from app.models.actresses import (
 from app.models.jellyfin import JellyfinMediaItem
 from app.schemas.actresses import (
     ActressAliasRequest,
+    ActressAvatarRefreshRequest,
     ActressCandidateListResponse,
     ActressCandidateSelectRequest,
     ActressCountResponse,
@@ -58,10 +59,12 @@ from app.services.actresses.delete_batch_service import CandidateListChanged, De
 from app.services.actresses.delete_guard import PathMapper, parse_path_map
 from app.services.actresses.films import load_films, read_nfo_title
 from app.services.actresses.job_runner import (
+    JOB_AVATARS,
     JOB_DELETE,
     JOB_REFRESH,
     actress_delete_ready,
     actress_enabled,
+    avatars_work,
     delete_work,
     refresh_work,
 )
@@ -226,6 +229,9 @@ def _detail(db: Session, actress: Actress, strm_roots: list[str]) -> dict:
             for mark in marks
         ],
         "films": films,
+        "avatar_state": actress.avatar_state,
+        "avatar_note": actress.avatar_note,
+        "avatar_checked_at": actress.avatar_checked_at,
     }
 
 
@@ -374,6 +380,18 @@ def set_actress_status(payload: ActressStatusRequest, db: Session = Depends(get_
         ),
     )
     return {"changed": changed, "candidates_added": added, "candidates_removed": removed}
+
+
+@router.post("/avatars/refresh", response_model=ActressJobResponse, status_code=status.HTTP_202_ACCEPTED)
+def trigger_avatar_refresh(payload: ActressAvatarRefreshRequest, db: Session = Depends(get_db)) -> dict:
+    """手动补头像：只要求女优功能开启、Jellyfin 已配置，不受 ACTRESS_AVATARS_ENABLED 限制（那个只管每日自动跑）。"""
+    settings = get_settings()
+    _require_enabled(settings)
+    if not jellyfin_sync_enabled(settings):
+        raise HTTPException(status_code=409, detail="Jellyfin 未配置（需要 JELLYFIN_BASE_URL 和 JELLYFIN_API_KEY）")
+    job_id = _start_job(db, JOB_AVATARS, "头像任务正在运行，请等它结束")
+    submit_job(job_id, avatars_work(actress_ids=payload.actress_ids, limit=payload.limit))
+    return {"job_id": job_id}
 
 
 @router.post("/refresh", response_model=ActressJobResponse, status_code=status.HTTP_202_ACCEPTED)
@@ -575,7 +593,7 @@ def get_actress(actress_id: int, db: Session = Depends(get_db)) -> dict:
 
 @router.get("/{actress_id}/image")
 def get_actress_image(actress_id: int, db: Session = Depends(get_db)) -> Response:
-    """按规范名转发 Jellyfin 人物主图；Jellyfin 未配置或取不到都返回 404，网页显示占位。"""
+    """转发 Jellyfin 人物主图：先按规范名，取不到再按别名（按 id 顺序）；Jellyfin 未配置或都取不到返回 404，网页显示占位。"""
     settings = get_settings()
     actress = _get_actress(db, actress_id)
     if not jellyfin_sync_enabled(settings):
@@ -586,7 +604,12 @@ def get_actress_image(actress_id: int, db: Session = Depends(get_db)) -> Respons
         settings.jellyfin_timeout_seconds,
         settings.jellyfin_page_size,
     ) as client:
-        image = client.get_person_image(actress.canonical_name)
+        image = None
+        names = [actress.canonical_name, *(alias.alias for alias in sorted(actress.aliases, key=lambda a: a.id))]
+        for name in names:
+            image = client.get_person_image(name)
+            if image is not None:
+                break
     if image is None:
         raise HTTPException(status_code=404, detail="Jellyfin 里取不到她的头像")
     content, content_type = image

@@ -282,6 +282,36 @@ def test_daily_loop_runs_actress_refresh_between_scan_and_sync(db_session, monke
     assert [(job.done, job.stage) for job in jobs] == [(True, "完成")]
 
 
+def test_daily_loop_runs_avatars_after_actress_refresh(db_session, monkeypatch):
+    calls: list[str] = []
+    _record_refresh(monkeypatch, calls)
+
+    def fake_avatars_work(**_kwargs):
+        def work(_db, _progress):
+            calls.append("avatars")
+            return {"processed": 0}
+
+        return work
+
+    monkeypatch.setattr(actress_job_runner, "avatars_work", fake_avatars_work)
+
+    _run_daily_loop_once(monkeypatch, db_session, _daily_settings(actress_avatars_enabled=True), calls)
+
+    assert calls == ["scan", "actress", "avatars", "sync", "names"]
+
+
+def test_daily_loop_skips_avatars_when_switch_off(db_session, monkeypatch):
+    calls: list[str] = []
+    _record_refresh(monkeypatch, calls)
+    monkeypatch.setattr(
+        actress_job_runner, "avatars_work", lambda **_kwargs: (lambda *_args: calls.append("avatars"))
+    )
+
+    _run_daily_loop_once(monkeypatch, db_session, _daily_settings(actress_avatars_enabled=False), calls)
+
+    assert "avatars" not in calls
+
+
 def test_daily_loop_skips_actress_when_disabled(db_session, monkeypatch):
     calls: list[str] = []
     _record_refresh(monkeypatch, calls)

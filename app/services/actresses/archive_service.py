@@ -150,6 +150,8 @@ class ArchiveService:
             raise ActressError(f"「{alias_text}」已属于 {owner.canonical_name}，请用合并")
         row = ActressAlias(alias=alias_text, alias_normalized=normalized)
         actress.aliases.append(row)
+        # 名字变了，下次重新找头像
+        actress.avatar_state = "pending"
         db.commit()
         return row
 
@@ -161,6 +163,7 @@ class ArchiveService:
             raise ActressError(f"{actress.canonical_name} 没有这个别名")
         # 从集合移除即由 delete-orphan 删除这一行
         actress.aliases.remove(row)
+        actress.avatar_state = "pending"
         db.commit()
 
     def merge(self, db: Session, source_id: int, target_id: int) -> Actress:
@@ -193,6 +196,8 @@ class ArchiveService:
             )
         )
         target.status = new_status
+        # 合并后目标多了名字，下次重新找头像
+        target.avatar_state = "pending"
         db.delete(source)
         db.flush()
         target.film_count = self._count_films(db, target)

@@ -8,9 +8,11 @@ import {
   getActress,
   listActresses,
   mergeActress,
+  refreshActressAvatars,
   removeActressAlias,
   setActressStatus,
   type ActressAliasItem,
+  type ActressAvatarState,
   type ActressDetail,
   type ActressFilmActor,
   type ActressFilmItem,
@@ -41,6 +43,14 @@ const STATUS_ACTIONS: Array<{ status: ActressStatus; label: string }> = [
   { status: 'whitelist', label: '加白' },
   { status: 'none', label: '设为未标' },
 ]
+const AVATAR_STATE_LABELS: Record<ActressAvatarState, string> = {
+  pending: '待处理',
+  uploaded: '已上传',
+  present: '本来就有',
+  not_found: 'Gfriends 里找不到',
+  no_person: 'Jellyfin 里没有这个人物',
+  error: '失败',
+}
 const MARK_SOURCE_LABELS: Record<string, string> = { web: '网页', player: '播放器', import: '导入', merge: '合并' }
 const STATUS_FILTER_OPTIONS = [
   { value: 'all', label: '全部状态' },
@@ -173,6 +183,9 @@ function ActressDetailBody({
       onChanged()
     },
   })
+  const avatarAction = useApiAction(() => refreshActressAvatars({ actress_ids: [actressId] }), {
+    successMessage: '已开始重新找头像，稍后刷新查看',
+  })
   const removeAliasAction = useApiAction((item: ActressAliasItem) => removeActressAlias(actressId, item.id), {
     successMessage: (_data, item) => `已删除别名 ${item.alias}`,
     onSuccess: (data) => {
@@ -222,6 +235,15 @@ function ActressDetailBody({
         <StatusLabel status={detail.status} />
         <Text type="secondary">{`${detail.film_count} 部`}</Text>
         {detail.candidate_count > 0 && <Text type="danger">{`草稿中 ${detail.candidate_count} 部`}</Text>}
+      </Space>
+
+      <Space size={12} wrap style={{ marginBottom: 20 }}>
+        <Text type="secondary">
+          {`头像：${AVATAR_STATE_LABELS[detail.avatar_state]}${detail.avatar_note ? `（${detail.avatar_note}）` : ''}`}
+        </Text>
+        <Button size="small" loading={avatarAction.loading} onClick={() => void avatarAction.run()}>
+          重新找头像
+        </Button>
       </Space>
 
       <Title level={5}>别名</Title>
@@ -383,6 +405,10 @@ export default function ActressesPage() {
     },
   ]
 
+  const avatarsAction = useApiAction(() => refreshActressAvatars(), {
+    successMessage: '已开始补头像，稍后刷新查看',
+  })
+
   const stats = [
     { key: 'blacklist', label: '黑名单', value: list.counts.blacklist },
     { key: 'whitelist', label: '白名单', value: list.counts.whitelist },
@@ -395,9 +421,14 @@ export default function ActressesPage() {
       description="按 NFO 里的演员建档。拉黑后她的片子进入删除草稿，要在「女优删除」页确认后才会删除；白名单女优的片子不会进草稿。"
       stats={stats}
       actions={
-        <Button icon={<ReloadOutlined />} onClick={reloadList}>
-          刷新
-        </Button>
+        <Space>
+          <Button loading={avatarsAction.loading} onClick={() => void avatarsAction.run()}>
+            补头像
+          </Button>
+          <Button icon={<ReloadOutlined />} onClick={reloadList}>
+            刷新
+          </Button>
+        </Space>
       }
     >
       <SurfacePanel>

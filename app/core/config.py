@@ -108,6 +108,12 @@ class Settings(BaseSettings):
     actress_organized_root: str | None = Field(default=None, alias="ACTRESS_ORGANIZED_ROOT")
     # 扫描路径（只读挂载）到可写路径的换算，"旧前缀=>新前缀"，多条用逗号分隔
     actress_path_map: str = Field(default="", alias="ACTRESS_PATH_MAP")
+    # 女优头像：每日任务从 Gfriends 找图并上传 Jellyfin 人物主图（默认关闭；手动触发不受它限制）
+    actress_avatars_enabled: bool = Field(default=False, alias="ACTRESS_AVATARS_ENABLED")
+    # 每次最多处理几位女优
+    actress_avatars_per_run: int = Field(default=300, alias="ACTRESS_AVATARS_PER_RUN")
+    # MDC 演员对照表 mapping_actor.xml 的路径（中文名 → 日文名）；空则只按原名匹配
+    actress_avatar_name_map: str | None = Field(default=None, alias="ACTRESS_AVATAR_NAME_MAP")
     # OpenList 地址和令牌：女优删片删完 115 文件后强制刷新 OpenList 目录缓存；两项都配了才刷新
     openlist_url: str | None = Field(default=None, alias="OPENLIST_URL")
     openlist_token: str | None = Field(default=None, alias="OPENLIST_TOKEN")

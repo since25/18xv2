@@ -203,6 +203,28 @@ def test_merge_moves_names_and_marks(db_session, tmp_path):
     ]
 
 
+def test_name_changes_reset_avatar_state(db_session):
+    service = ArchiveService()
+    first, second = service.ensure_actresses(db_session, ["甲", "乙"])
+    db_session.commit()
+    for actress in (first, second):
+        actress.avatar_state = "uploaded"
+    db_session.commit()
+
+    alias = service.add_alias(db_session, first.id, "丙")
+    assert first.avatar_state == "pending"
+
+    first.avatar_state = "uploaded"
+    db_session.commit()
+    service.remove_alias(db_session, first.id, alias.id)
+    assert first.avatar_state == "pending"
+
+    first.avatar_state = "not_found"
+    db_session.commit()
+    target = service.merge(db_session, second.id, first.id)
+    assert target.avatar_state == "pending"
+
+
 def test_merge_rejects_black_and_white(db_session):
     black = _add_actress(db_session, "甲", status="blacklist")
     white = _add_actress(db_session, "乙", status="whitelist")

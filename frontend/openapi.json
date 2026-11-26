@@ -58,6 +58,39 @@
         "title": "ActressAliasRequest",
         "type": "object"
       },
+      "ActressAvatarRefreshRequest": {
+        "properties": {
+          "actress_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actress Ids"
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "maximum": 2000.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Limit"
+          }
+        },
+        "title": "ActressAvatarRefreshRequest",
+        "type": "object"
+      },
       "ActressCandidateItem": {
         "properties": {
           "added_at": {
@@ -630,6 +663,41 @@
             "title": "Aliases",
             "type": "array"
           },
+          "avatar_checked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avatar Checked At"
+          },
+          "avatar_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avatar Note"
+          },
+          "avatar_state": {
+            "enum": [
+              "pending",
+              "uploaded",
+              "present",
+              "not_found",
+              "no_person",
+              "error"
+            ],
+            "title": "Avatar State",
+            "type": "string"
+          },
           "candidate_count": {
             "title": "Candidate Count",
             "type": "integer"
@@ -679,7 +747,8 @@
           "candidate_count",
           "alias_items",
           "marks",
-          "films"
+          "films",
+          "avatar_state"
         ],
         "title": "ActressDetail",
         "type": "object"
@@ -10810,6 +10879,48 @@
         ]
       }
     },
+    "/actresses/avatars/refresh": {
+      "post": {
+        "description": "手动补头像：只要求女优功能开启、Jellyfin 已配置，不受 ACTRESS_AVATARS_ENABLED 限制（那个只管每日自动跑）。",
+        "operationId": "trigger_avatar_refresh_actresses_avatars_refresh_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ActressAvatarRefreshRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActressJobResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Trigger Avatar Refresh",
+        "tags": [
+          "actresses"
+        ]
+      }
+    },
     "/actresses/by-media": {
       "get": {
         "description": "按片查演员（给播放器）：按 NFO 顺序返回演员和状态，档案里没有的当场建档（未标）。",
@@ -11446,7 +11557,7 @@
     },
     "/actresses/{actress_id}/image": {
       "get": {
-        "description": "按规范名转发 Jellyfin 人物主图；Jellyfin 未配置或取不到都返回 404，网页显示占位。",
+        "description": "转发 Jellyfin 人物主图：先按规范名，取不到再按别名（按 id 顺序）；Jellyfin 未配置或都取不到返回 404，网页显示占位。",
         "operationId": "get_actress_image_actresses__actress_id__image_get",
         "parameters": [
           {

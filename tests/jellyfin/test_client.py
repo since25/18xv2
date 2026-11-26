@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 
 import httpx
@@ -389,3 +390,70 @@ def test_get_person_image_returns_none_when_missing():
     assert client.get_person_image("查无此人") is None
     assert client.get_person_image("有人无图") is None
     assert client.get_person_image("无编号") is None
+
+
+def test_get_person_returns_id_and_primary_flag():
+    seen: list[bytes] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.raw_path)
+        if request.url.path == "/Persons/甲 乙/丙":
+            return httpx.Response(200, json={"Id": "p1", "ImageTags": {"Primary": "tag"}})
+        if request.url.path == "/Persons/无图":
+            return httpx.Response(200, json={"Id": "p2", "ImageTags": {}})
+        return httpx.Response(404)
+
+    client = JellyfinClient("http://jf.test", "k", 3, 2, httpx.MockTransport(handler), sleep_fn=lambda _: None)
+
+    assert client.get_person("甲 乙/丙") == {"id": "p1", "has_primary": True}
+    assert seen[0] == b"/Persons/%E7%94%B2%20%E4%B9%99%2F%E4%B8%99"
+    assert client.get_person("无图") == {"id": "p2", "has_primary": False}
+
+
+def test_get_person_404_or_no_id_returns_none():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/Persons/无编号":
+            return httpx.Response(200, json={"Name": "无编号"})
+        return httpx.Response(404)
+
+    client = JellyfinClient("http://jf.test", "k", 3, 2, httpx.MockTransport(handler), sleep_fn=lambda _: None)
+
+    assert client.get_person("查无此人") is None
+    assert client.get_person("无编号") is None
+
+
+def test_get_person_other_errors_raise():
+    client = JellyfinClient(
+        "http://jf.test", "k", 3, 2, httpx.MockTransport(lambda request: httpx.Response(401)), sleep_fn=lambda _: None
+    )
+
+    with pytest.raises(JellyfinError):
+        client.get_person("甲")
+
+
+def test_upload_person_image_posts_base64():
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(204)
+
+    client = JellyfinClient("http://jf.test", "k", 3, 2, httpx.MockTransport(handler), sleep_fn=lambda _: None)
+
+    client.upload_person_image("p1", b"\xff\xd8abc", "image/jpeg")
+
+    assert len(seen) == 1
+    request = seen[0]
+    assert request.method == "POST"
+    assert request.url.path == "/Items/p1/Images/Primary"
+    assert request.headers["Content-Type"] == "image/jpeg"
+    assert request.content == base64.b64encode(b"\xff\xd8abc")
+
+
+def test_upload_person_image_raises_on_error():
+    client = JellyfinClient(
+        "http://jf.test", "k", 3, 2, httpx.MockTransport(lambda request: httpx.Response(400)), sleep_fn=lambda _: None
+    )
+
+    with pytest.raises(JellyfinError):
+        client.upload_person_image("p1", b"img", "image/jpeg")

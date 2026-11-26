@@ -40,4 +40,7 @@ services:
       - /mnt/cache/docker1/SSD_cache:/mnt/cache/docker1/SSD_cache
       - /mnt/disk2/qbbtdn:/mnt/disk2/qbbtdn
       - /mnt/user/docker1/alist-strm/video/302porn_tv1:/mnt/user/docker1/alist-strm/video/302porn_tv1:ro
+      # 女优头像：只读挂载 MDC 数据目录，读其中的演员对照表（中文名 → 日文名），对应 ACTRESS_AVATAR_NAME_MAP=/app/mdc/mapping_actor.xml。
+      # 挂整个目录而不挂单个文件：文件缺失时 Docker 不会在 MDC 目录里建出同名空目录，MDC 换新文件后也能读到新内容。
+      - /mnt/user/docker1/mdc_ng/data:/app/mdc:ro
     restart: unless-stopped

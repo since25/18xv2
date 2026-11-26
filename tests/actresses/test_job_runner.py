@@ -309,3 +309,75 @@ def test_delete_work_marks_batch_interrupted_on_unexpected_error(db_session, tmp
 def test_job_types():
     assert job_runner.JOB_REFRESH == "actress:refresh"
     assert job_runner.JOB_DELETE == "actress:delete"
+    assert job_runner.JOB_AVATARS == "actress:avatars"
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected"),
+    [
+        ({"actress_avatars_enabled": True}, True),
+        ({"actress_avatars_enabled": False}, False),
+        ({"actress_avatars_enabled": True, "actress_enabled": False}, False),
+        ({"actress_avatars_enabled": True, "jellyfin_api_key": None}, False),
+    ],
+    ids=["all-on", "avatar-switch-off", "actress-off", "jellyfin-unconfigured"],
+)
+def test_actress_avatars_enabled_requires_all_three(tmp_path, overrides, expected):
+    assert job_runner.actress_avatars_enabled(_settings(tmp_path, **overrides)) is expected
+
+
+def test_avatars_work_uses_per_run_limit_and_passes_ids(db_session, tmp_path, monkeypatch):
+    settings = _settings(tmp_path, actress_avatars_per_run=7, actress_avatar_name_map=None)
+    monkeypatch.setattr(job_runner, "get_settings", lambda: settings)
+    monkeypatch.setattr(job_runner, "load_filetree", lambda *_args, **_kwargs: {"Content": {}})
+    received: list[dict] = []
+
+    def fake_run(_self, _db, **kwargs):
+        received.append(kwargs)
+        return {"processed": 0}
+
+    class FakeClient:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc) -> None:
+            return None
+
+    monkeypatch.setattr(job_runner.AvatarService, "run", fake_run)
+    monkeypatch.setattr(job_runner, "JellyfinClient", FakeClient)
+
+    assert job_runner.avatars_work()(db_session, lambda *_args: None) == {"processed": 0}
+    job_runner.avatars_work(actress_ids=[4], limit=2)(db_session, lambda *_args: None)
+
+    assert [(call["limit"], call["actress_ids"]) for call in received] == [(7, None), (2, [4])]
+    assert received[0]["index"].used_name_map is False
+
+
+def test_avatars_work_reports_unreadable_name_map(db_session, tmp_path, monkeypatch, caplog):
+    missing = str(tmp_path / "mapping_actor.xml")
+    settings = _settings(tmp_path, actress_avatars_per_run=7, actress_avatar_name_map=missing)
+    monkeypatch.setattr(job_runner, "get_settings", lambda: settings)
+    monkeypatch.setattr(job_runner, "load_filetree", lambda *_args, **_kwargs: {"Content": {}})
+    monkeypatch.setattr(job_runner.AvatarService, "run", lambda *_args, **_kwargs: {"processed": 0})
+
+    class FakeClient:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc) -> None:
+            return None
+
+    monkeypatch.setattr(job_runner, "JellyfinClient", FakeClient)
+
+    with caplog.at_level("WARNING"):
+        summary = job_runner.avatars_work()(db_session, lambda *_args: None)
+
+    # 配了对照表却读不到：摘要和日志都要写明，不能悄悄退回只做直接匹配
+    assert "读取失败" in summary["name_map_note"] and missing in summary["name_map_note"]
+    assert any("对照表" in record.getMessage() for record in caplog.records)

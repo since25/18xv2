@@ -38,6 +38,9 @@
 | `ACTRESS_SOURCE_ROOT` | 空 | `porn_tv1` 的**可写**根目录，删 STRM 只能落在这里面。生产示例：`/mnt/cache/docker1/alist-strm/video/porn_tv1` |
 | `ACTRESS_ORGANIZED_ROOT` | 空 | `302porn_tv1` 的**可写**根目录，删番号目录只能落在这里面。生产示例：`/mnt/cache/docker1/alist-strm/video/302porn_tv1` |
 | `OPENLIST_URL` | 空 | OpenList 地址，删完 115 文件后刷新目录缓存用。生产示例：`http://192.168.70.138:5244` |
+| `ACTRESS_AVATARS_ENABLED` | `false` | 每日任务是否自动补头像。网页上的「补头像」手动触发不受它限制。 |
+| `ACTRESS_AVATARS_PER_RUN` | `300` | 每次最多处理几位女优（首次约 1300 人，分几天补完）。 |
+| `ACTRESS_AVATAR_NAME_MAP` | 空 | MDC 演员对照表 `mapping_actor.xml` 的路径（中文名 → 日文名）。生产示例：`/app/mdc/mapping_actor.xml`（compose 里已只读挂载 MDC 数据目录到 `/app/mdc`）。没配时只按原名匹配；配了却读不到时同样只按原名匹配，但会在任务摘要（`name_map_note`）和日志里写明，覆盖率会明显下降。 |
 | `OPENLIST_TOKEN` | 空 | OpenList 令牌（只放生产 `.env`）。和 `OPENLIST_URL` 都配了才刷新，没配齐就不刷新。 |
 | `ACTRESS_PATH_MAP` | 空 | 扫描路径（只读挂载）换成可写路径，写成 `旧前缀=>新前缀`，多条用逗号分隔；按最长前缀、只在目录边界匹配。生产示例：`/mnt/user/docker1/alist-strm/video=>/mnt/cache/docker1/alist-strm/video` |
 
@@ -70,6 +73,30 @@
 - 增量增删成员，只动 18x 自己建的合集，单个合集失败不影响其他。
 - 移出白名单或被合并删除后，她的合集先清空再删除（只限 18x 建的）。
 - 和关键词合集或手工合集同名时标为冲突，两边都不改，只在同步结果里计数。
+
+## 头像
+
+设计见 `docs/superpowers/specs/2026-11-26-actress-avatars-design.md`。
+
+- **来源**：Gfriends 头像库。18x 下载官方索引 `Filetree.json`，缓存在 `data/actress-avatars/`，超过 7 天才重新下载；下载失败时沿用旧缓存。
+- **怎么找**：按她的规范名和别名（按添加顺序）逐个查。每个名字先按原名查，再经 MDC 对照表换成日文名查。只认完整名字，不做模糊匹配。文件名里的 `-数字` 后缀和「A（B）」两种写法都能对上；同一个名字出现在多个来源目录时，取目录名排在最前的那个。
+- **怎么贴**：把图下载一次（30 秒超时，只收图片，最大 5MB），上传给她在 Jellyfin 里**还没有主图**的人物（规范名或别名对应的人物）。已经有主图的人物一律不动。
+- **状态**（女优详情里能看到）：
+  - 待处理：还没处理过；
+  - 已上传；
+  - 本来就有：对应人物在 Jellyfin 里本来都有图；
+  - Gfriends 里找不到；
+  - Jellyfin 里没有这个人物；
+  - 失败：附原因。
+- **什么时候再处理**：
+  - 「找不到」和「没有这个人物」满 7 天后重查；
+  - 「已上传」和「本来就有」不再回查。所以在 Jellyfin 里删掉一张贴错的图后，18x 不会再贴回去，除非她的名字后来有变化。
+  - 合并、加别名、删别名之后，状态回到「待处理」。
+- **什么时候跑**：
+  - 每日任务里接在「女优刷新」之后（需要 `ACTRESS_AVATARS_ENABLED=true`），按片数从多到少每次最多处理 `ACTRESS_AVATARS_PER_RUN` 人，每张图之间至少隔 0.5 秒。
+  - 也可以在「女优」页点「补头像」手动跑一批；或在详情里点「重新找头像」，只处理她一个人。
+  - 接口是 `POST /api/actresses/avatars/refresh`，可选参数 `actress_ids`、`limit`。手动触发只要求女优功能开启、Jellyfin 已配置。
+- 女优页的头像从 Jellyfin 转发：先按规范名取，取不到再按别名取。
 
 ## 页面操作
 
@@ -160,8 +187,16 @@ docker exec docker-app-1 python scripts/actress_import_emby_lists.py --apply
 9. **旧 Emby 名单导入放在首删之后**：先不加 `--apply` 看列表，再加 `--apply`。档案里已有相反状态的人记为冲突、不覆盖。
 10. **播放器（第三段 fklema）**：功能关闭时写接口返回 409；改状态时回传 by-media 返回的 `media_item_id`。
 
+### 头像上线（每步都需用户批准）
+
+1. 部署代码（带迁移 `20261126_0020`），`ACTRESS_AVATARS_ENABLED` 保持关闭。部署前先确认生产机上 `/mnt/user/docker1/mdc_ng/data/mapping_actor.xml` 存在；compose 会把 MDC 数据目录只读挂到 `/app/mdc`；生产 `.env` 配置 `ACTRESS_AVATAR_NAME_MAP=/app/mdc/mapping_actor.xml`。
+2. 在某位女优详情里点「重新找头像」，验证 Jellyfin 上传接口（只处理她一个人）。核对 Jellyfin 里这个人物有了主图，**并在 Jellyfin 网页上亲眼看到图片显示正常**（上传接口按 base64 请求体实现，只看主图标签有值不够，要排除坏图）；女优页的头像也能显示。记下验证用的 Jellyfin 版本（目前是 10.10.7）。
+3. 再挑 3 位各试一次。
+4. 打开 `ACTRESS_AVATARS_ENABLED`，让每日任务分批补完。
+
 ## 回退
 
 - 只想停用：把 `ACTRESS_ENABLED` 改回 `false` 并重建 18x 容器让配置生效，不动代码和库。每日任务不再跑女优步骤，删除接口返回 409；档案、清单和批次记录留在库里。
+- 只回退头像功能：先在新代码上执行 `alembic downgrade 20261126_0019`，删掉头像的四列，档案其他数据不动；再把代码换回头像功能之前的版本并重建。已经传进 Jellyfin 的人物图不会自动删除。
 - 要回退代码：容器启动时会先执行 `alembic upgrade head`，失败就起不来，所以库还在 `20261126_0019` 时不能直接换回旧代码。必须先在新代码上把迁移降到 `20261125_0018`（会删掉女优相关的全部表和数据，先备份），再把代码回退到 `a0977f3b` 重建。
 - 已删的 115 文件只能从 115 回收站找回（前提是删除进了回收站）；本地 STRM 和番号目录由 alist-strm 和 MDC 按 115 目录重新生成。

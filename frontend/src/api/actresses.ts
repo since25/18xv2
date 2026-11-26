@@ -25,6 +25,9 @@ export type ActressDeleteBatchFilmItem = Schemas['ActressDeleteBatchFilmItem']
 export type ActressDeleteBatchFileItem = Schemas['ActressDeleteBatchFileItem']
 export type ActressDeleteBatchStartResponse = Schemas['ActressDeleteBatchStartResponse']
 
+export type ActressJobResponse = Schemas['ActressJobResponse']
+export type ActressAvatarState = ActressDetail['avatar_state']
+
 export type ActressSort = 'film_count' | 'name'
 
 export interface ActressListParams {
@@ -68,6 +71,11 @@ export function removeActressAlias(id: number, aliasId: number) {
 /** 把 id 这位合并进 intoId，返回合并后（intoId）的详情 */
 export function mergeActress(id: number, intoId: number) {
   return api.post<ActressDetail>(`/actresses/${id}/merge`, { into_id: intoId })
+}
+
+/** 补头像：不带参数时按规则挑一批；actress_ids 只处理这几个人（不管当前头像状态都重做） */
+export function refreshActressAvatars(body?: { actress_ids?: number[]; limit?: number }) {
+  return api.post<ActressJobResponse>('/actresses/avatars/refresh', body ?? {})
 }
 
 /** 头像地址（给 <img src> 用）；前缀与 client.ts 的 /api 一致，取不到时后端返回 404 */

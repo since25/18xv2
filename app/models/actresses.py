@@ -22,6 +22,16 @@ class Actress(Base):
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="none", server_default="none", index=True)
     # 出现在多少个有效番号目录里，每次刷新重算
     film_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    # 头像：pending（没处理过）/ uploaded（已上传到 Jellyfin）/ present（Jellyfin 本来就有）
+    # / not_found（Gfriends 里找不到）/ no_person（Jellyfin 里没有对应人物）/ error（失败）
+    avatar_state: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="pending", server_default="pending", index=True
+    )
+    # 命中的 Gfriends 文件（<来源目录>/<文件名>），用来追溯
+    avatar_source: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 失败原因或说明
+    avatar_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    avatar_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False

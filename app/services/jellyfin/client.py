@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import time
 from typing import Any, Callable, Iterator, Sequence
 from urllib.parse import quote
@@ -60,14 +61,19 @@ class JellyfinClient:
         *,
         params: dict[str, Any] | None = None,
         json: Any = None,
+        content: bytes | None = None,
+        headers: dict[str, str] | None = None,
+        allow_404: bool = False,
     ) -> httpx.Response:
-        """发起请求，连接错误、429 和 5xx 最多重试三次。"""
+        """发起请求，连接错误、429 和 5xx 最多重试三次；allow_404 时 404 原样返回给调用方判断。"""
         for attempt in range(4):
             owned = self._session is None
             session = self._session or self._new_session()
             try:
                 try:
-                    response = session.request(method, path, params=params, json=json)
+                    response = session.request(
+                        method, path, params=params, json=json, content=content, headers=headers
+                    )
                 except httpx.RequestError as exc:
                     if attempt < 3:
                         self._sleep(2**attempt)
@@ -75,7 +81,7 @@ class JellyfinClient:
                     raise JellyfinError("Jellyfin 连接失败") from exc
 
                 retryable = response.status_code == 429 or response.status_code >= 500
-                if response.status_code < 400:
+                if response.status_code < 400 or (allow_404 and response.status_code == 404):
                     return response
                 if retryable and attempt < 3:
                     self._sleep(2**attempt)
@@ -341,6 +347,27 @@ class JellyfinClient:
                 "ReplaceAllMetadata": "false",
                 "ReplaceAllImages": "false",
             },
+        )
+
+    def get_person(self, name: str) -> dict[str, Any] | None:
+        """按人名查 Jellyfin 人物，返回 {"id", "has_primary"}；人物不存在或没有 Id 时返回 None，其他错误照常抛。"""
+        response = self._request("GET", f"/Persons/{quote(name, safe='')}", allow_404=True)
+        if response.status_code == 404:
+            return None
+        payload = self._payload(response)
+        person_id = payload.get("Id")
+        if not isinstance(person_id, str) or not person_id:
+            return None
+        image_tags = payload.get("ImageTags") or {}
+        return {"id": person_id, "has_primary": bool(isinstance(image_tags, dict) and image_tags.get("Primary"))}
+
+    def upload_person_image(self, person_id: str, content: bytes, content_type: str) -> None:
+        """把图片设为人物主图；Jellyfin 要求请求体是图片的 base64、Content-Type 是图片类型。"""
+        self._request(
+            "POST",
+            f"/Items/{person_id}/Images/Primary",
+            content=base64.b64encode(content),
+            headers={"Content-Type": content_type},
         )
 
     def get_person_image(self, name: str) -> tuple[bytes, str] | None:
