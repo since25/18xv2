@@ -191,8 +191,8 @@ class DeleteBatchService:
             return
 
         try:
-            local_dir = self._check_local(film, mapper)
-            urls = self._read_urls(film, mapper)
+            local_dir = self._check_local(film, mapper, guard)
+            urls = self._read_urls(film, mapper, local_dir)
             self._delete_remote(db, batch_film, client_115, urls)
             self._delete_source_strm(batch_film, guard, url_index, urls)
             self._delete_film_dir(batch_film, guard, local_dir)
@@ -210,21 +210,32 @@ class DeleteBatchService:
         batch_film.status = "deleted"
 
     @staticmethod
-    def _check_local(film: Film, mapper: PathMapper) -> str:
-        """换算后的本地番号目录必须存在；不存在说明路径换算不对，此时一个 115 文件都不能删。"""
+    def _check_local(film: Film, mapper: PathMapper, guard: FilmDeleteGuard) -> str:
+        """换算后的本地番号目录必须存在、且按删除守卫的规则可删；否则说明路径换算不对，此时一个 115 文件都不能删。
+
+        没换算成功时得到的是只读挂载的扫描路径，它真实存在，所以光看「存在」不够，必须用守卫同一套规则校验。
+        """
         local_dir = mapper.map(film.film_dir)
         if not os.path.isdir(local_dir):
             raise _FilmFailed(f"本地番号目录不存在：{local_dir}（检查路径换算）")
-        return local_dir
+        try:
+            return guard.check_film_dir(local_dir)
+        except GuardError as exc:
+            raise _FilmFailed(f"本地番号目录不能删除：{exc}（检查路径换算）") from exc
 
     @staticmethod
-    def _read_urls(film: Film, mapper: PathMapper) -> list[str]:
-        """读每个分段 STRM 的地址，任一读不到就失败；没有分段也算失败。"""
+    def _read_urls(film: Film, mapper: PathMapper, local_dir: str) -> list[str]:
+        """读每个分段 STRM 的地址，任一读不到就失败；没有分段也算失败。
+
+        换算后的 STRM 必须是已校验番号目录 local_dir 的直接子文件，否则失败。
+        """
         if not film.strm_paths:
             raise _FilmFailed("片子没有 STRM 文件")
         urls: list[str] = []
         for strm_path in film.strm_paths:
             local_path = mapper.map(strm_path)
+            if os.path.dirname(os.path.abspath(local_path)) != local_dir:
+                raise _FilmFailed(f"STRM 不在本地番号目录里：{local_path}（检查路径换算）")
             url = read_strm_url(local_path)
             if url is None:
                 raise _FilmFailed(f"读不到 STRM 地址：{local_path}")

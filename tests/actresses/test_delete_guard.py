@@ -199,3 +199,32 @@ def test_build_url_index_normalizes_scheme_and_host_case(tmp_path):
     # 根目录不在时报错，不能当成「没有对应 STRM」
     with pytest.raises(OSError):
         build_url_index(str(tmp_path / "missing"))
+
+
+def test_check_film_dir_validates_without_deleting(tmp_path):
+    guard, source, organized = _make_guard(tmp_path)
+    film = organized / "甲" / "ABC-001"
+    outside = tmp_path / "outside" / "乙" / "ABC-002"
+    outside.mkdir(parents=True)
+    (organized / "甲" / "ABC-002").symlink_to(outside, target_is_directory=True)
+    (organized / "乙").symlink_to(tmp_path / "outside" / "乙", target_is_directory=True)
+    (organized / "甲" / "ABC-003").write_text("x", encoding="utf-8")
+    (source / "甲" / "ABC-004").mkdir(parents=True)
+
+    assert guard.check_film_dir(str(film) + "/") == str(film)
+    assert film.is_dir()
+    for path in (
+        organized / "甲" / "ABC-002",
+        organized / "乙" / "ABC-002",
+        outside,
+        source / "甲" / "ABC-004",
+        organized / "甲" / "ABC-003",
+        # 不存在也不合格
+        organized / "甲" / "ABC-009",
+        organized / "甲",
+        film / "sub",
+    ):
+        with pytest.raises(GuardError):
+            guard.check_film_dir(str(path))
+    assert (organized / "甲" / "ABC-002").is_symlink()
+    assert outside.is_dir()

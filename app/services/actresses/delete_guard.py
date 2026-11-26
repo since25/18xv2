@@ -91,6 +91,17 @@ class FilmDeleteGuard:
         os.remove(target)
         return "deleted"
 
+    def check_film_dir(self, path: str) -> str:
+        """只校验不删除：path 必须是现存的 `organized_root/<演员>/<番号>` 目录且不经过链接，返回规整后的路径。
+
+        规则与 delete_film_dir 相同；不存在也算不合格，抛 GuardError。
+        """
+        rule = f"番号目录必须恰好是 {self.organized_root}/<演员>/<番号>"
+        target = _locate(path, self.organized_root, depth=2, rule=rule)
+        if not os.path.isdir(target):
+            raise GuardError(f"番号目录不存在或不是目录：{path}")
+        return target
+
     def delete_film_dir(self, path: str) -> str:
         """整个删除 `organized_root/<演员>/<番号>` 目录，返回 deleted；不存在返回 missing。"""
         rule = f"番号目录必须恰好是 {self.organized_root}/<演员>/<番号>"

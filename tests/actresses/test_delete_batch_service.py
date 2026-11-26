@@ -9,11 +9,12 @@ from app.models.actresses import ActressDeleteBatch, ActressDeleteCandidate, Jel
 from app.models.jellyfin import JellyfinMediaItem
 from app.services.actresses.archive_service import ActressError, ArchiveService
 from app.services.actresses.candidates_service import CandidateService
+from app.services.actresses import delete_batch_service
 from app.services.actresses.delete_batch_service import BatchSummary, DeleteBatchService
 from app.services.actresses.delete_guard import FilmDeleteGuard, PathMapper
 from app.services.actresses.names import normalize_actress_name
 from app.services.client_115.client import Client115Error
-from app.services.client_115.schemas import NodePayload
+from app.services.client_115.schemas import ClientActionResult, NodePayload
 
 BASE = "http://openlist.test/d/115_OPEN/AV/"
 
@@ -338,3 +339,170 @@ def test_actor_dir_race_does_not_fail_film(env):
     organized_row = film.files[-1]
     assert (organized_row.group, organized_row.status) == ("organized_dir", "deleted")
     assert "演员目录未删除" in organized_row.error
+
+
+def _prepare(env) -> int:
+    """建 ABC-001（甲，115 节点 f1）、拉黑甲、建批次，返回批次 id。"""
+    env.add_film("ABC-001", ("甲",), node_id="f1")
+    env.set_status("甲", "blacklist")
+    env.reconcile()
+    return DeleteBatchService().create_batch(env.db, strm_roots=env.strm_roots).id
+
+
+def _assert_untouched(env) -> None:
+    """115 节点和本地文件都还在。"""
+    assert "f1" in env.client.nodes
+    assert (env.source / "AV" / "ABC-001.strm").exists()
+    assert (env.organized / "甲" / "ABC-001" / "ABC-001.strm").exists()
+
+
+@pytest.mark.parametrize("case", ["no_mapping", "outside_organized"])
+def test_mapping_outside_organized_blocks_before_115(env, case):
+    batch_id = _prepare(env)
+    # 换算没命中时得到扫描路径；生产上扫描路径（只读挂载）真实存在
+    for root in (env.scan_root, env.tmp / "mirror"):
+        film = root / "甲" / "ABC-001"
+        film.mkdir(parents=True)
+        (film / "ABC-001.strm").write_text(BASE + "ABC-001.mp4\n", encoding="utf-8")
+    if case == "no_mapping":
+        mapper = PathMapper([])
+    else:
+        mapper = PathMapper([(str(env.scan_root), str(env.tmp / "mirror"))])
+
+    summary = env.run(batch_id, mapper=mapper)
+
+    assert summary.failed == 1
+    _assert_untouched(env)
+    film = _batch(env.db, batch_id).films[0]
+    assert film.status == "failed"
+    assert "本地番号目录不能删除" in film.error
+    assert film.files == []
+
+
+def test_strm_mapped_outside_film_dir_blocks_before_115(env):
+    batch_id = _prepare(env)
+    elsewhere = env.tmp / "elsewhere" / "ABC-001.strm"
+    elsewhere.parent.mkdir()
+    elsewhere.write_text(BASE + "ABC-001.mp4\n", encoding="utf-8")
+    scan_strm = env.scan_root / "甲" / "ABC-001" / "ABC-001.strm"
+    mapper = PathMapper([(str(env.scan_root), str(env.organized)), (str(scan_strm), str(elsewhere))])
+
+    summary = env.run(batch_id, mapper=mapper)
+
+    assert summary.failed == 1
+    _assert_untouched(env)
+    film = _batch(env.db, batch_id).films[0]
+    assert "STRM 不在本地番号目录里" in film.error
+    assert film.files == []
+
+
+def test_multi_part_resume_deletes_each_115_file_once(env, monkeypatch):
+    film_dir = env.scan_root / "甲" / "ABC-001"
+    local = env.organized / "甲" / "ABC-001"
+    local.mkdir(parents=True)
+    (env.source / "AV").mkdir()
+    for index, part in enumerate(("CD1", "CD2"), start=1):
+        name = f"ABC-001-{part}"
+        item = JellyfinMediaItem(source="strm_115", path=str(film_dir / f"{name}.strm"), active=True)
+        env.db.add(item)
+        env.db.flush()
+        env.db.add(
+            JellyfinMediaActor(media_item_id=item.id, position=0, raw_name="甲", name_normalized=normalize_actress_name("甲"))
+        )
+        (local / f"{name}.strm").write_text(BASE + f"{name}.mp4\n", encoding="utf-8")
+        (env.source / "AV" / f"{name}.strm").write_text(BASE + f"{name}.mp4\n", encoding="utf-8")
+        env.client.add_node(
+            NodePayload(id=f"f{index}", name=f"{name}.mp4", path=f"/AV/{name}.mp4", parent_id="d1", is_file=True)
+        )
+    env.db.commit()
+    env.set_status("甲", "blacklist")
+    env.reconcile()
+    batch_id = DeleteBatchService().create_batch(env.db, strm_roots=env.strm_roots).id
+    calls: list[str] = []
+    original_delete = env.client.delete_node
+    fail_once = {"f2"}
+
+    def flaky_delete(file_id, dry_run=True):
+        calls.append(file_id)
+        if file_id in fail_once:
+            fail_once.discard(file_id)
+            raise Client115Error("CD2 删除出错")
+        return original_delete(file_id, dry_run=dry_run)
+
+    monkeypatch.setattr(env.client, "delete_node", flaky_delete)
+
+    first = env.run(batch_id)
+
+    assert first.failed == 1
+    assert "f1" not in env.client.nodes
+    assert "f2" in env.client.nodes
+    assert sorted(path.name for path in (env.source / "AV").iterdir()) == ["ABC-001-CD1.strm", "ABC-001-CD2.strm"]
+    assert sorted(path.name for path in local.iterdir()) == ["ABC-001-CD1.strm", "ABC-001-CD2.strm"]
+    assert _batch(env.db, batch_id).films[0].status == "failed"
+
+    second = env.run(batch_id)
+
+    assert second.deleted == 1
+    assert calls.count("f1") == 1
+    assert calls.count("f2") == 2
+    assert env.client.nodes.keys() == {"d1"}
+    assert list((env.source / "AV").iterdir()) == []
+    assert not local.exists()
+
+
+def test_missing_organized_root_fails_batch_before_any_115_call(env):
+    batch_id = _prepare(env)
+    guard = FilmDeleteGuard(str(env.source), str(env.tmp / "no-organized"))
+
+    summary = env.run(batch_id, guard=guard)
+
+    assert summary == BatchSummary(batch_id=batch_id, deleted=0, failed=0, skipped=0)
+    _assert_untouched(env)
+    batch = _batch(env.db, batch_id)
+    assert batch.status == "failed"
+    assert str(env.tmp / "no-organized") in batch.note
+    assert [film.status for film in batch.films] == ["pending"]
+
+
+def test_url_index_failure_fails_batch_before_any_115_call(env, monkeypatch):
+    batch_id = _prepare(env)
+    calls: list[str] = []
+
+    def no_115(*args, **kwargs):
+        calls.append("115")
+        raise AssertionError("不应调用 115")
+
+    def broken_index(root):
+        raise OSError("权限不够")
+
+    monkeypatch.setattr(env.client, "get_file", no_115)
+    monkeypatch.setattr(env.client, "delete_node", no_115)
+    monkeypatch.setattr(delete_batch_service, "build_url_index", broken_index)
+
+    summary = env.run(batch_id)
+
+    assert summary.failed == 0
+    assert calls == []
+    _assert_untouched(env)
+    batch = _batch(env.db, batch_id)
+    assert batch.status == "failed"
+    assert "权限不够" in batch.note
+    assert [film.status for film in batch.films] == ["pending"]
+
+
+def test_delete_node_unsuccessful_keeps_local_files(env, monkeypatch):
+    batch_id = _prepare(env)
+
+    def unsuccessful(file_id, dry_run=True):
+        return ClientActionResult(success=False, action="delete", message="115 拒绝删除", payload={})
+
+    monkeypatch.setattr(env.client, "delete_node", unsuccessful)
+
+    summary = env.run(batch_id)
+
+    assert summary.failed == 1
+    _assert_untouched(env)
+    film = _batch(env.db, batch_id).films[0]
+    assert film.status == "failed"
+    assert "115 拒绝删除" in film.error
+    assert [(file.group, file.status) for file in film.files] == [("remote_115", "failed")]
