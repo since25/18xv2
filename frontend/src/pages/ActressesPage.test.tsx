@@ -159,4 +159,35 @@ describe('ActressesPage', () => {
     expect(await screen.findByText('没有别名')).toBeInTheDocument()
     await waitFor(() => expect(listActresses.mock.calls.length).toBeGreaterThan(1))
   })
+
+  it('选中合并目标后再搜别的名字，确认框仍显示选中的目标', async () => {
+    render(<ActressesPage />)
+    fireEvent.click(await screen.findByText('甲'))
+    await waitFor(() => expect(getActress).toHaveBeenCalledWith(1))
+    await screen.findByText('ABC-001')
+
+    listActresses.mockResolvedValue({
+      items: [{ id: 2, canonical_name: '乙', aliases: [], status: 'blacklist', film_count: 5, candidate_count: 5 }],
+      total: 1,
+      counts: { none: 0, blacklist: 1, whitelist: 0 },
+    })
+    const select = screen.getByLabelText('合并目标')
+    fireEvent.mouseDown(select)
+    fireEvent.change(select, { target: { value: '乙' } })
+    fireEvent.click(await screen.findByText('乙（黑名单，5 部）', { selector: '.ant-select-item-option-content' }))
+
+    // 选好之后又输入别的搜索词，选项里已经没有乙
+    listActresses.mockResolvedValue({
+      items: [{ id: 3, canonical_name: '丙', aliases: [], status: 'whitelist', film_count: 2, candidate_count: 0 }],
+      total: 1,
+      counts: { none: 0, blacklist: 0, whitelist: 1 },
+    })
+    fireEvent.mouseDown(select)
+    fireEvent.change(select, { target: { value: '丙' } })
+    expect(await screen.findByText('丙（白名单，2 部）', { selector: '.ant-select-item-option-content' })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: buttonName('合并') }))
+    expect(await screen.findByText('把「甲」合并进「乙」？')).toBeInTheDocument()
+    expect(screen.getByText(/对方是未标时，会继承她的黑名单\/白名单状态/)).toBeInTheDocument()
+  })
 })

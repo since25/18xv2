@@ -145,9 +145,15 @@ function CandidatesTab({ onBatchCreated }: { onBatchCreated: (batchId: number) =
     onSuccess: (res) => onBatchCreated(res.batch_id),
   })
 
-  // 同步中：勾选写库、清单重拉、检查 115、保留任一在途。
+  // 同步中：勾选写库、清单重拉、检查 115、保留、建删除批次任一在途。
   // 这期间页面勾选可能被重拉回来的旧数据覆盖，所以勾选、全选、全不选、检查、刷新和确认删除一律不可点
-  const syncing = loading || syncCount > 0 || selectAction.loading || checkAction.loading || keepAction.loading
+  const syncing =
+    loading ||
+    syncCount > 0 ||
+    selectAction.loading ||
+    checkAction.loading ||
+    keepAction.loading ||
+    createAction.loading
   // 确认框的回调里要读最新状态，放进 ref
   const latestRef = useRef({ data, syncing })
   useEffect(() => {

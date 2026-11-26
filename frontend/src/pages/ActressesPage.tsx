@@ -93,7 +93,8 @@ function ActressAvatar({ id, name }: { id: number; name: string }) {
 /** 合并到另一位：按名字搜目标，确认后合并，返回合并后的目标详情 */
 function MergeSection({ actress, onMerged }: { actress: ActressDetail; onMerged: (target: ActressDetail) => void }) {
   const [options, setOptions] = useState<ActressSummary[]>([])
-  const [targetId, setTargetId] = useState<number | undefined>(undefined)
+  // 选中时记下目标本身：之后再搜别的名字，选项里没有她了，确认框仍显示她
+  const [target, setTarget] = useState<ActressSummary | undefined>(undefined)
   // 只采用最后一次搜索的结果
   const searchSeq = useRef(0)
 
@@ -116,7 +117,6 @@ function MergeSection({ actress, onMerged }: { actress: ActressDetail; onMerged:
     successMessage: (data) => `已合并进 ${data.canonical_name}`,
     onSuccess: (data) => onMerged(data),
   })
-  const target = options.find((item) => item.id === targetId)
 
   return (
     <Space wrap>
@@ -125,23 +125,26 @@ function MergeSection({ actress, onMerged }: { actress: ActressDetail; onMerged:
         style={{ width: 280 }}
         placeholder="搜索要合并进的女优"
         showSearch={{ filterOption: false, onSearch: (value) => void search(value) }}
-        value={targetId}
-        onChange={setTargetId}
+        value={target?.id}
+        onChange={(id) => setTarget(options.find((item) => item.id === id))}
         notFoundContent="输入名字搜索"
-        options={options.map((item) => ({
-          value: item.id,
-          label: `${item.canonical_name}（${STATUS_LABELS[item.status]}，${item.film_count} 部）`,
-        }))}
+        // 选中的目标不在当前搜索结果里时也要有选项，选择框才显示她的名字
+        options={(target && !options.some((item) => item.id === target.id) ? [target, ...options] : options).map(
+          (item) => ({
+            value: item.id,
+            label: `${item.canonical_name}（${STATUS_LABELS[item.status]}，${item.film_count} 部）`,
+          }),
+        )}
       />
       <Popconfirm
         title={`把「${actress.canonical_name}」合并进「${target?.canonical_name ?? ''}」？`}
-        description="她的名字和别名会变成对方的别名，标记记录一并转过去。"
-        disabled={!targetId}
+        description="她的名字和别名会变成对方的别名，标记记录一并转过去；对方是未标时，会继承她的黑名单/白名单状态。"
+        disabled={!target}
         onConfirm={() => {
-          if (targetId) void mergeAction.run(targetId)
+          if (target) void mergeAction.run(target.id)
         }}
       >
-        <Button disabled={!targetId} loading={mergeAction.loading}>
+        <Button disabled={!target} loading={mergeAction.loading}>
           合并
         </Button>
       </Popconfirm>

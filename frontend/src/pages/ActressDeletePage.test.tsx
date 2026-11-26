@@ -246,6 +246,33 @@ describe('ActressDeletePage', () => {
     expect(getDeleteBatch).not.toHaveBeenCalled()
   })
 
+  it('建删除批次请求在途时勾选和其他按钮不可点', async () => {
+    let finishCreate: (value: { batch_id: number; job_id: string }) => void = () => {}
+    createDeleteBatch.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finishCreate = resolve
+        }),
+    )
+    listDeleteBatches.mockResolvedValue({ items: [makeSummary({ id: 7, status: 'completed' })] })
+    getDeleteBatch.mockResolvedValue(makeBatchDetail({ id: 7 }))
+    render(<ActressDeletePage />)
+    expect(await screen.findByText('待删 2 部，本次勾选 2 部')).toBeInTheDocument()
+
+    fireEvent.click(confirmButton())
+    fireEvent.click(await screen.findByRole('button', { name: '确定删除' }))
+    await waitFor(() => expect(createDeleteBatch).toHaveBeenCalledTimes(1))
+    // 请求在途：勾选改不了，否则服务端勾选和本次删除的片子会对不上
+    expect(screen.getByLabelText('勾选 ABC-001')).toBeDisabled()
+    expect(screen.getByRole('button', { name: '检查 115' })).toBeDisabled()
+    expect(screen.getByText(buttonName('全不选')).closest('button')).toBeDisabled()
+
+    await act(async () => {
+      finishCreate({ batch_id: 7, job_id: 'job-7' })
+    })
+    await waitFor(() => expect(getDeleteBatch).toHaveBeenCalledWith(7))
+  })
+
   it('勾选同步请求在途时确认删除等按钮不可点', async () => {
     let finishSelect: (value: { count: number }) => void = () => {}
     selectCandidates.mockImplementation(
