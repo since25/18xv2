@@ -18,6 +18,7 @@ import MagnetTasksPage from './pages/MagnetTasksPage'
 import DownloaderPage from './pages/DownloaderPage'
 import JellyfinPage from './pages/JellyfinPage'
 import ActressesPage from './pages/ActressesPage'
+import ActressDeletePage from './pages/ActressDeletePage'
 import ScriptRunsPage from './pages/ScriptRunsPage'
 import WhitelistBatchPage from './pages/WhitelistBatchPage'
 import ReviewIntakePage from './pages/ReviewIntakePage'
@@ -181,6 +182,7 @@ function AppRoutes() {
           <Route path="/downloader" element={<DownloaderPage />} />
           <Route path="/jellyfin" element={<JellyfinPage />} />
           <Route path="/actresses" element={<ActressesPage />} />
+          <Route path="/actress-deletes" element={<ActressDeletePage />} />
           <Route path="/script-runs" element={<ScriptRunsPage />} />
           <Route path="/auth-center" element={<AuthCenterPage />} />
           <Route path="/auth-center/open-api-qr" element={<OpenAuthPage />} />
