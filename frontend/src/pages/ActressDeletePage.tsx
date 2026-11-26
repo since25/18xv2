@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { ReloadOutlined } from '@ant-design/icons'
-import { Alert, Button, Checkbox, Modal, Space, Table, Tabs, Typography } from 'antd'
+import { Alert, Button, Checkbox, Modal, Space, Table, Tabs, Typography, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import {
   checkCandidatesRemote,
@@ -115,6 +115,9 @@ function CandidatesTab({ onBatchCreated }: { onBatchCreated: (batchId: number) =
   const items = data.items
   // 页面上的勾选就是要确认的范围；打开时用服务端保存的勾选，改动随时同步回服务端
   const checkedDirs = items.filter((item) => item.selected).map((item) => item.film_dir)
+  // 进行中的勾选同步和清单重拉（含静默重拉）次数
+  const [syncCount, setSyncCount] = useState(0)
+  const [confirmOpen, setConfirmOpen] = useState(false)
 
   const selectAction = useApiAction((dirs: string[], selected: boolean) => selectCandidates(dirs, selected))
   const keepAction = useApiAction((item: ActressCandidateItem) => keepCandidates([item.film_dir]), {
@@ -142,41 +145,73 @@ function CandidatesTab({ onBatchCreated }: { onBatchCreated: (batchId: number) =
     onSuccess: (res) => onBatchCreated(res.batch_id),
   })
 
-  /** 改勾选：先改页面，再同步到服务端；同步失败时按服务端重新拉取 */
-  const toggle = async (dirs: string[], selected: boolean) => {
-    if (!dirs.length) return
-    const targets = new Set(dirs)
-    setData((prev) => {
-      const base = prev ?? EMPTY_CANDIDATES
-      return {
-        ...base,
-        items: base.items.map((item) => (targets.has(item.film_dir) ? { ...item, selected } : item)),
-      }
-    })
-    const result = await selectAction.run(dirs, selected)
-    if (!result.ok) void reload({ silent: true })
+  // 同步中：勾选写库、清单重拉、检查 115、保留任一在途。
+  // 这期间页面勾选可能被重拉回来的旧数据覆盖，所以勾选、全选、全不选、检查、刷新和确认删除一律不可点
+  const syncing = loading || syncCount > 0 || selectAction.loading || checkAction.loading || keepAction.loading
+  // 确认框的回调里要读最新状态，放进 ref
+  const latestRef = useRef({ data, syncing })
+  useEffect(() => {
+    latestRef.current = { data, syncing }
+  })
+
+  const withSync = async (work: () => Promise<unknown>) => {
+    setSyncCount((count) => count + 1)
+    try {
+      await work()
+    } finally {
+      setSyncCount((count) => count - 1)
+    }
   }
+
+  /** 改勾选：先改页面，再同步到服务端；同步失败时按服务端重新拉取 */
+  const toggle = (dirs: string[], selected: boolean) =>
+    withSync(async () => {
+      if (!dirs.length) return
+      const targets = new Set(dirs)
+      setData((prev) => {
+        const base = prev ?? EMPTY_CANDIDATES
+        return {
+          ...base,
+          items: base.items.map((item) => (targets.has(item.film_dir) ? { ...item, selected } : item)),
+        }
+      })
+      const result = await selectAction.run(dirs, selected)
+      if (!result.ok) await reload({ silent: true })
+    })
 
   const checkRemote = async () => {
     await checkAction.run(checkedDirs)
     // 出错时前面几批也可能已写入结果，一样重新拉取
-    void reload({ silent: true })
+    await withSync(() => reload({ silent: true }))
   }
 
   const confirmDelete = () => {
-    // 按打开确认框这一刻页面上的勾选建批次
+    // 确认框里显示的就是这一刻页面上勾选的这些片子
     const dirs = checkedDirs
-    if (!dirs.length) return
+    const shownData = data
+    if (!dirs.length || syncing || confirmOpen) return
+    setConfirmOpen(true)
     void modal.confirm({
       title: `删除 ${dirs.length} 部片子`,
       content: `将删除 ${dirs.length} 部片子的 115 原文件和本地 STRM，115 文件进回收站。确定？`,
       okText: '确定删除',
       okButtonProps: { danger: true },
       cancelText: '取消',
+      onCancel: () => setConfirmOpen(false),
       onOk: async () => {
-        const result = await createAction.run(dirs)
-        // 409：清单有变化、删除任务在跑或功能未开启；提示已显示后端原话，重新拉取清单，留在本页
-        if (!result.ok && errorStatus(result.error) === 409) void reload()
+        try {
+          // 框打开期间清单重拉过、勾选变过或正在同步：不发送框里的旧快照，让用户看清后重新确认
+          const latest = latestRef.current
+          if (latest.data !== shownData || latest.syncing) {
+            message.warning('清单有变化，请重新确认')
+            return
+          }
+          const result = await createAction.run(dirs)
+          // 409：清单有变化、删除任务在跑或功能未开启；提示已显示后端原话，重新拉取清单，留在本页
+          if (!result.ok && errorStatus(result.error) === 409) await withSync(() => reload())
+        } finally {
+          setConfirmOpen(false)
+        }
       },
     })
   }
@@ -190,6 +225,7 @@ function CandidatesTab({ onBatchCreated }: { onBatchCreated: (batchId: number) =
         <Checkbox
           aria-label={`勾选 ${row.number}`}
           checked={row.selected}
+          disabled={syncing}
           onChange={(event) => void toggle([row.film_dir], event.target.checked)}
         />
       ),
@@ -219,7 +255,7 @@ function CandidatesTab({ onBatchCreated }: { onBatchCreated: (batchId: number) =
       key: 'actions',
       width: 80,
       render: (_value, row) => (
-        <Button size="small" disabled={keepAction.loading} onClick={() => void keepAction.run(row)}>
+        <Button size="small" disabled={syncing} onClick={() => void keepAction.run(row)}>
           保留
         </Button>
       ),
@@ -236,21 +272,29 @@ function CandidatesTab({ onBatchCreated }: { onBatchCreated: (batchId: number) =
           left={
             <>
               <Text strong>{`待删 ${items.length} 部，本次勾选 ${checkedDirs.length} 部`}</Text>
-              <Button size="small" disabled={!uncheckedDirs.length} onClick={() => void toggle(uncheckedDirs, true)}>
+              <Button
+                size="small"
+                disabled={!uncheckedDirs.length || syncing}
+                onClick={() => void toggle(uncheckedDirs, true)}
+              >
                 全选
               </Button>
-              <Button size="small" disabled={!checkedDirs.length} onClick={() => void toggle(checkedDirs, false)}>
+              <Button
+                size="small"
+                disabled={!checkedDirs.length || syncing}
+                onClick={() => void toggle(checkedDirs, false)}
+              >
                 全不选
               </Button>
             </>
           }
           right={
             <>
-              <Button icon={<ReloadOutlined />} onClick={() => void reload()}>
+              <Button icon={<ReloadOutlined />} disabled={syncing} onClick={() => void withSync(() => reload())}>
                 刷新
               </Button>
               <Button
-                disabled={!checkedDirs.length}
+                disabled={!checkedDirs.length || syncing}
                 loading={checkAction.loading}
                 onClick={() => void checkRemote()}
               >
@@ -259,8 +303,8 @@ function CandidatesTab({ onBatchCreated }: { onBatchCreated: (batchId: number) =
               <Button
                 type="primary"
                 danger
-                // 清单重新拉取期间不让确认，免得按旧清单建批次
-                disabled={!checkedDirs.length || loading}
+                // 同步中或确认框已打开时不让再点，免得按旧清单建批次或叠出两个确认框
+                disabled={!checkedDirs.length || syncing || confirmOpen}
                 loading={createAction.loading}
                 onClick={confirmDelete}
               >

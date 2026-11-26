@@ -138,6 +138,10 @@ function tabByName(name: string) {
   return screen.getByRole('tab', { name })
 }
 
+function confirmButton() {
+  return screen.getByRole('button', { name: '确认删除' })
+}
+
 // 表格行里的按钮按文字找：在行内用 getByRole 要逐层算样式判断可见性，jsdom 里一次要好几秒
 function buttonIn(container: HTMLElement, label: string) {
   return within(container).getByText(buttonName(label)).closest('button') as HTMLButtonElement
@@ -155,6 +159,7 @@ describe('ActressDeletePage', () => {
     getDeleteBatch.mockResolvedValue(makeBatchDetail())
     vi.spyOn(message, 'success').mockImplementation(() => undefined as never)
     vi.spyOn(message, 'error').mockImplementation(() => undefined as never)
+    vi.spyOn(message, 'warning').mockImplementation(() => undefined as never)
   })
 
   afterEach(() => {
@@ -182,11 +187,14 @@ describe('ActressDeletePage', () => {
     // 改勾选：取消 001、勾上 002，每次都同步到服务端
     fireEvent.click(screen.getByLabelText('勾选 ABC-001'))
     await waitFor(() => expect(selectCandidates).toHaveBeenCalledWith(['/strm/甲/ABC-001'], false))
+    // 勾选同步在途时勾选框不可点，等它结束
+    await waitFor(() => expect(screen.getByLabelText('勾选 ABC-002')).toBeEnabled())
     fireEvent.click(screen.getByLabelText('勾选 ABC-002'))
     await waitFor(() => expect(selectCandidates).toHaveBeenCalledWith(['/strm/丙/ABC-002'], true))
     expect(screen.getByText('待删 2 部，本次勾选 1 部')).toBeInTheDocument()
 
-    fireEvent.click(screen.getByRole('button', { name: '确认删除' }))
+    await waitFor(() => expect(confirmButton()).toBeEnabled())
+    fireEvent.click(confirmButton())
     expect(await screen.findByText(confirmText(1))).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: '确定删除' }))
     // 只删本次勾选的 002；没勾的 001 不在请求里
@@ -236,6 +244,95 @@ describe('ActressDeletePage', () => {
     expect(await screen.findByText('待删 1 部，本次勾选 1 部')).toBeInTheDocument()
     expect(tabByName('待删清单')).toHaveAttribute('aria-selected', 'true')
     expect(getDeleteBatch).not.toHaveBeenCalled()
+  })
+
+  it('勾选同步请求在途时确认删除等按钮不可点', async () => {
+    let finishSelect: (value: { count: number }) => void = () => {}
+    selectCandidates.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finishSelect = resolve
+        }),
+    )
+    render(<ActressDeletePage />)
+    expect(await screen.findByText('待删 2 部，本次勾选 2 部')).toBeInTheDocument()
+    expect(confirmButton()).toBeEnabled()
+
+    fireEvent.click(screen.getByLabelText('勾选 ABC-001'))
+    await waitFor(() => expect(selectCandidates).toHaveBeenCalledTimes(1))
+    expect(confirmButton()).toBeDisabled()
+    expect(screen.getByLabelText('勾选 ABC-002')).toBeDisabled()
+    expect(screen.getByRole('button', { name: '检查 115' })).toBeDisabled()
+    expect(screen.getByText(buttonName('全选')).closest('button')).toBeDisabled()
+    expect(screen.getByText(buttonName('全不选')).closest('button')).toBeDisabled()
+
+    await act(async () => {
+      finishSelect({ count: 1 })
+    })
+    await waitFor(() => expect(confirmButton()).toBeEnabled())
+    expect(screen.getByText('待删 2 部，本次勾选 1 部')).toBeInTheDocument()
+  })
+
+  it('清单重拉期间确认删除不可点，重拉回来的旧数据不会把取消的勾选带进删除请求', async () => {
+    let finishReload: (value: ActressCandidateListResponse) => void = () => {}
+    listCandidates
+      .mockResolvedValueOnce(makeCandidates([makeCandidate(), secondCandidate()]))
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finishReload = resolve
+          }),
+      )
+    createDeleteBatch.mockResolvedValue({ batch_id: 7, job_id: 'job-7' })
+    render(<ActressDeletePage />)
+    expect(await screen.findByText('待删 2 部，本次勾选 2 部')).toBeInTheDocument()
+
+    // 检查 115 结束后静默重拉清单；重拉挂起
+    fireEvent.click(screen.getByRole('button', { name: '检查 115' }))
+    await waitFor(() => expect(listCandidates).toHaveBeenCalledTimes(2))
+    expect(confirmButton()).toBeDisabled()
+    expect(screen.getByLabelText('勾选 ABC-001')).toBeDisabled()
+    // 重拉期间点勾选框不起作用，不会出现「页面已取消、重拉又勾回」
+    fireEvent.click(screen.getByLabelText('勾选 ABC-001'))
+    expect(selectCandidates).not.toHaveBeenCalled()
+
+    // 重拉返回旧数据（两部都勾着）
+    await act(async () => {
+      finishReload(makeCandidates([makeCandidate(), secondCandidate()]))
+    })
+    await waitFor(() => expect(screen.getByLabelText('勾选 ABC-001')).toBeEnabled())
+    expect(screen.getByLabelText('勾选 ABC-001')).toBeChecked()
+
+    // 重拉结束后再取消 001，确认时请求里没有它
+    fireEvent.click(screen.getByLabelText('勾选 ABC-001'))
+    await waitFor(() => expect(selectCandidates).toHaveBeenCalledWith(['/strm/甲/ABC-001'], false))
+    await waitFor(() => expect(confirmButton()).toBeEnabled())
+    fireEvent.click(confirmButton())
+    expect(await screen.findByText(confirmText(1))).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '确定删除' }))
+    await waitFor(() => expect(createDeleteBatch).toHaveBeenCalledWith(['/strm/丙/ABC-002']))
+  })
+
+  it('确认框打开后清单有变化时不发送旧快照', async () => {
+    listCandidates
+      .mockResolvedValueOnce(makeCandidates([makeCandidate(), secondCandidate()]))
+      .mockResolvedValue(makeCandidates([makeCandidate(), secondCandidate({ selected: false })]))
+    render(<ActressDeletePage />)
+    expect(await screen.findByText('待删 2 部，本次勾选 2 部')).toBeInTheDocument()
+
+    fireEvent.click(confirmButton())
+    expect(await screen.findByText(confirmText(2))).toBeInTheDocument()
+    // 确认框打开期间不能再点「确认删除」叠出第二个框
+    expect(confirmButton()).toBeDisabled()
+
+    // 框打开期间清单被重拉，勾选变成 1 部
+    fireEvent.click(screen.getByText(buttonName('刷新')).closest('button') as HTMLButtonElement)
+    expect(await screen.findByText('待删 2 部，本次勾选 1 部')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: '确定删除' }))
+    await waitFor(() => expect(message.warning).toHaveBeenCalledWith('清单有变化，请重新确认'))
+    expect(createDeleteBatch).not.toHaveBeenCalled()
+    await waitFor(() => expect(confirmButton()).toBeEnabled())
   })
 
   it('点保留后调用 keepCandidates 并从列表移除', async () => {
