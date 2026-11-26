@@ -8,8 +8,9 @@ from app.services.client_115.client import Client115Error, Fake115Client, Real11
 from app.services.emby_media_actions.strm_mapping_service import decode_115_open_path
 
 # 115 对不存在路径的报错里会出现的文字（不分大小写）。
-# 上线第 1 步要只读核实真实 115 的报错文本并按实际补充；没核实前宁可判成 error（这部片什么都不删）。
-MISSING_MARKERS = ("not found", "不存在")
+# 不收英文「not found」：接口地址错误等 HTTP 404 也会报它，误判成「已不存在」会让本地文件被删而 115 原文件还在。
+# 上线第 1 步只读核实真实 115 对不存在路径的报错文本后再按实际补充；没核实前宁可判成 error（这部片什么都不删）。
+MISSING_MARKERS = ("不存在",)
 
 
 @dataclass

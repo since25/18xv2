@@ -36,6 +36,19 @@ class _RaisingClient:
         raise self.exc
 
 
+class _StubClient:
+    """按路径返回文件；没有的路径抛「文件不存在」（模拟 115 对不存在路径的中文报错）。"""
+
+    def __init__(self, files: dict[str, str]) -> None:
+        # 115 路径 → file_id
+        self.files = files
+
+    def get_file(self, file_id: str | None = None, path: str | None = None) -> dict:
+        if path not in self.files:
+            raise Client115Error("文件不存在")
+        return {"state": True, "data": {"file_id": self.files[path], "file_category": "1"}}
+
+
 def test_resolve_found(client):
     assert resolve_115(client, BASE + "ABC-001.mp4") == Remote115(
         state="found", file_id="f1", remote_path="/AV/ABC-001.mp4", note=None
@@ -45,18 +58,28 @@ def test_resolve_found(client):
     assert (result.state, result.file_id) == ("found", "f1")
 
 
-def test_resolve_missing(client):
-    result = resolve_115(client, BASE + "ABC-002.mp4")
+def test_resolve_missing():
+    result = resolve_115(_StubClient({}), BASE + "ABC-002.mp4")
 
     assert result.state == "missing"
     assert result.file_id is None
     assert result.remote_path == "/AV/ABC-002.mp4"
+    assert "文件不存在" in result.note
+
+
+@pytest.mark.parametrize("message", ["Node not found", "404 Not Found", "HTTP Error 404: NOT FOUND"])
+def test_resolve_english_not_found_is_error(message):
+    # 英文 not found 可能是接口地址错误，没核实前不能当成「115 上已不存在」
+    result = resolve_115(_RaisingClient(Client115Error(message)), BASE + "ABC-001.mp4")
+    assert result.state == "error"
+    assert result.file_id is None
+
+
+def test_fake_client_missing_node_is_error(client):
+    # Fake115Client 对找不到的路径抛 "Node not found"
+    result = resolve_115(client, BASE + "ABC-002.mp4")
+    assert result.state == "error"
     assert "Node not found" in result.note
-
-
-@pytest.mark.parametrize("message", ["NOT FOUND", "文件不存在"])
-def test_resolve_missing_markers_ignore_case(message):
-    assert resolve_115(_RaisingClient(Client115Error(message)), BASE + "ABC-001.mp4").state == "missing"
 
 
 def test_resolve_rejects_non_115_url(client):
@@ -97,12 +120,10 @@ def _add_film(db_session, scan_root: Path, local_root: Path, number: str, parts:
     return str(film_dir)
 
 
-def test_check_remote_marks_mixed_as_error(db_session, tmp_path, client):
+def test_check_remote_marks_mixed_as_error(db_session, tmp_path):
     scan_root = tmp_path / "scan"
     local_root = tmp_path / "local"
-    client.add_node(
-        NodePayload(id="f2", name="ABC-002-CD1.mp4", path="/AV/ABC-002-CD1.mp4", parent_id="d1", is_file=True)
-    )
+    client = _StubClient({"/AV/ABC-001.mp4": "f1", "/AV/ABC-002-CD1.mp4": "f2"})
     found = _add_film(db_session, scan_root, local_root, "ABC-001", {"ABC-001.strm": BASE + "ABC-001.mp4"})
     mixed = _add_film(
         db_session,
