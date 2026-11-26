@@ -3,11 +3,12 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
+import pytest
 from sqlalchemy import select
 
 from app.models.actresses import ActressDeleteCandidate, ActressKeptFilm, JellyfinMediaActor
 from app.models.jellyfin import JellyfinMediaItem
-from app.services.actresses.archive_service import ArchiveService
+from app.services.actresses.archive_service import ActressError, ArchiveService
 from app.services.actresses.candidates_service import CandidateService, CandidateView
 from app.services.actresses.names import normalize_actress_name
 
@@ -161,3 +162,25 @@ def test_list_shows_reason_and_costars(db_session, tmp_path):
     assert views[2].other_actors == []
     # 没有档案的演员按未标显示
     assert views[0].other_actors == [("丙", "none")]
+
+
+def test_empty_roots_refuse_to_change_candidates(db_session, tmp_path):
+    strm_roots, dirs = _setup(db_session, tmp_path)
+    service = CandidateService()
+    service.reconcile(db_session, strm_roots=strm_roots, added_by="mark")
+    service.set_selected(db_session, [dirs[0]], False)
+    third = _add_film(db_session, Path(strm_roots[0]), "ABC-004", ("甲",))
+    service.keep(db_session, [third])
+
+    # 根目录没配置时一部片都读不到，不能因此清空清单或撤销保留
+    for empty_roots in ([], ["", " "]):
+        with pytest.raises(ActressError, match="未配置 115 番号库根目录"):
+            service.reconcile(db_session, strm_roots=empty_roots, added_by="daily")
+        with pytest.raises(ActressError, match="未配置 115 番号库根目录"):
+            service.unkeep(db_session, [third], strm_roots=empty_roots)
+
+    rows = _candidates(db_session)
+    assert sorted(rows) == [dirs[0], dirs[1]]
+    assert rows[dirs[0]].selected is False
+    assert rows[dirs[1]].selected is True
+    assert db_session.scalars(select(ActressKeptFilm.film_dir)).all() == [third]

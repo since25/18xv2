@@ -26,6 +26,12 @@ class ActressError(ValueError):
     """女优档案的业务错误，接口层转成 400。"""
 
 
+def require_strm_roots(strm_roots: list[str], action: str) -> None:
+    """根目录没配置时拒绝执行：否则一部片都读不到，会把片数清零、把待删清单清空。"""
+    if not any(root.strip() for root in strm_roots):
+        raise ActressError(f"未配置 115 番号库根目录，不{action}")
+
+
 def _normalize(raw: str) -> str:
     """与扫描写演员行一致：归一化后截到列宽。"""
     return normalize_actress_name(raw)[:_NAME_MAX_LENGTH]
@@ -45,6 +51,7 @@ class ArchiveService:
 
     def refresh(self, db: Session, *, strm_roots: list[str]) -> dict[str, int]:
         """给有效片子里还对不上档案的演员名建档（未标），并重算全部女优的片数。"""
+        require_strm_roots(strm_roots, "刷新女优档案")
         actresses = list(db.scalars(select(Actress)))
         by_id = {actress.id: actress for actress in actresses}
         owner_by_name = {name: by_id[actress_id] for name, actress_id in build_name_index(db).items()}

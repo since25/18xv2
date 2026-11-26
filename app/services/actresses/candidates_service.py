@@ -14,6 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.actresses import ActressDeleteCandidate, ActressKeptFilm
+from app.services.actresses.archive_service import require_strm_roots
 from app.services.actresses.films import load_films, read_nfo_title
 from app.services.actresses.rules import RuleContext
 
@@ -49,7 +50,9 @@ class CandidateService:
         """按删片规则重算清单，返回（新加入部数, 移出部数）。
 
         新应删的片子加入并默认勾选；已在清单里的保持原来的勾选状态和加入方式；不再应删的移出。
+        根目录没配置时抛 ActressError，不改任何数据。
         """
+        require_strm_roots(strm_roots, "重算待删清单")
         context = RuleContext.load(db)
         films = load_films(db, strm_roots=strm_roots)
         deletable = {film.film_dir for film in films if context.verdict(film).deletable}
@@ -132,6 +135,8 @@ class CandidateService:
 
     def unkeep(self, db: Session, film_dirs: list[str], *, strm_roots: list[str]) -> int:
         """撤销保留，再重算清单让仍应删的片子回来，返回撤销的部数。"""
+        # 先检查：否则保留记录已删掉、重算才报错
+        require_strm_roots(strm_roots, "重算待删清单")
         dirs = _normalize_dirs(film_dirs)
         rows = db.scalars(select(ActressKeptFilm).where(ActressKeptFilm.film_dir.in_(dirs))).all()
         for row in rows:

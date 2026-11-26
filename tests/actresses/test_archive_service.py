@@ -256,3 +256,20 @@ def test_actress_operations_do_not_touch_keyword_entries(db_session, tmp_path):
     assert _keyword_snapshot(db_session) == before
     assert _count(db_session, KeywordEntry) == 2
     assert _count(db_session, KeywordAlias) == 1
+
+
+def test_refresh_refuses_empty_roots(db_session, tmp_path):
+    root = tmp_path / "strm"
+    _add_film(db_session, root, "ABC-001", ("甲",))
+    ArchiveService().refresh(db_session, strm_roots=[str(root)])
+    jia = _by_name(db_session, "甲")
+    _add_film(db_session, root, "ABC-002", ("乙",))
+
+    # 根目录没配置时一部片都读不到，不能因此把片数清零
+    for strm_roots in ([], ["", " "]):
+        with pytest.raises(ActressError, match="未配置 115 番号库根目录"):
+            ArchiveService().refresh(db_session, strm_roots=strm_roots)
+
+    assert jia.film_count == 1
+    assert _by_name(db_session, "乙") is None
+    assert _count(db_session, Actress) == 1
