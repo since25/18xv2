@@ -42,7 +42,7 @@ function buttonName(label: string) {
 }
 
 function confirmText(count: number) {
-  return `将删除 ${count} 部片子的 115 原文件和本地 STRM，115 文件进回收站。确定？`
+  return `将删除 ${count} 部片子的 115 原文件和本地 STRM，115 文件进回收站；同名的 nfo、图片、字幕一起清掉。确定？`
 }
 
 // 测试数据全部是占位名（甲、乙、丙）和占位番号

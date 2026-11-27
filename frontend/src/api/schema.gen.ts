@@ -58,10 +58,10 @@ export interface components {
     }
     'ActressDeleteBatchFileItem': {
       id: number
-      group: "remote_115" | "openlist_dir" | "source_strm" | "organized_dir"
+      group: "remote_115" | "openlist_dir" | "source_strm" | "organized_dir" | "remote_leftover" | "source_leftover"
       target: string
       remote_file_id: string | null
-      status: "pending" | "deleted" | "missing" | "refreshed" | "failed"
+      status: "pending" | "deleted" | "missing" | "skipped" | "refreshed" | "failed"
       error: string | null
       executed_at: string | null
     }

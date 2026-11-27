@@ -178,11 +178,11 @@ class ActressDeleteBatchFile(Base):
         ForeignKey("actress_delete_batch_films.id", ondelete="CASCADE"), nullable=False, index=True
     )
     # remote_115（115 原文件）/ openlist_dir（刷新 OpenList 目录缓存）/ source_strm（porn_tv1 的 STRM）
-    # / organized_dir（302porn_tv1 番号目录）
+    # / organized_dir（302porn_tv1 番号目录）/ remote_leftover（115 配套文件）/ source_leftover（porn_tv1 配套文件）
     group: Mapped[str] = mapped_column(String(16), nullable=False)
     target: Mapped[str] = mapped_column(Text, nullable=False)
     remote_file_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    # pending / deleted / missing / failed；openlist_dir 行为 refreshed / failed
+    # pending / deleted / missing / skipped / failed；openlist_dir 行为 refreshed / failed
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending", server_default="pending")
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     executed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

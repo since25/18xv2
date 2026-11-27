@@ -228,3 +228,51 @@ def test_check_film_dir_validates_without_deleting(tmp_path):
             guard.check_film_dir(str(path))
     assert (organized / "甲" / "ABC-002").is_symlink()
     assert outside.is_dir()
+
+
+def test_delete_source_dir_removes_dir_under_root(tmp_path):
+    guard, source, _ = _make_guard(tmp_path)
+    target = source / "AV" / "ABC-001"
+    target.mkdir(parents=True)
+    (target / "a.nfo").write_text("x", encoding="utf-8")
+
+    assert guard.delete_source_dir(str(target) + "/") == "deleted"
+    assert not target.exists()
+
+
+def test_delete_source_dir_rejects_root_and_outside(tmp_path):
+    guard, source, _ = _make_guard(tmp_path)
+    outside = tmp_path / "other"
+    outside.mkdir()
+
+    for path in (source, outside):
+        with pytest.raises(GuardError):
+            guard.delete_source_dir(str(path))
+    assert source.is_dir()
+    assert outside.is_dir()
+
+
+def test_delete_source_dir_missing(tmp_path):
+    guard, source, _ = _make_guard(tmp_path)
+
+    assert guard.delete_source_dir(str(source / "AV" / "nope")) == "missing"
+
+
+def test_delete_source_sidecar_only_sidecar_exts(tmp_path):
+    guard, source, _ = _make_guard(tmp_path)
+    folder = source / "AV"
+    folder.mkdir()
+    nfo = folder / "a.nfo"
+    nfo.write_text("x", encoding="utf-8")
+    strm = folder / "a.strm"
+    strm.write_text(URL, encoding="utf-8")
+    mp4 = folder / "a.mp4"
+    mp4.write_text("x", encoding="utf-8")
+
+    assert guard.delete_source_sidecar(str(nfo)) == "deleted"
+    assert not nfo.exists()
+    for path in (strm, mp4):
+        with pytest.raises(GuardError):
+            guard.delete_source_sidecar(str(path))
+        assert path.exists()
+    assert guard.delete_source_sidecar(str(folder / "missing.nfo")) == "missing"

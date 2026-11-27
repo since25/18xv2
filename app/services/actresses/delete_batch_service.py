@@ -31,11 +31,12 @@ from app.services.actresses.delete_guard import (
     read_strm_url,
 )
 from app.services.actresses.films import Film, load_films
+from app.services.actresses.leftovers import plan_dir
 from app.services.actresses.openlist import OpenListClient, openlist_dir_for
-from app.services.actresses.remote_115 import Remote115, resolve_115
+from app.services.actresses.remote_115 import MISSING_ERROR_CODE, Remote115, resolve_115
 from app.services.actresses.rules import RuleContext, skip_reason
-from app.services.client_115.client import Fake115Client, Real115Client
-from app.services.emby_media_actions.strm_mapping_service import normalize_stream_url
+from app.services.client_115.client import Client115Error, Fake115Client, Real115Client
+from app.services.emby_media_actions.strm_mapping_service import decode_115_open_path, normalize_stream_url
 
 # 已经做完、续跑时不再重做的文件行状态
 _DONE_FILE_STATUSES = ("deleted", "missing")
@@ -49,6 +50,45 @@ class BatchSummary:
     deleted: int
     failed: int
     skipped: int
+
+
+@dataclass
+class LeftoverAction:
+    """补跑清理时要展示（或已经执行）的一条动作。"""
+
+    group: str
+    target: str
+    whole_dir: bool
+
+
+def _lookup_115(
+    client: Real115Client | Fake115Client, path: str, *, expect_dir: bool
+) -> tuple[str, str | None, str | None]:
+    """按路径查 115 节点，返回 `(state, file_id, note)`，state 为 found / missing / error。
+
+    不存在只认 430004 和「查询成功但空结果」；类型不是期望的文件夹 / 文件一律算 error，不交给删除。
+    """
+    try:
+        payload = client.get_file(path=path)
+    except Client115Error as exc:
+        text = str(exc)
+        if MISSING_ERROR_CODE.search(text):
+            return "missing", None, f"115 上已不存在：{text}"
+        return "error", None, f"115 查询失败：{text}"
+    except Exception as exc:  # noqa: BLE001 — 查询失败只记在这一行，不影响片子
+        return "error", None, f"115 查询失败：{exc}"
+
+    data = payload.get("data") if isinstance(payload, dict) else None
+    # 目录还在、文件已没了时 115 不报错，返回成功和空结果
+    if isinstance(payload, dict) and payload.get("state") is True and not data:
+        return "missing", None, "115 上已不存在：按路径查询返回空结果"
+    file_id = str(data.get("file_id") or "") if isinstance(data, dict) else ""
+    if not file_id:
+        return "error", None, "115 没有返回 file_id"
+    expected = "0" if expect_dir else "1"
+    if str(data.get("file_category")) != expected:
+        return "error", None, "115 上这个路径不是文件夹" if expect_dir else "115 上这个路径不是文件"
+    return "found", file_id, None
 
 
 class CandidateListChanged(ActressError):
@@ -229,6 +269,24 @@ class DeleteBatchService:
                 self._refresh_openlist(batch_film, openlist, urls)
             self._delete_source_strm(batch_film, guard, url_index, urls)
             self._delete_film_dir(batch_film, guard, local_dir)
+            source_paths = [
+                row.target
+                for row in batch_film.files
+                if row.group == "source_strm"
+                and row.status in _DONE_FILE_STATUSES
+                and os.path.isabs(row.target)
+            ]
+            try:
+                self._clean_leftovers(
+                    batch_film,
+                    client_115=client_115,
+                    guard=guard,
+                    openlist=openlist,
+                    urls=urls,
+                    source_paths=source_paths,
+                )
+            except Exception as exc:  # noqa: BLE001 — 视频已删完，清理出意外也不能打断批次或让这部片失败
+                batch_film.reason = f"清理配套文件出错：{exc}"
         except _FilmFailed as exc:
             batch_film.status = "failed"
             batch_film.error = str(exc)
@@ -291,11 +349,21 @@ class DeleteBatchService:
         return urls
 
     @staticmethod
-    def _file_row(batch_film: ActressDeleteBatchFilm, group: str, target: str) -> ActressDeleteBatchFile:
-        """取这部片同组同目标的文件行，没有就新建一行（pending）。"""
+    def _find_file_row(
+        batch_film: ActressDeleteBatchFilm, group: str, target: str
+    ) -> ActressDeleteBatchFile | None:
+        """取这部片同组同目标的文件行，没有返回 None。"""
         for row in batch_film.files:
             if row.group == group and row.target == target:
                 return row
+        return None
+
+    @classmethod
+    def _file_row(cls, batch_film: ActressDeleteBatchFilm, group: str, target: str) -> ActressDeleteBatchFile:
+        """取这部片同组同目标的文件行，没有就新建一行（pending）。"""
+        row = cls._find_file_row(batch_film, group, target)
+        if row is not None:
+            return row
         row = ActressDeleteBatchFile(group=group, target=target, status="pending")
         batch_film.files.append(row)
         return row
@@ -413,3 +481,419 @@ class DeleteBatchService:
             guard.remove_actor_dir_if_empty(actor_dir)
         except (GuardError, OSError) as exc:
             row.error = f"演员目录未删除：{actor_dir}：{exc}"
+
+    def _clean_leftovers(
+        self,
+        batch_film: ActressDeleteBatchFilm,
+        *,
+        client_115: Real115Client | Fake115Client,
+        guard: FilmDeleteGuard,
+        openlist: OpenListClient | None,
+        urls: list[str],
+        source_paths: list[str],
+        require_refreshed: bool = True,
+    ) -> list[LeftoverAction]:
+        """清理这部片在 115 和 porn_tv1 留下的 nfo、图片、字幕，返回本次确实删掉的动作。
+
+        不抛异常、不 commit：失败只记在对应文件行上，这部片仍算删除成功。
+        require_refreshed 为 False 时由调用方（补跑）自己先刷新 OpenList。
+        """
+        actions: list[LeftoverAction] = []
+        self._clean_remote_leftovers(
+            batch_film,
+            client_115=client_115,
+            openlist=openlist,
+            urls=urls,
+            require_refreshed=require_refreshed,
+            actions=actions,
+        )
+        self._clean_source_leftovers(batch_film, guard=guard, source_paths=source_paths, actions=actions)
+        return actions
+
+    def _clean_remote_leftovers(
+        self,
+        batch_film: ActressDeleteBatchFilm,
+        *,
+        client_115: Real115Client | Fake115Client,
+        openlist: OpenListClient | None,
+        urls: list[str],
+        require_refreshed: bool,
+        actions: list[LeftoverAction],
+    ) -> None:
+        """按 115 目录去重清理：整目录条件满足时删目录，否则只删同名配套文件。"""
+        directories: dict[tuple[str, str], list[str]] = {}
+        for url in dict.fromkeys(urls):
+            try:
+                decoded = decode_115_open_path(url)
+                openlist_dir = openlist_dir_for(url)
+            except ValueError:
+                continue
+            directory = os.path.dirname(decoded.remote_path) or "/"
+            directories.setdefault((openlist_dir, directory), []).append(os.path.basename(decoded.remote_path))
+
+        for (openlist_dir, directory), video_names in directories.items():
+            directory_row = self._find_file_row(batch_film, "remote_leftover", directory)
+            # 续跑：整个目录上次已删或已不存在，不再列目录、也不再删
+            if directory_row is not None and directory_row.status in _DONE_FILE_STATUSES:
+                continue
+            if openlist is None:
+                row = self._file_row(batch_film, "remote_leftover", directory)
+                row.executed_at = _now()
+                row.status = "skipped"
+                row.error = "没配置 OpenList，未清理 115 配套文件"
+                continue
+            if require_refreshed:
+                refresh_row = self._find_file_row(batch_film, "openlist_dir", openlist_dir)
+                if refresh_row is None or refresh_row.status != "refreshed":
+                    row = self._file_row(batch_film, "remote_leftover", directory)
+                    row.executed_at = _now()
+                    row.status = "skipped"
+                    row.error = "OpenList 没刷新成功，未清理 115 配套文件"
+                    continue
+            try:
+                entries = openlist.list_dir(openlist_dir)
+            except Exception as exc:  # noqa: BLE001 — 列目录失败只记这一行
+                row = self._file_row(batch_film, "remote_leftover", directory)
+                row.executed_at = _now()
+                row.status = "failed"
+                row.error = f"列 115 目录失败：{exc}"
+                continue
+
+            plan = plan_dir(video_names, entries)
+            if plan.whole_dir:
+                if directory == "/":
+                    row = self._file_row(batch_film, "remote_leftover", directory)
+                    row.executed_at = _now()
+                    row.status = "skipped"
+                    row.error = "115 根目录不删，未清理配套文件"
+                    continue
+                action = self._delete_remote_leftover_dir(
+                    batch_film,
+                    client_115=client_115,
+                    openlist=openlist,
+                    openlist_dir=openlist_dir,
+                    directory=directory,
+                    directory_row=directory_row,
+                )
+                if action is not None:
+                    actions.append(action)
+                continue
+
+            # 之前列目录失败留下的目录行，这次能列出且不满足整删，不再算失败
+            if directory_row is not None:
+                directory_row.executed_at = _now()
+                directory_row.status = "skipped"
+                directory_row.error = "目录里还有别的文件，只清理同名配套文件"
+            for name in plan.names:
+                self._delete_remote_leftover_file(
+                    batch_film,
+                    client_115=client_115,
+                    directory=directory,
+                    name=name,
+                    actions=actions,
+                )
+
+    def _delete_remote_leftover_dir(
+        self,
+        batch_film: ActressDeleteBatchFilm,
+        *,
+        client_115: Real115Client | Fake115Client,
+        openlist: OpenListClient,
+        openlist_dir: str,
+        directory: str,
+        directory_row: ActressDeleteBatchFile | None,
+    ) -> LeftoverAction | None:
+        """按路径确认是文件夹后整个删掉，再刷新上级目录；任何失败只记在这一行。"""
+        row = directory_row or self._file_row(batch_film, "remote_leftover", directory)
+        row.executed_at = _now()
+        state, file_id, note = _lookup_115(client_115, directory, expect_dir=True)
+        if state == "missing":
+            row.status = "missing"
+            row.error = note
+            return None
+        if state == "error":
+            row.status = "failed"
+            row.error = note
+            return None
+        row.remote_file_id = file_id
+        try:
+            outcome = client_115.delete_node(file_id, dry_run=False)
+        except Exception as exc:  # noqa: BLE001 — 删除失败只记在这一行
+            row.status = "failed"
+            row.error = str(exc)
+            return None
+        if not getattr(outcome, "success", False):
+            row.status = "failed"
+            row.error = getattr(outcome, "message", None) or "115 删除没有成功"
+            return None
+        row.status = "deleted"
+        row.error = None
+        parent = os.path.dirname(openlist_dir) or "/"
+        try:
+            openlist.refresh_dir(parent)
+        except Exception as exc:  # noqa: BLE001 — 目录已删掉，刷新失败只追加原因
+            row.error = f"目录已删除，但刷新 OpenList 上级目录失败：{exc}"
+        return LeftoverAction(group="remote_leftover", target=directory, whole_dir=True)
+
+    def _delete_remote_leftover_file(
+        self,
+        batch_film: ActressDeleteBatchFilm,
+        *,
+        client_115: Real115Client | Fake115Client,
+        directory: str,
+        name: str,
+        actions: list[LeftoverAction],
+    ) -> None:
+        """按完整路径确认是文件后删除一个同名配套文件。"""
+        target = f"/{name}" if directory == "/" else f"{directory}/{name}"
+        row = self._file_row(batch_film, "remote_leftover", target)
+        if row.status in _DONE_FILE_STATUSES:
+            return
+        row.executed_at = _now()
+        state, file_id, note = _lookup_115(client_115, target, expect_dir=False)
+        if state == "missing":
+            row.status = "missing"
+            row.error = note
+            return
+        if state == "error":
+            row.status = "failed"
+            row.error = note
+            return
+        row.remote_file_id = file_id
+        try:
+            outcome = client_115.delete_node(file_id, dry_run=False)
+        except Exception as exc:  # noqa: BLE001 — 删除失败只记在这一行
+            row.status = "failed"
+            row.error = str(exc)
+            return
+        if not getattr(outcome, "success", False):
+            row.status = "failed"
+            row.error = getattr(outcome, "message", None) or "115 删除没有成功"
+            return
+        row.status = "deleted"
+        row.error = None
+        actions.append(LeftoverAction(group="remote_leftover", target=target, whole_dir=False))
+
+    def _clean_source_leftovers(
+        self,
+        batch_film: ActressDeleteBatchFilm,
+        *,
+        guard: FilmDeleteGuard,
+        source_paths: list[str],
+        actions: list[LeftoverAction],
+    ) -> None:
+        """按 porn_tv1 源目录去重清理；目录不存在记 missing，不报错。"""
+        directories: dict[str, list[str]] = {}
+        for path in dict.fromkeys(source_paths):
+            directory = os.path.dirname(path)
+            if not directory:
+                continue
+            directories.setdefault(directory, []).append(os.path.basename(path))
+
+        for directory, video_names in directories.items():
+            directory_row = self._find_file_row(batch_film, "source_leftover", directory)
+            if directory_row is not None and directory_row.status in _DONE_FILE_STATUSES:
+                continue
+            if not os.path.isdir(directory):
+                row = directory_row or self._file_row(batch_film, "source_leftover", directory)
+                row.executed_at = _now()
+                row.status = "missing"
+                row.error = "源目录已不存在"
+                continue
+            try:
+                entries = [
+                    (name, os.path.isdir(os.path.join(directory, name))) for name in os.listdir(directory)
+                ]
+            except OSError as exc:
+                row = directory_row or self._file_row(batch_film, "source_leftover", directory)
+                row.executed_at = _now()
+                row.status = "failed"
+                row.error = f"读不了源目录：{exc}"
+                continue
+
+            plan = plan_dir(video_names, entries)
+            if plan.whole_dir:
+                row = directory_row or self._file_row(batch_film, "source_leftover", directory)
+                row.executed_at = _now()
+                try:
+                    row.status = guard.delete_source_dir(directory)
+                    row.error = None
+                except (GuardError, OSError) as exc:
+                    row.status = "failed"
+                    row.error = str(exc)
+                    continue
+                if row.status == "deleted":
+                    actions.append(LeftoverAction(group="source_leftover", target=directory, whole_dir=True))
+                continue
+
+            # 之前列目录失败留下的目录行，这次能列出且不满足整删，不再算失败
+            if directory_row is not None:
+                directory_row.executed_at = _now()
+                directory_row.status = "skipped"
+                directory_row.error = "目录里还有别的文件，只清理同名配套文件"
+            for name in plan.names:
+                path = os.path.join(directory, name)
+                row = self._file_row(batch_film, "source_leftover", path)
+                if row.status in _DONE_FILE_STATUSES:
+                    continue
+                row.executed_at = _now()
+                try:
+                    row.status = guard.delete_source_sidecar(path)
+                    row.error = None
+                except (GuardError, OSError) as exc:
+                    row.status = "failed"
+                    row.error = str(exc)
+                    continue
+                if row.status == "deleted":
+                    actions.append(LeftoverAction(group="source_leftover", target=path, whole_dir=False))
+
+    def clean_leftovers(
+        self,
+        db: Session,
+        batch_id: int,
+        *,
+        client_115: Real115Client | Fake115Client,
+        guard: FilmDeleteGuard,
+        openlist: OpenListClient | None,
+        apply: bool = False,
+    ) -> list[LeftoverAction]:
+        """给已完成的批次补跑清理：只处理已删除的片子，默认只预览、不删也不写文件行。
+
+        补跑不要求批次里已有「OpenList 已刷新」行，会先自己刷新每个 115 目录；
+        刷新失败的目录这次不清理（宁可少删）。
+        """
+        batch = db.get(ActressDeleteBatch, batch_id)
+        if batch is None:
+            raise ActressError(f"删除批次不存在：{batch_id}")
+
+        actions: list[LeftoverAction] = []
+        seen: set[tuple[str, str]] = set()
+        for batch_film in batch.films:
+            if batch_film.status != "deleted":
+                continue
+            urls = [row.target for row in batch_film.files if row.group == "remote_115"]
+            source_paths = [
+                row.target
+                for row in batch_film.files
+                if row.group == "source_strm"
+                and row.status in _DONE_FILE_STATUSES
+                and os.path.isabs(row.target)
+            ]
+            if not urls and not source_paths:
+                continue
+            if openlist is not None:
+                urls = self._refresh_for_cleanup(openlist, urls)
+            if apply:
+                performed = self._clean_leftovers(
+                    batch_film,
+                    client_115=client_115,
+                    guard=guard,
+                    openlist=openlist,
+                    urls=urls,
+                    source_paths=source_paths,
+                    require_refreshed=False,
+                )
+                db.commit()
+            else:
+                performed = self._preview_leftovers(
+                    batch_film,
+                    openlist=openlist,
+                    urls=urls,
+                    source_paths=source_paths,
+                )
+            for action in performed:
+                key = (action.group, action.target)
+                if key not in seen:
+                    seen.add(key)
+                    actions.append(action)
+        return actions
+
+    @staticmethod
+    def _refresh_for_cleanup(openlist: OpenListClient, urls: list[str]) -> list[str]:
+        """刷新每个 115 目录一次，返回刷新成功的那些 URL；失败的目录这次不清理。"""
+        states: dict[str, bool] = {}
+        refreshed: list[str] = []
+        for url in dict.fromkeys(urls):
+            try:
+                directory = openlist_dir_for(url)
+            except ValueError:
+                continue
+            if directory not in states:
+                try:
+                    openlist.refresh_dir(directory)
+                    states[directory] = True
+                except Exception:  # noqa: BLE001 — 刷新失败只表示这次不清理这个目录
+                    states[directory] = False
+            if states[directory]:
+                refreshed.append(url)
+        return refreshed
+
+    def _preview_leftovers(
+        self,
+        batch_film: ActressDeleteBatchFilm,
+        *,
+        openlist: OpenListClient | None,
+        urls: list[str],
+        source_paths: list[str],
+    ) -> list[LeftoverAction]:
+        """只列目录、判断会删什么，不调用任何删除、刷新或写库。"""
+        actions: list[LeftoverAction] = []
+        directories: dict[tuple[str, str], list[str]] = {}
+        for url in dict.fromkeys(urls):
+            try:
+                decoded = decode_115_open_path(url)
+                openlist_dir = openlist_dir_for(url)
+            except ValueError:
+                continue
+            directory = os.path.dirname(decoded.remote_path) or "/"
+            directories.setdefault((openlist_dir, directory), []).append(os.path.basename(decoded.remote_path))
+
+        if openlist is not None:
+            for (openlist_dir, directory), video_names in directories.items():
+                directory_row = self._find_file_row(batch_film, "remote_leftover", directory)
+                if directory_row is not None and directory_row.status in _DONE_FILE_STATUSES:
+                    continue
+                try:
+                    entries = openlist.list_dir(openlist_dir)
+                except Exception:  # noqa: BLE001 — 预览拿不到列表就不显示这个目录
+                    continue
+                plan = plan_dir(video_names, entries)
+                if plan.whole_dir:
+                    if directory != "/":
+                        actions.append(LeftoverAction("remote_leftover", directory, True))
+                    continue
+                for name in plan.names:
+                    target = f"/{name}" if directory == "/" else f"{directory}/{name}"
+                    row = self._find_file_row(batch_film, "remote_leftover", target)
+                    if row is not None and row.status in _DONE_FILE_STATUSES:
+                        continue
+                    actions.append(LeftoverAction("remote_leftover", target, False))
+
+        source_dirs: dict[str, list[str]] = {}
+        for path in dict.fromkeys(source_paths):
+            directory = os.path.dirname(path)
+            if directory:
+                source_dirs.setdefault(directory, []).append(os.path.basename(path))
+        for directory, video_names in source_dirs.items():
+            directory_row = self._find_file_row(batch_film, "source_leftover", directory)
+            if directory_row is not None and directory_row.status in _DONE_FILE_STATUSES:
+                continue
+            if not os.path.isdir(directory):
+                continue
+            try:
+                entries = [
+                    (name, os.path.isdir(os.path.join(directory, name))) for name in os.listdir(directory)
+                ]
+            except OSError:
+                continue
+            plan = plan_dir(video_names, entries)
+            if plan.whole_dir:
+                actions.append(LeftoverAction("source_leftover", directory, True))
+                continue
+            for name in plan.names:
+                path = os.path.join(directory, name)
+                row = self._find_file_row(batch_film, "source_leftover", path)
+                if row is not None and row.status in _DONE_FILE_STATUSES:
+                    continue
+                actions.append(LeftoverAction("source_leftover", path, False))
+        return actions

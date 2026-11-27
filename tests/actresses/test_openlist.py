@@ -73,3 +73,40 @@ def test_openlist_dir_for(url, expected):
 def test_openlist_dir_for_rejects_non_115_url():
     with pytest.raises(ValueError):
         openlist_dir_for("http://openlist.test/d/other/AV/ABC-001.mp4")
+
+
+def test_list_dir_returns_names_and_dirs():
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "code": 200,
+                "data": {
+                    "content": [
+                        {"name": "a.nfo", "is_dir": False},
+                        {"name": "sub", "is_dir": True},
+                    ]
+                },
+            },
+        )
+
+    assert _client(handler).list_dir("/115_OPEN/AV") == [("a.nfo", False), ("sub", True)]
+    assert json.loads(seen[0].content)["refresh"] is False
+    assert json.loads(seen[0].content)["path"] == "/115_OPEN/AV"
+
+
+def test_list_dir_null_content():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"code": 200, "data": {"content": None}})
+
+    assert _client(handler).list_dir("/115_OPEN/AV") == []
+
+
+def test_list_dir_error_raises():
+    with pytest.raises(OpenListError):
+        _client(lambda request: httpx.Response(200, json={"code": 500, "message": "object not found"})).list_dir(
+            "/115_OPEN/AV"
+        )

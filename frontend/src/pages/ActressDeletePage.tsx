@@ -73,6 +73,7 @@ const FILE_STATUS: Record<FileStatus, [string, Tone]> = {
   pending: ['待执行', 'neutral'],
   deleted: ['已删除', 'success'],
   missing: ['已不存在', 'neutral'],
+  skipped: ['未清理', 'warning'],
   refreshed: ['已刷新', 'success'],
   failed: ['失败', 'danger'],
 }
@@ -81,6 +82,8 @@ const FILE_GROUP_LABELS: Record<FileGroup, string> = {
   openlist_dir: 'OpenList 目录刷新',
   source_strm: 'porn_tv1 STRM',
   organized_dir: '302porn_tv1 目录',
+  remote_leftover: '115 配套文件',
+  source_leftover: 'porn_tv1 配套文件',
 }
 const REMOTE_STATE: Record<RemoteState, [string, Tone]> = {
   unchecked: ['未检查', 'neutral'],
@@ -201,7 +204,7 @@ function CandidatesTab({ onBatchCreated }: { onBatchCreated: (batchId: number) =
     setConfirmOpen(true)
     void modal.confirm({
       title: `删除 ${dirs.length} 部片子`,
-      content: `将删除 ${dirs.length} 部片子的 115 原文件和本地 STRM，115 文件进回收站。确定？`,
+      content: `将删除 ${dirs.length} 部片子的 115 原文件和本地 STRM，115 文件进回收站；同名的 nfo、图片、字幕一起清掉。确定？`,
       okText: '确定删除',
       okButtonProps: { danger: true },
       cancelText: '取消',
@@ -671,7 +674,7 @@ export default function ActressDeletePage() {
   return (
     <PageScaffold
       title="女优删除"
-      description="拉黑女优后，她的片子进入待删清单。只有在这里勾选并确认的片子才会删除：115 原文件进回收站，porn_tv1 的 STRM 和 302porn_tv1 的番号目录一并删除。"
+      description="拉黑女优后，她的片子进入待删清单。只有在这里勾选并确认的片子才会删除：115 原文件进回收站，porn_tv1 的 STRM 和 302porn_tv1 的番号目录一并删除。视频删除后，同名的 nfo、图片、字幕一起清掉；目录里只剩这些时整个目录删掉（115 进回收站）。"
     >
       <SurfacePanel>
         {/* 切换标签时卸载其他标签，每次切回都重新拉取 */}

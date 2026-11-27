@@ -186,10 +186,12 @@ class ActressDeleteBatchListResponse(BaseModel):
 
 class ActressDeleteBatchFileItem(BaseModel):
     id: int
-    group: Literal["remote_115", "openlist_dir", "source_strm", "organized_dir"]
+    group: Literal[
+        "remote_115", "openlist_dir", "source_strm", "organized_dir", "remote_leftover", "source_leftover"
+    ]
     target: str
     remote_file_id: str | None = None
-    status: Literal["pending", "deleted", "missing", "refreshed", "failed"]
+    status: Literal["pending", "deleted", "missing", "skipped", "refreshed", "failed"]
     error: str | None = None
     executed_at: datetime | None = None
 

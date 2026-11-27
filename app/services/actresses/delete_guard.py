@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import shutil
 
+from app.services.actresses.leftovers import SIDECAR_EXTS
 from app.services.emby_media_actions.strm_mapping_service import normalize_stream_url
 
 
@@ -68,7 +69,7 @@ def _locate(path: str, root: str, *, depth: int | None, rule: str) -> str:
 
 
 class FilmDeleteGuard:
-    """只在两个可写根目录里删：`source_root` 下的 `.strm` 文件、`organized_root/<演员>/<番号>` 目录和变空的演员目录。"""
+    """只在两个可写根目录里删：`source_root` 下的 `.strm`、配套文件和目录，`organized_root/<演员>/<番号>` 目录和变空的演员目录。"""
 
     def __init__(self, source_root: str, organized_root: str) -> None:
         for root in (source_root, organized_root):
@@ -83,6 +84,31 @@ class FilmDeleteGuard:
         rule = f"只能删 {self.source_root} 下的 .strm 文件"
         target = _locate(path, self.source_root, depth=None, rule=rule)
         if not target.lower().endswith(".strm"):
+            raise GuardError(f"{rule}：{path}")
+        if not os.path.lexists(target):
+            return "missing"
+        if not os.path.isfile(target):
+            raise GuardError(f"不是普通文件，拒绝删除：{path}")
+        os.remove(target)
+        return "deleted"
+
+    def delete_source_dir(self, path: str) -> str:
+        """整个删除 `source_root` 下至少一层的目录，返回 deleted；不存在返回 missing。"""
+        rule = f"只能删 {self.source_root} 下的目录"
+        target = _locate(path, self.source_root, depth=None, rule=rule)
+        if not os.path.lexists(target):
+            return "missing"
+        if not os.path.isdir(target):
+            raise GuardError(f"不是目录，拒绝删除：{path}")
+        # rmtree 遇到目录里的链接只删链接本身，不进入链接目标
+        shutil.rmtree(target)
+        return "deleted"
+
+    def delete_source_sidecar(self, path: str) -> str:
+        """删 `source_root` 下的一个 nfo / 图片 / 字幕普通文件，返回 deleted；不存在返回 missing。"""
+        rule = f"只能删 {self.source_root} 下的 nfo、图片、字幕"
+        target = _locate(path, self.source_root, depth=None, rule=rule)
+        if os.path.splitext(target)[1].lower() not in SIDECAR_EXTS:
             raise GuardError(f"{rule}：{path}")
         if not os.path.lexists(target):
             return "missing"

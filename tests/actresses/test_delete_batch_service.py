@@ -5,7 +5,12 @@ from pathlib import Path
 import pytest
 from sqlalchemy import select
 
-from app.models.actresses import ActressDeleteBatch, ActressDeleteCandidate, JellyfinMediaActor
+from app.models.actresses import (
+    ActressDeleteBatch,
+    ActressDeleteBatchFile,
+    ActressDeleteCandidate,
+    JellyfinMediaActor,
+)
 from app.models.jellyfin import JellyfinMediaItem
 from app.services.actresses.archive_service import ActressError, ArchiveService
 from app.services.actresses.candidates_service import CandidateService
@@ -40,9 +45,18 @@ class _Env:
     def strm_roots(self) -> list[str]:
         return [str(self.scan_root)]
 
-    def add_film(self, number: str, actors: tuple[str, ...], *, actor_dir: str = "甲", node_id: str | None = None) -> str:
+    def add_film(
+        self,
+        number: str,
+        actors: tuple[str, ...],
+        *,
+        actor_dir: str = "甲",
+        node_id: str | None = None,
+        url: str | None = None,
+        remote_parent: str = "d1",
+    ) -> str:
         """建一部单段片：扫描条目、演员行、本地番号目录、porn_tv1 STRM，以及 115 节点（给了 node_id 时）。"""
-        url = BASE + f"{number}.mp4"
+        url = url or BASE + f"{number}.mp4"
         film_dir = self.scan_root / actor_dir / number
         item = JellyfinMediaItem(source="strm_115", path=str(film_dir / f"{number}.strm"), active=True)
         self.db.add(item)
@@ -64,8 +78,15 @@ class _Env:
         (self.source / "AV").mkdir(exist_ok=True)
         (self.source / "AV" / f"{number}.strm").write_text(url + "\n", encoding="utf-8")
         if node_id is not None:
+            remote_path = "/AV/" + url.removeprefix(BASE)
             self.client.add_node(
-                NodePayload(id=node_id, name=f"{number}.mp4", path=f"/AV/{number}.mp4", parent_id="d1", is_file=True)
+                NodePayload(
+                    id=node_id,
+                    name=Path(remote_path).name,
+                    path=remote_path,
+                    parent_id=remote_parent,
+                    is_file=True,
+                )
             )
         return str(film_dir)
 
@@ -173,6 +194,8 @@ def test_run_deletes_115_then_local(env):
         ("remote_115", "deleted"),
         ("source_strm", "deleted"),
         ("organized_dir", "deleted"),
+        ("remote_leftover", "skipped"),
+        ("source_leftover", "deleted"),
     ]
     assert film.files[0].remote_file_id == "f1"
     assert env.progress_calls[0] == ("删除中 ABC-001", 0, 1)
@@ -283,6 +306,8 @@ def test_115_already_missing_still_deletes_local(env):
         ("remote_115", "missing"),
         ("source_strm", "deleted"),
         ("organized_dir", "deleted"),
+        ("remote_leftover", "skipped"),
+        ("source_leftover", "deleted"),
     ]
 
 
@@ -343,6 +368,8 @@ def test_resume_retries_failed_without_redoing_done_files(env, monkeypatch):
     assert sorted((file.group, file.status) for file in film.files) == [
         ("organized_dir", "deleted"),
         ("remote_115", "deleted"),
+        ("remote_leftover", "skipped"),
+        ("source_leftover", "deleted"),
         ("source_strm", "deleted"),
     ]
 
@@ -362,7 +389,7 @@ def test_actor_dir_race_does_not_fail_film(env):
     assert summary.deleted == 1
     film = _batch(env.db, batch.id).films[0]
     assert film.status == "deleted"
-    organized_row = film.files[-1]
+    organized_row = next(file for file in film.files if file.group == "organized_dir")
     assert (organized_row.group, organized_row.status) == ("organized_dir", "deleted")
     assert "演员目录未删除" in organized_row.error
 
@@ -472,7 +499,7 @@ def test_multi_part_resume_deletes_each_115_file_once(env, monkeypatch):
     assert calls.count("f1") == 1
     assert calls.count("f2") == 2
     assert env.client.nodes.keys() == {"d1"}
-    assert list((env.source / "AV").iterdir()) == []
+    assert not (env.source / "AV").exists()
     assert not local.exists()
 
 
@@ -612,6 +639,7 @@ def test_source_strm_not_found_records_missing_row(env):
         ("remote_115", "deleted"),
         ("source_strm", "missing"),
         ("organized_dir", "deleted"),
+        ("remote_leftover", "skipped"),
     ]
     missing_row = film.files[1]
     assert missing_row.target == BASE + "ABC-001.mp4"
@@ -645,17 +673,36 @@ def test_new_part_added_after_scan_blocks_before_115(env, monkeypatch):
 
 
 class _FakeOpenList:
-    """记录刷新调用的 OpenList 客户端；同时记下刷新那一刻 porn_tv1 的 STRM 还在不在。"""
+    """记录刷新、列目录调用的 OpenList 客户端；同时记下刷新那一刻 STRM / 115 节点的状态。"""
 
-    def __init__(self, env: _Env, *, errors: list[Exception] | None = None) -> None:
+    def __init__(
+        self,
+        env: _Env,
+        *,
+        errors: list[Exception] | None = None,
+        entries: dict[str, list[tuple[str, bool]]] | None = None,
+        list_errors: list[Exception] | None = None,
+    ) -> None:
         self.env = env
         self.errors = list(errors or [])
+        self.entries = dict(entries or {})
+        self.list_errors = list(list_errors or [])
         self.calls: list[tuple[str, bool]] = []
+        self.listed: list[str] = []
+        self.node_states: list[bool] = []
 
     def refresh_dir(self, path: str) -> None:
         self.calls.append((path, (self.env.source / "AV" / "ABC-001.strm").exists()))
+        self.node_states.append("d2" in self.env.client.nodes)
         if self.errors:
             raise self.errors.pop(0)
+
+    def list_dir(self, path: str) -> list[tuple[str, bool]]:
+        self.listed.append(path)
+        if self.list_errors:
+            raise self.list_errors.pop(0)
+        # 默认模拟「目录里只有刚删掉的那部片」：不能因此判成整个目录可删
+        return list(self.entries.get(path, [("ABC-001.mp4", False)]))
 
 
 class _BusyDirGuard(FilmDeleteGuard):
@@ -687,6 +734,7 @@ def test_refreshes_openlist_dir_after_115_before_local(env):
         ("openlist_dir", "/115_OPEN/AV", "refreshed"),
         ("source_strm", str(env.source / "AV" / "ABC-001.strm"), "deleted"),
         ("organized_dir", str(env.organized / "甲" / "ABC-001"), "deleted"),
+        ("source_leftover", str(env.source / "AV"), "deleted"),
     ]
 
 
@@ -696,7 +744,13 @@ def test_without_openlist_client_no_refresh_row(env):
     assert env.run(batch_id).deleted == 1
 
     film = _batch(env.db, batch_id).films[0]
-    assert [file.group for file in film.files] == ["remote_115", "source_strm", "organized_dir"]
+    assert [(file.group, file.status) for file in film.files] == [
+        ("remote_115", "deleted"),
+        ("source_strm", "deleted"),
+        ("organized_dir", "deleted"),
+        ("remote_leftover", "skipped"),
+        ("source_leftover", "deleted"),
+    ]
 
 
 def test_refreshes_openlist_when_115_already_missing(env):
@@ -749,3 +803,295 @@ def test_resume_does_not_refresh_openlist_twice(env):
     second = _FakeOpenList(env)
     assert env.run(batch_id, openlist=second).deleted == 1
     assert second.calls == []
+
+
+def _subdir_film(env: _Env, *, dir_is_file: bool = False) -> int:
+    """建一部放在 115 子目录 /AV/ABC-001/ 里的片子，返回批次 id。"""
+    env.client.add_node(
+        NodePayload(id="d2", name="ABC-001", path="/AV/ABC-001", parent_id="d1", is_file=dir_is_file)
+    )
+    env.add_film(
+        "ABC-001",
+        ("甲",),
+        node_id="f2",
+        url=BASE + "ABC-001/ABC-001.mp4",
+        remote_parent="d2",
+    )
+    env.set_status("甲", "blacklist")
+    env.reconcile()
+    return DeleteBatchService().create_batch(env.db, strm_roots=env.strm_roots, film_dirs=env.candidate_dirs()).id
+
+
+def test_remote_leftover_shared_dir_deletes_only_same_name_sidecars(env):
+    batch_id = _blacklisted_batch(env)
+    env.client.add_node(
+        NodePayload(id="n1", name="ABC-001.nfo", path="/AV/ABC-001.nfo", parent_id="d1", is_file=True)
+    )
+    env.client.add_node(
+        NodePayload(id="f9", name="ABC-009.mp4", path="/AV/ABC-009.mp4", parent_id="d1", is_file=True)
+    )
+    openlist = _FakeOpenList(
+        env,
+        entries={"/115_OPEN/AV": [("ABC-001.nfo", False), ("ABC-009.mp4", False)]},
+    )
+
+    summary = env.run(batch_id, openlist=openlist)
+
+    assert summary.deleted == 1
+    # 集合目录里还有别的片子：只删同名 nfo，目录和别的视频都不动
+    assert "n1" not in env.client.nodes
+    assert "d1" in env.client.nodes
+    assert "f9" in env.client.nodes
+    assert openlist.listed == ["/115_OPEN/AV"]
+    film = _batch(env.db, batch_id).films[0]
+    assert ("remote_leftover", "/AV/ABC-001.nfo", "deleted") in [
+        (file.group, file.target, file.status) for file in film.files
+    ]
+
+
+def test_remote_leftover_whole_dir(env):
+    batch_id = _subdir_film(env)
+    env.client.add_node(
+        NodePayload(
+            id="n1", name="ABC-001.nfo", path="/AV/ABC-001/ABC-001.nfo", parent_id="d2", is_file=True
+        )
+    )
+    env.client.add_node(
+        NodePayload(
+            id="n2",
+            name="ABC-001-poster.jpg",
+            path="/AV/ABC-001/ABC-001-poster.jpg",
+            parent_id="d2",
+            is_file=True,
+        )
+    )
+    openlist = _FakeOpenList(
+        env,
+        entries={
+            "/115_OPEN/AV/ABC-001": [
+                ("ABC-001.nfo", False),
+                ("ABC-001-poster.jpg", False),
+            ]
+        },
+    )
+
+    summary = env.run(batch_id, openlist=openlist)
+
+    assert summary.deleted == 1
+    assert "d2" not in env.client.nodes
+    # 先刷新片子所在目录；整个删掉后再刷新上级目录
+    assert [path for path, _ in openlist.calls] == ["/115_OPEN/AV/ABC-001", "/115_OPEN/AV"]
+    assert openlist.node_states == [True, False]
+    film = _batch(env.db, batch_id).films[0]
+    assert ("remote_leftover", "/AV/ABC-001", "deleted") in [
+        (file.group, file.target, file.status) for file in film.files
+    ]
+
+
+def test_remote_leftover_skipped_when_refresh_failed(env):
+    batch_id = _blacklisted_batch(env)
+    openlist = _FakeOpenList(env, errors=[RuntimeError("虚构：超时")])
+
+    summary = env.run(batch_id, openlist=openlist)
+
+    assert summary.deleted == 1
+    film = _batch(env.db, batch_id).films[0]
+    assert film.status == "deleted"
+    row = next(file for file in film.files if file.group == "remote_leftover")
+    assert (row.target, row.status) == ("/AV", "skipped")
+    assert "OpenList 没刷新成功" in row.error
+    assert openlist.listed == []
+
+
+def test_remote_leftover_skipped_without_openlist(env):
+    batch_id = _blacklisted_batch(env)
+
+    summary = env.run(batch_id)
+
+    assert summary.deleted == 1
+    film = _batch(env.db, batch_id).films[0]
+    row = next(file for file in film.files if file.group == "remote_leftover")
+    assert (row.target, row.status) == ("/AV", "skipped")
+    assert "没配置 OpenList" in row.error
+
+
+def test_remote_leftover_rejects_wrong_category(env):
+    batch_id = _subdir_film(env, dir_is_file=True)
+    env.client.add_node(
+        NodePayload(
+            id="n1", name="ABC-001.nfo", path="/AV/ABC-001/ABC-001.nfo", parent_id="d2", is_file=True
+        )
+    )
+    openlist = _FakeOpenList(env, entries={"/115_OPEN/AV/ABC-001": [("ABC-001.nfo", False)]})
+
+    summary = env.run(batch_id, openlist=openlist)
+
+    assert summary.deleted == 1
+    # 期望是文件夹却查到文件：不删，记失败
+    assert "d2" in env.client.nodes
+    assert "n1" in env.client.nodes
+    film = _batch(env.db, batch_id).films[0]
+    row = next(file for file in film.files if file.group == "remote_leftover")
+    assert (row.target, row.status) == ("/AV/ABC-001", "failed")
+    assert "不是文件夹" in row.error
+
+
+def test_source_leftover_whole_dir(env):
+    batch_id = _blacklisted_batch(env)
+    folder = env.source / "AV" / "ABC-001"
+    folder.mkdir()
+    (env.source / "AV" / "ABC-001.strm").rename(folder / "ABC-001.strm")
+    (folder / "ABC-001.nfo").write_text("<movie/>", encoding="utf-8")
+    (folder / "ABC-001-fanart.jpg").write_text("x", encoding="utf-8")
+
+    summary = env.run(batch_id)
+
+    assert summary.deleted == 1
+    assert not folder.exists()
+    film = _batch(env.db, batch_id).films[0]
+    assert ("source_leftover", str(folder), "deleted") in [
+        (file.group, file.target, file.status) for file in film.files
+    ]
+
+
+def test_source_leftover_shared_dir(env):
+    batch_id = _blacklisted_batch(env)
+    nfo = env.source / "AV" / "ABC-001.nfo"
+    nfo.write_text("<movie/>", encoding="utf-8")
+    other = env.source / "AV" / "ABC-002.strm"
+    other.write_text(BASE + "ABC-002.mp4\n", encoding="utf-8")
+
+    summary = env.run(batch_id)
+
+    assert summary.deleted == 1
+    assert not nfo.exists()
+    assert other.exists()
+    assert (env.source / "AV").is_dir()
+    film = _batch(env.db, batch_id).films[0]
+    assert ("source_leftover", str(nfo), "deleted") in [
+        (file.group, file.target, file.status) for file in film.files
+    ]
+
+
+class _BrokenLeftoverGuard(FilmDeleteGuard):
+    """删源目录总是失败的守卫，用来确认清理失败不影响片子结果。"""
+
+    def delete_source_dir(self, path: str) -> str:
+        raise OSError("虚构：目录正被占用")
+
+
+def test_leftover_failure_keeps_film_deleted(env):
+    batch_id = _blacklisted_batch(env)
+    guard = _BrokenLeftoverGuard(str(env.source), str(env.organized))
+
+    summary = env.run(batch_id, guard=guard)
+
+    assert summary == BatchSummary(batch_id=batch_id, deleted=1, failed=0, skipped=0)
+    assert (env.source / "AV").is_dir()
+    batch = _batch(env.db, batch_id)
+    assert batch.status == "completed"
+    film = batch.films[0]
+    assert film.status == "deleted"
+    row = next(file for file in film.files if file.group == "source_leftover")
+    assert row.status == "failed"
+    assert "目录正被占用" in row.error
+
+
+class _CleanupBlockedGuard(FilmDeleteGuard):
+    """源目录清理总是失败的守卫，用来制造「片子已删、配套文件还在」的补跑场景。"""
+
+    def delete_source_dir(self, path: str) -> str:
+        raise OSError("虚构：清理失败")
+
+    def delete_source_sidecar(self, path: str) -> str:
+        raise OSError("虚构：清理失败")
+
+
+def _deleted_batch_with_leftovers(env: _Env) -> int:
+    """跑完一个批次，115 端当时没配 OpenList、本地清理又失败，留下可补跑的残留。"""
+    batch_id = _blacklisted_batch(env)
+    guard = _CleanupBlockedGuard(str(env.source), str(env.organized))
+    assert env.run(batch_id, guard=guard).deleted == 1
+    # 补跑时 115 目录里还有同名 nfo（批次运行时没配 OpenList，没动过它）
+    env.client.add_node(
+        NodePayload(id="n1", name="ABC-001.nfo", path="/AV/ABC-001.nfo", parent_id="d1", is_file=True)
+    )
+    return batch_id
+
+
+def test_clean_leftovers_preview_does_not_delete(env):
+    batch_id = _deleted_batch_with_leftovers(env)
+    env.db.expire_all()
+    before = len(env.db.scalars(select(ActressDeleteBatchFile)).all())
+    openlist = _FakeOpenList(
+        env,
+        entries={"/115_OPEN/AV": [("ABC-001.nfo", False), ("ABC-009.mp4", False)]},
+    )
+
+    actions = DeleteBatchService().clean_leftovers(
+        env.db, batch_id, client_115=env.client, guard=env.guard, openlist=openlist, apply=False
+    )
+
+    assert {(action.group, action.whole_dir) for action in actions} == {
+        ("remote_leftover", False),
+        ("source_leftover", True),
+    }
+    assert {action.target for action in actions} == {
+        "/AV/ABC-001.nfo",
+        str(env.source / "AV"),
+    }
+    # 只预览：文件都还在，也不写新的文件行
+    assert "n1" in env.client.nodes
+    assert (env.source / "AV").is_dir()
+    env.db.expire_all()
+    assert len(env.db.scalars(select(ActressDeleteBatchFile)).all()) == before
+    # 预览也会刷新 OpenList 缓存，但不删东西
+    assert [path for path, _ in openlist.calls] == ["/115_OPEN/AV"]
+
+
+def test_clean_leftovers_apply_deletes(env):
+    batch_id = _deleted_batch_with_leftovers(env)
+    openlist = _FakeOpenList(
+        env,
+        entries={"/115_OPEN/AV": [("ABC-001.nfo", False), ("ABC-009.mp4", False)]},
+    )
+
+    actions = DeleteBatchService().clean_leftovers(
+        env.db, batch_id, client_115=env.client, guard=env.guard, openlist=openlist, apply=True
+    )
+
+    assert {action.target for action in actions} == {
+        "/AV/ABC-001.nfo",
+        str(env.source / "AV"),
+    }
+    assert "n1" not in env.client.nodes
+    assert not (env.source / "AV").exists()
+    film = _batch(env.db, batch_id).films[0]
+    rows = {(file.group, file.target): file.status for file in film.files}
+    assert rows[("remote_leftover", "/AV/ABC-001.nfo")] == "deleted"
+    assert rows[("source_leftover", str(env.source / "AV"))] == "deleted"
+
+
+def test_clean_leftovers_twice_is_noop(env):
+    batch_id = _deleted_batch_with_leftovers(env)
+    entries = {"/115_OPEN/AV": [("ABC-001.nfo", False), ("ABC-009.mp4", False)]}
+    first = _FakeOpenList(env, entries=entries)
+    DeleteBatchService().clean_leftovers(
+        env.db, batch_id, client_115=env.client, guard=env.guard, openlist=first, apply=True
+    )
+
+    second = _FakeOpenList(env, entries=entries)
+    actions = DeleteBatchService().clean_leftovers(
+        env.db, batch_id, client_115=env.client, guard=env.guard, openlist=second, apply=True
+    )
+
+    assert actions == []
+    # 第二次仍会刷新 OpenList 缓存，但不会再调删除
+    assert [path for path, _ in second.calls] == ["/115_OPEN/AV"]
+
+
+def test_clean_leftovers_unknown_batch(env):
+    with pytest.raises(ActressError):
+        DeleteBatchService().clean_leftovers(
+            env.db, 99999, client_115=env.client, guard=env.guard, openlist=None, apply=False
+        )

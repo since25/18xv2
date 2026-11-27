@@ -384,7 +384,9 @@
               "remote_115",
               "openlist_dir",
               "source_strm",
-              "organized_dir"
+              "organized_dir",
+              "remote_leftover",
+              "source_leftover"
             ],
             "title": "Group",
             "type": "string"
@@ -409,6 +411,7 @@
               "pending",
               "deleted",
               "missing",
+              "skipped",
               "refreshed",
               "failed"
             ],

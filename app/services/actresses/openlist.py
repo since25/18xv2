@@ -27,7 +27,7 @@ def openlist_dir_for(url: str) -> str:
 
 
 class OpenListClient:
-    """只用到「强制刷新列目录」这一个接口。"""
+    """用到「强制刷新列目录」和「列目录」两个接口。"""
 
     def __init__(
         self,
@@ -59,3 +59,31 @@ class OpenListClient:
         if not isinstance(body, dict) or body.get("code") != 200:
             message = body.get("message") if isinstance(body, dict) else body
             raise OpenListError(f"OpenList 刷新失败：{path}：{message}")
+
+    def list_dir(self, path: str) -> list[tuple[str, bool]]:
+        """列出 OpenList 里一个目录的 `(名字, 是否目录)`；content 为空返回 []，失败抛 OpenListError。"""
+        payload = {"path": path, "refresh": False, "password": "", "page": 1, "per_page": 0}
+        try:
+            with httpx.Client(timeout=self._timeout, transport=self._transport) as client:
+                response = client.post(
+                    f"{self.base_url}/api/fs/list",
+                    headers={"Authorization": self._token},
+                    json=payload,
+                )
+            response.raise_for_status()
+            body = response.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            raise OpenListError(f"OpenList 列目录失败：{path}：{exc}") from exc
+        if not isinstance(body, dict) or body.get("code") != 200:
+            message = body.get("message") if isinstance(body, dict) else body
+            raise OpenListError(f"OpenList 列目录失败：{path}：{message}")
+        data = body.get("data")
+        content = data.get("content") if isinstance(data, dict) else None
+        if not isinstance(content, list):
+            return []
+        entries: list[tuple[str, bool]] = []
+        for item in content:
+            if not isinstance(item, dict) or not item.get("name"):
+                continue
+            entries.append((str(item["name"]), bool(item.get("is_dir"))))
+        return entries
