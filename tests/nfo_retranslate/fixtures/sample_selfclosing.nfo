@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<movie>
+  <title><![CDATA[FC2-1234567 某素人作品标题]]></title>
+  <originaltitle><![CDATA[FC2-1234567 ある素人作品のタイトル]]></originaltitle>
+  <sorttitle><![CDATA[FC2-1234567 ある素人作品のタイトル]]></sorttitle>
+  <customrating>JP-18+</customrating>
+  <mpaa>JP-18+</mpaa>
+  <series/>
+  <studio>FC2</studio>
+  <year>2022</year>
+  <outline/>
+  <plot />
+  <originalplot></originalplot>
+  <runtime>60</runtime>
+  <poster>poster.jpg</poster>
+  <thumb>thumb.jpg</thumb>
+  <fanart>fanart.jpg</fanart>
+  <num>FC2-1234567</num>
+  <premiered>2022-05-01</premiered>
+  <website>https://example.invalid/article/1234567/</website>
+</movie>
