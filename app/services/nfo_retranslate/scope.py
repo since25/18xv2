@@ -98,7 +98,10 @@ def load_task_sources(db_copy: str, root: str) -> dict[str, FieldSources]:
 
 
 def group_films(root: str, *, path_prefix: str | None = None) -> tuple[list[FilmGroup], list[tuple[str, str]]]:
-    """遍历 root（或其下 path_prefix 目录）里的 NFO，按「相对目录|番号」分组；返回 (分组, [(读不了的 NFO, 原因)])。"""
+    """遍历 root（或其下 path_prefix 目录）里的 NFO，按「相对目录|番号」分组；返回 (分组, [(读不了的 NFO, 原因)])。
+
+    <num> 为空的 NFO 不和别的并组，键改用「相对目录|文件名去掉 .nfo」。
+    """
     root = os.path.abspath(root)
     start = os.path.join(root, path_prefix.strip("/")) if path_prefix else root
     docs_by_key: dict[str, list[NfoDoc]] = {}
@@ -114,7 +117,8 @@ def group_films(root: str, *, path_prefix: str | None = None) -> tuple[list[Film
             except NfoError as exc:
                 errors.append((path, str(exc)))
                 continue
-            docs_by_key.setdefault(f"{rel_dir}|{doc.num}", []).append(doc)
+            num_key = doc.num if doc.num.strip() else name[: -len(".nfo")]
+            docs_by_key.setdefault(f"{rel_dir}|{num_key}", []).append(doc)
     groups = [FilmGroup(key, sorted(docs, key=lambda d: d.path)) for key, docs in docs_by_key.items()]
     groups.sort(key=lambda g: g.docs[0].path)
     errors.sort()
@@ -129,14 +133,15 @@ def has_kana(text: str) -> bool:
 def field_in_scope(field: Literal["title", "plot"], doc: NfoDoc, sources: FieldSources | None) -> bool:
     """这个 NFO 的标题或简介要不要重翻：来源不是中文站，且原文去掉番号后含假名。
 
-    找不到 MDC 任务（sources 为 None）时：标题一律不翻；简介末尾带翻译标记的才翻。
+    找不到 MDC 任务或任务没记录这个字段的来源时：标题一律不翻；简介末尾带翻译标记的才翻。
     """
     if field == "title":
-        if sources is None or sources.title in CN_SOURCES:
+        source = sources.title if sources is not None else None
+        if source is None or source in CN_SOURCES:
             return False
         return has_kana(strip_num(doc.original_title, doc.num))
     original = strip_num(plot_body(doc.original_plot), doc.num)
-    if sources is None:
+    if sources is None or sources.outline is None:
         return translator_marker(doc.plot) is not None and has_kana(original)
     return sources.outline not in CN_SOURCES and has_kana(original)
 

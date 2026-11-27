@@ -116,6 +116,8 @@ def test_field_in_scope_title():
     assert field_in_scope("title", doc, FieldSources(title="dmm", outline="dmm")) is True
     assert field_in_scope("title", doc, FieldSources(title="airav_io", outline="dmm")) is False
     assert field_in_scope("title", doc, None) is False
+    # MDC 没记录标题来源，和找不到任务一样跳过
+    assert field_in_scope("title", doc, FieldSources(title=None, outline="dmm")) is False
     no_kana = _doc(original_title="ABC-001 新人出道")
     assert field_in_scope("title", no_kana, FieldSources(title="dmm", outline="dmm")) is False
     # 假名只在番号里，去掉番号后没有假名
@@ -128,9 +130,17 @@ def test_field_in_scope_plot_follows_outline_source():
 
     assert field_in_scope("plot", doc, FieldSources(title="airav_io", outline="dmm")) is True
     assert field_in_scope("plot", doc, FieldSources(title="dmm", outline="sehuatang")) is False
-    assert field_in_scope("plot", doc, FieldSources(title="dmm", outline=None)) is True
     chinese = _doc(original_plot="订婚后的我")
     assert field_in_scope("plot", chinese, FieldSources(title="dmm", outline="dmm")) is False
+
+
+def test_field_in_scope_plot_unknown_outline_uses_marker():
+    unknown = FieldSources(title="dmm", outline=None)
+    marked = _doc(plot="旧译文<br>  <br>由 Google 提供翻译")
+    unmarked = _doc(plot="中文站给的简介")
+
+    assert field_in_scope("plot", marked, unknown) is True
+    assert field_in_scope("plot", unmarked, unknown) is False
 
 
 def test_field_in_scope_plot_without_task_uses_marker():
@@ -166,6 +176,24 @@ def test_group_films_groups_parts_and_versions(tmp_path):
     assert len(errors) == 1
     assert errors[0][0] == str(broken)
     assert errors[0][1]
+
+
+def test_group_films_empty_num_not_merged(tmp_path):
+    root = tmp_path / "302porn_tv1"
+    film_dir = root / "甲" / "无番号"
+    _write_nfo(film_dir / "片子甲.nfo", "")
+    _write_nfo(film_dir / "片子乙.nfo", "")
+    _write_nfo(film_dir / "ABC-001.nfo", "ABC-001")
+
+    groups, errors = group_films(str(root))
+
+    assert errors == []
+    assert [g.key for g in groups] == ["甲/无番号|ABC-001", "甲/无番号|片子乙", "甲/无番号|片子甲"]
+    assert [[d.path for d in g.docs] for g in groups] == [
+        [str(film_dir / "ABC-001.nfo")],
+        [str(film_dir / "片子乙.nfo")],
+        [str(film_dir / "片子甲.nfo")],
+    ]
 
 
 def test_group_films_path_prefix(tmp_path):
