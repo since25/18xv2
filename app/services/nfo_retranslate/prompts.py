@@ -28,7 +28,7 @@ _LABEL_PREFIX = re.compile(
     r"^(?:标题|简介|翻译|中文翻译|译文|中文标题|中文简介|Title|Plot|Translation)\s*[：:]", re.IGNORECASE
 )
 # 拒绝话术：只看开头，避免误伤剧情里本来就有的「对不起」「我不能」
-_REFUSAL_PREFIXES = ("抱歉", "很抱歉", "对不起", "无法翻译", "我无法", "我不能", "I cannot", "I can't", "I'm sorry")
+_REFUSAL_PREFIXES = ("抱歉", "很抱歉", "对不起", "无法翻译", "我不能", "I cannot", "I can't", "I'm sorry")
 _MIN_CHARS = 2
 _MAX_KANA_PERCENT = 15
 _MAX_TITLE_CHARS = 60
@@ -97,11 +97,13 @@ def _char_count(text: str) -> int:
 
 
 def _clean(output: str) -> str:
-    """去首尾空白，再去首尾成对的引号。"""
+    """去首尾空白，再去首尾成对的引号（中间还有同种引号时不剥，免得拆坏台词）。"""
     text = output.strip()
     for left, right in _QUOTE_PAIRS:
         if len(text) >= 2 and text.startswith(left) and text.endswith(right):
-            return text[len(left) : -len(right)].strip()
+            inner = text[len(left) : -len(right)]
+            if left not in inner and right not in inner:
+                return inner.strip()
     return text
 
 

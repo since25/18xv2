@@ -101,6 +101,7 @@ def test_validate_output_rules():
     assert _fails("title", "原文", "<think>嗯</think>麻仓忧的初次体验")
     # 拒绝话术开头
     assert _fails("title", "原文", "抱歉，我无法翻译这段内容")
+    assert _passes("title", "原文", "我无法抗拒的诱惑")
     # 假名占比 16%（25 字里 4 个假名）失败，15%（20 字里 3 个假名）通过
     assert _fails("title", "原文", "ああああ" + "好" * 21)
     assert _passes("title", "原文", "あああ" + "好" * 17)
@@ -117,6 +118,9 @@ def test_validate_output_rules():
     assert validate_output("title", "原文", "  「麻仓忧的初次体验」\n", names=[]) == ("麻仓忧的初次体验", None)
     assert validate_output("title", "原文", '"麻仓忧的初次体验"', names=[]) == ("麻仓忧的初次体验", None)
     assert validate_output("title", "原文", "“麻仓忧的初次体验”", names=[]) == ("麻仓忧的初次体验", None)
+    # 首尾都是台词时中间还有同种引号，不剥
+    assert validate_output("title", "原文", "「A」和「B」", names=[]) == ("「A」和「B」", None)
+    assert validate_output("title", "原文", '"A" 和 "B"', names=[]) == ('"A" 和 "B"', None)
     assert validate_output("plot", "第一段\n第二段", "第一段译文\n第二段译文", names=[]) == ("第一段译文\n第二段译文", None)
 
 
