@@ -31,7 +31,8 @@ _LABEL_PREFIX = re.compile(
 _REFUSAL_PREFIXES = ("抱歉", "很抱歉", "对不起", "无法翻译", "我不能", "I cannot", "I can't", "I'm sorry")
 _MIN_CHARS = 2
 _MAX_KANA_PERCENT = 15
-_MAX_TITLE_CHARS = 60
+# 日文原标题常有 100 字以上，译文约为原文 0.7 倍；超过这个数多半是模型跑偏（2026-11-28 由 60 放宽）
+_MAX_TITLE_CHARS = 120
 
 
 def load_actor_glossary(path: str) -> dict[str, tuple[str, ...]]:

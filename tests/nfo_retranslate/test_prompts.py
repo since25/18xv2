@@ -105,9 +105,9 @@ def test_validate_output_rules():
     # 假名占比 16%（25 字里 4 个假名）失败，15%（20 字里 3 个假名）通过
     assert _fails("title", "原文", "ああああ" + "好" * 21)
     assert _passes("title", "原文", "あああ" + "好" * 17)
-    # 标题 61 字失败，60 字通过
-    assert _fails("title", "原文", "好" * 61)
-    assert _passes("title", "原文", "好" * 60)
+    # 标题 121 字失败，120 字通过（日文原标题常有 100 字以上，译文约为原文 0.7 倍）
+    assert _fails("title", "原文", "好" * 121)
+    assert _passes("title", "原文", "好" * 120)
     # 简介短于原文 20% 或长于 3 倍失败，边界通过
     source = "あ" * 100
     assert _fails("plot", source, "好" * 19)
