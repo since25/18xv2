@@ -92,10 +92,25 @@ def split_title(title: str, num: str) -> tuple[str, str] | None:
     return rest[: len(rest) - len(suffix)].strip(), suffix
 
 
+def _num_pattern(num: str) -> re.Pattern[str]:
+    """番号在标题开头可能出现的写法：番号本身、去掉数字前缀的番号（200GANA-1581 → GANA-1581）、
+    FC2 的 FC2-PPV-编号 / FC2-PPV 编号；不分大小写，后面不能再连着字母或数字。"""
+    variants = [re.escape(num)]
+    prefixed = re.fullmatch(r"\d+([A-Za-z].*)", num)
+    if prefixed:
+        variants.append(re.escape(prefixed.group(1)))
+    fc2 = re.fullmatch(r"FC2-(\d+)", num, re.IGNORECASE)
+    if fc2:
+        variants.append(rf"FC2[-_ ]?PPV[-_ ]?{fc2.group(1)}")
+    return re.compile(rf"\s*(?:{'|'.join(variants)})(?![0-9A-Za-z])", re.IGNORECASE)
+
+
 def strip_num(text: str, num: str) -> str:
-    """去掉开头的番号和空白；不以番号开头就只去首尾空白。"""
-    if num and text.startswith(num):
-        text = text[len(num):]
+    """去掉开头的番号（含 _num_pattern 里的各种写法，连写多遍的都去掉）和首尾空白。"""
+    if num:
+        pattern = _num_pattern(num)
+        while match := pattern.match(text):
+            text = text[match.end():]
     return text.strip()
 
 

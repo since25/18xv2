@@ -94,6 +94,34 @@ def test_strip_num_and_plot_body():
     assert plot_body("第一段<br>第二段<br>  <br>由 Google 提供翻译") == "第一段\n第二段"
 
 
+@pytest.mark.parametrize(
+    ("text", "num", "expected"),
+    [
+        # FC2 原标题去掉番号后还带一遍 FC2-PPV 编号（生产库 163 个），写回会和番号重复
+        ("FC2-4343195 FC2-PPV-4343195 【無修正】ぽっちゃり", "FC2-4343195", "【無修正】ぽっちゃり"),
+        ("FC2-PPV-4343195 【无修正】微胖控", "FC2-4343195", "【无修正】微胖控"),
+        ("FC2-PPV 4329940 3/12截止！", "FC2-4329940", "3/12截止！"),
+        # 模型输出小写也要去掉
+        ("fc2-ppv-4343195 微胖控", "FC2-4343195", "微胖控"),
+        # 番号连写两遍
+        ("KA-001 KA-001 淫妄责 立花里子", "KA-001", "淫妄责 立花里子"),
+        # 番号带数字前缀，原标题里不带前缀
+        ("200GANA-1581 GANA-1581 ジョギングナンパ 14", "200GANA-1581", "ジョギングナンパ 14"),
+    ],
+)
+def test_strip_num_removes_repeated_num_variants(text, num, expected):
+    assert strip_num(text, num) == expected
+
+
+def test_strip_num_keeps_other_numbers():
+    # 只是前缀相同、后面还连着数字的，不算番号
+    assert strip_num("ABC-1234 标题", "ABC-123") == "ABC-1234 标题"
+    # 编号不同的 FC2 不去
+    assert strip_num("FC2-PPV-999 标题", "FC2-4343195") == "FC2-PPV-999 标题"
+    # 系列名里的期数不是番号
+    assert strip_num("SMBD-115 S Model 115 恥辱の中出し授業", "SMBD-115") == "S Model 115 恥辱の中出し授業"
+
+
 def test_build_title_and_plot():
     assert build_title("ABC-001", "新标题", " cd1") == "ABC-001 新标题 cd1"
     assert build_plot("甲\n乙", "qwen38") == "甲<br>乙<br>  <br>由 qwen38 提供翻译"
