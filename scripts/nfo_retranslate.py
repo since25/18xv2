@@ -15,6 +15,7 @@ import argparse
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime
+import hashlib
 import json
 import logging
 import os
@@ -55,6 +56,8 @@ from app.services.nfo_retranslate.translator import TranslateJob, TranslatorClie
 BASE_DIR = "data/nfo_retranslate"
 # 运行元数据：只放模型名、运行编号、命令参数、选中的组，不放接口地址和密钥
 META_FILE = "run.json"
+# 运行目录里的翻译记录文件名（和 runs.py 一致）；报告覆盖的记录指纹按它算
+TRANSLATIONS_FILE = "translations.jsonl"
 # 找不到 MDC 任务的 NFO 超过这个数，多半是旧版残留还没清
 MAX_ORPHANS = 100
 # MDC 任务和可写根目录里 302porn_tv1 的目录名，用来从 MEDIA_LIBRARY_STRM_ROOTS 里挑只读根
@@ -118,6 +121,16 @@ def read_run_meta(run: RunDir) -> dict | None:
     except (OSError, ValueError):
         return None
     return meta if isinstance(meta, dict) else None
+
+
+def translations_fingerprint(run: RunDir) -> dict:
+    """translations.jsonl 的字节数和 sha256；文件不存在时按空文件算。"""
+    try:
+        with open(os.path.join(run.path, TRANSLATIONS_FILE), "rb") as fh:
+            data = fh.read()
+    except FileNotFoundError:
+        data = b""
+    return {"size": len(data), "sha256": hashlib.sha256(data).hexdigest()}
 
 
 def _meta_model(run: RunDir) -> str | None:
@@ -239,6 +252,9 @@ def _translate(args: argparse.Namespace) -> int:
         if meta["model"] != model:
             print(f"这次运行用的模型是 {meta['model']}，当前配置是 {model}；换模型请重新 translate，不要续跑")
             return 1
+        # 续跑会追加记录，旧报告作废；新报告写完再记指纹，中途被杀也不能 apply
+        if meta.pop("report", None) is not None:
+            write_run_meta(run, meta)
     else:
         try:
             run = RunDir.create(BASE_DIR)
@@ -339,6 +355,9 @@ def _translate(args: argparse.Namespace) -> int:
 
     all_records = latest_translations(run.load_translations())
     write_report(run.report_path, all_records, model=model, run_id=run.run_id)
+    # 记下这份报告覆盖的记录；apply 只认和它一致的 translations.jsonl
+    meta["report"] = translations_fingerprint(run)
+    write_run_meta(run, meta)
     failed = sum(1 for rec in all_records if rec.error is not None)
     print(f"报告：{os.path.join(BASE_DIR, run.run_id, 'report.html')}")
     print(
@@ -435,6 +454,13 @@ def _apply(args: argparse.Namespace) -> int:
         return 1
     model = _meta_model(run)
     if model is None:
+        return 1
+    report = (read_run_meta(run) or {}).get("report")
+    if report is None or report != translations_fingerprint(run) or not os.path.isfile(run.report_path):
+        print(
+            "这次运行的报告没生成完，或报告之后翻译记录又有变化，不写回；"
+            f"先 translate --resume {run.run_id} 重新生成报告，看过再 apply"
+        )
         return 1
     settings = get_settings()
     if not getattr(settings, "nfo_translate_root", None):

@@ -76,7 +76,7 @@ docker exec docker-app-1 python scripts/nfo_retranslate.py restore --run 2026112
 | `--skip 文件` | 跳过名单：每行一个 NFO 路径或一个番号；番号跳过这次运行里这部片的全部 NFO；空行和 `#` 开头的行忽略 |
 | `--no-refresh` | 不刷新 Jellyfin，写完后在 18x 里手动扫描 Jellyfin 库 |
 
-`apply` 只写这次运行里通过检查的译文，不再调用模型。写之前核对文件和 `translate` 时的哈希，不一致（期间被 MDC 或别人改过）就跳过。汇总会分开列出：写入数、跳过名单、翻译失败不写、文件被改动或读写出错。
+`apply` 只写这次运行里通过检查的译文，不再调用模型。`translate` 没正常结束（容器重启、`docker stop`、出错退出，或还在跑）时，报告和翻译记录对不上，`apply` 会拒绝并退出；先用 `translate --resume <运行编号>` 补完、重新生成报告，看过再 `apply`。写之前核对文件和 `translate` 时的哈希，不一致（期间被 MDC 或别人改过）就跳过。汇总会分开列出：写入数、跳过名单、翻译失败不写、文件被改动或读写出错。
 
 ### restore 参数
 
@@ -100,7 +100,7 @@ docker exec docker-app-1 python scripts/nfo_retranslate.py restore --run 2026112
 
 | 文件 | 内容 |
 |---|---|
-| `run.json` | 模型名、运行编号、命令参数、`--sample`/`--limit` 选中的片子 |
+| `run.json` | 模型名、运行编号、命令参数、`--sample`/`--limit` 选中的片子、报告覆盖的翻译记录指纹 |
 | `translations.jsonl` | 每部片每个字段一行：原文、旧译、新译、检查结果、要写的 NFO 和它们的哈希 |
 | `report.html` | 报告 |
 | `mdc/` | 这次运行用的 MDC 库副本 |

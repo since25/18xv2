@@ -513,3 +513,52 @@ def test_apply_summary_splits_skip_reasons(env, capsys):
     assert "写入：1" in out
     assert "翻译失败不写：0" in out
     assert "文件被改动或读写出错：1" in out
+
+
+def _fingerprint_case(env: Env, cli):
+    group_a, b = _two_groups(env)
+    paths = [*group_a, b]
+    before = _snapshot(paths)
+    assert env.run("translate") == 0
+    run = env.only_run()
+    return run, paths, before
+
+
+def test_apply_refuses_without_report_fingerprint(env, cli, capsys):
+    run, paths, before = _fingerprint_case(env, cli)
+    meta = cli.read_run_meta(run)
+    del meta["report"]
+    # 模拟 translate 被杀、没生成报告
+    cli.write_run_meta(run, meta)
+    capsys.readouterr()
+
+    assert env.run("apply", "--run", run.run_id, "--no-refresh") == 1
+
+    assert f"--resume {run.run_id}" in capsys.readouterr().out
+    assert _snapshot(paths) == before
+
+
+def test_apply_refuses_when_records_changed_after_report(env, cli):
+    run, paths, before = _fingerprint_case(env, cli)
+    last = run.load_translations()[-1]
+    run.append_translation(last)
+
+    assert env.run("apply", "--run", run.run_id, "--no-refresh") == 1
+    assert _snapshot(paths) == before
+
+
+def test_resume_drops_old_fingerprint_until_new_report(env, cli, monkeypatch):
+    run, paths, before = _fingerprint_case(env, cli)
+    assert "report" in cli.read_run_meta(run)
+
+    def killed(*_args, **_kwargs):
+        raise SystemExit("被杀")
+
+    # 续跑在写新报告之前就被杀
+    monkeypatch.setattr(cli, "write_report", killed)
+    with pytest.raises(SystemExit):
+        env.run("translate", "--resume", run.run_id)
+
+    assert "report" not in cli.read_run_meta(run)
+    assert env.run("apply", "--run", run.run_id, "--no-refresh") == 1
+    assert _snapshot(paths) == before
