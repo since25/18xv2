@@ -219,8 +219,8 @@ def _field_jobs(
             parts = split_title(source.title, source.num)
             old_text = parts[0] if parts else source.title
         else:
-            # 原简介里也可能有 <br>，统一换成换行
-            source_text = plot_body(source.original_plot)
+            # 原简介里也可能有 <br>，统一换成换行；开头的番号（如 FC2-PPV-编号）去掉，免得模型照抄
+            source_text = strip_num(plot_body(source.original_plot), source.num)
             old_text = plot_body(source.plot)
         jobs.append(FieldJob(group, field, source, source_text, old_text, targets))
     return jobs
@@ -386,10 +386,10 @@ def _translate(args: argparse.Namespace) -> int:
     def on_result(tjob: TranslateJob, text: str | None, reason: str | None) -> None:
         job = field_jobs[(tjob.key, tjob.field)]
         new_text, error = None, reason or None
-        if text is not None and error is None and job.field == "title":
-            # 模型常在开头带上番号，build_title 还会再拼一次
+        if text is not None and error is None:
+            # 模型常在开头带上番号：标题 build_title 还会再拼一次；简介开头也不要
             text = strip_num(text.strip(), job.source_doc.num)
-            if "\n" in text or "\r" in text:
+            if job.field == "title" and ("\n" in text or "\r" in text):
                 error = "标题译文含换行"
         if text is not None and error is None:
             names = known_names(job.source_doc.actors, glossary)

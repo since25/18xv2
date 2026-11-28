@@ -749,6 +749,21 @@ def test_title_output_strips_num_and_rejects_newline(env):
     assert rec.error == "标题译文含换行"
 
 
+def test_plot_strips_leading_num(env):
+    """简介原文开头的番号（含 FC2-PPV 写法）送翻译前去掉；模型输出的简介开头带番号也去掉。"""
+    path = env.nfo("乙/FC2-4343195/FC2-4343195.nfo", "FC2-4343195", _JP)
+    raw = Path(path).read_bytes().decode("utf-8")
+    Path(path).write_bytes(raw.replace("<originalplot>", "<originalplot>FC2-PPV-4343195 ", 1).encode("utf-8"))
+    FakeTranslator.outputs = {"plot": f"FC2-PPV-4343195 {_PLOT_OUT}"}
+
+    assert env.run("translate", "--fields", "plot") == 0
+
+    rec = env.runs()[-1].load_translations()[0]
+    assert not rec.source_text.startswith("FC2-PPV")
+    assert all("FC2-PPV-4343195" not in msg for msg in FakeTranslator.calls)
+    assert rec.new_text == _PLOT_OUT and rec.error is None
+
+
 def test_translate_prints_progress(env, capsys):
     """I4：翻译过程中打印进度。"""
     _two_groups(env)
