@@ -97,6 +97,8 @@ def test_strip_num_and_plot_body():
 def test_build_title_and_plot():
     assert build_title("ABC-001", "新标题", " cd1") == "ABC-001 新标题 cd1"
     assert build_plot("甲\n乙", "qwen38") == "甲<br>乙<br>  <br>由 qwen38 提供翻译"
+    # 模型输出 \r\n 或 \r 时不留下 \r
+    assert build_plot("甲\r\n乙\r丙", "qwen38") == "甲<br>乙<br>丙<br>  <br>由 qwen38 提供翻译"
 
 
 def test_replace_fields_only_touches_three_tags():

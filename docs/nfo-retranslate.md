@@ -22,7 +22,7 @@
 | `NFO_TRANSLATE_API_KEY` | 接口密钥，只放生产 `.env` |
 | `NFO_TRANSLATE_MODEL` | 模型名，同时写进简介结尾「由 X 提供翻译」 |
 | `NFO_TRANSLATE_ROOT` | 302porn_tv1 的可写根目录 |
-| `NFO_TRANSLATE_MDC_DB` | MDC 数据库，默认 `/app/mdc/mdc_ng.db`（只读，每次运行先复制一份） |
+| `NFO_TRANSLATE_MDC_DB` | MDC 数据库，默认 `/app/mdc/mdc_ng.db`（只读，每次运行先复制到临时目录读，读完即删） |
 | `NFO_TRANSLATE_NAME_MAP` | MDC 演员对照表，默认 `/app/mdc/mapping_actor.xml`（只读） |
 
 刷新 Jellyfin 另外用到现有的 `JELLYFIN_BASE_URL`、`JELLYFIN_API_KEY`，以及 `MEDIA_LIBRARY_STRM_ROOTS` 里含 `302porn_tv1` 的那一项（只读挂载路径，用来查 Jellyfin 条目）。
@@ -40,9 +40,9 @@
 
 ```bash
 # 第一步：翻译并出报告（不改 NFO）
-docker exec -d docker-app-1 sh -c "python scripts/nfo_retranslate.py translate --sample 20 > data/nfo_retranslate/translate.log 2>&1"
+docker exec -d docker-app-1 sh -c "mkdir -p data/nfo_retranslate && python -u scripts/nfo_retranslate.py translate --sample 20 > data/nfo_retranslate/translate.log 2>&1"
 
-# 看进度和结果（最后几行有运行编号、报告路径和汇总）
+# 看进度和结果（每完成 50 个字段打印一行「已完成 N/总数，失败 M」；结束时有运行编号、报告路径和汇总）
 docker exec docker-app-1 tail -n 20 data/nfo_retranslate/translate.log
 
 # 第二步：看过报告，把这次运行的译文写回 NFO，并逐条刷新 Jellyfin
@@ -62,11 +62,13 @@ docker exec docker-app-1 python scripts/nfo_retranslate.py restore --run 2026112
 | `--path-prefix 目录` | 只翻根目录下这个子目录（例如某个演员目录）；目录不存在会报错退出 |
 | `--engine Google` | 只翻简介标记为「由 Google 提供翻译」的片子，先处理质量最差的旧译 |
 | `--workers 8` | 并发请求数，默认 8 |
-| `--resume 运行编号` | 续跑中断的那次运行：已有记录的字段不再翻；`--sample`/`--limit` 当初选中的片子不变 |
+| `--resume 运行编号` | 续跑中断的那次运行：已有记录的字段不再翻；沿用原运行的参数和当初选中的片子 |
 | `--redo` | 已写入记录里的 NFO 也重翻（默认跳过上次写入后没被改过的） |
 | `--force` | 找不到 MDC 任务的 NFO 超过 100 个也继续 |
 
-中断后用同样的命令加 `--resume <运行编号>` 继续。续跑时当前配置的模型必须和这次运行记下的一致，否则报错退出。
+中断后用 `translate --resume <运行编号>` 继续，不用再带别的参数：`--fields`、`--path-prefix`、`--engine`、`--redo`、`--force`、`--limit`、`--sample` 都沿用原运行的；另给了不同的值会报错退出。续跑时当前配置的模型必须和这次运行记下的一致，否则也报错退出。
+
+翻译失败的字段续跑不会重翻（已有记录）。要补这些字段：先 `apply` 这次运行，再开一次新的 `translate`，已写入的会自动跳过，只会翻失败的那些。
 
 ### apply 参数
 
@@ -103,7 +105,6 @@ docker exec docker-app-1 python scripts/nfo_retranslate.py restore --run 2026112
 | `run.json` | 模型名、运行编号、命令参数、`--sample`/`--limit` 选中的片子、报告覆盖的翻译记录指纹 |
 | `translations.jsonl` | 每部片每个字段一行：原文、旧译、新译、检查结果、要写的 NFO 和它们的哈希 |
 | `report.html` | 报告 |
-| `mdc/` | 这次运行用的 MDC 库副本 |
 | `apply.jsonl` | 每次 `apply` 的写入结果、跳过原因、Jellyfin 刷新结果 |
 | `backup/` | `apply` 写之前的原文件，按相对路径存放 |
 
@@ -127,6 +128,7 @@ docker exec docker-app-1 python scripts/nfo_retranslate.py restore --run 2026112
 
 本次开发没有调用过真实翻译接口，测试全用假模型。第一次上线：
 
-1. 先 `translate --sample 20`，看报告再决定是否 `apply`、是否调提示词或换模型。
-2. 人工抽查一份真实 NFO 的演员对照表命中情况：NFO 里的演员名是 MDC 换好的 `zh_cn` 写法，脚本按 `zh_cn` 查对照表，把日文写法和别名带给模型。抽一部演员有日文名的片子，确认报告里的新译文用了中文写法。
-3. 满意后对这 20 部 `apply`，在 Jellyfin 里抽查；再按 `--engine Google`、全量的顺序分批跑，每批都先看报告。
+1. 试跑前确认模型的思考模式已关闭（qwen3 系列默认会输出 `<think>`，所有字段都会因「含思考标签」失败）。
+2. 先 `translate --sample 20`，看报告再决定是否 `apply`、是否调提示词或换模型。
+3. 人工抽查一份真实 NFO 的演员对照表命中情况：NFO 里的演员名是 MDC 换好的 `zh_cn` 写法，脚本按 `zh_cn` 查对照表，把日文写法和别名带给模型。抽一部演员有日文名的片子，确认报告里的新译文用了中文写法。
+4. 满意后对这 20 部 `apply`，在 Jellyfin 里抽查；再按 `--engine Google`、全量的顺序分批跑，每批都先看报告。

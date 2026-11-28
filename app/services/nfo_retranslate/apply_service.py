@@ -6,7 +6,7 @@ apply 只用运行目录里的 translations.jsonl，不再调用模型。每个 
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 import os
@@ -53,10 +53,15 @@ class ApplyResult:
     missing_items: list[str]
 
 
-def _records_by_path(run: RunDir) -> dict[str, dict[str, TranslationRecord]]:
-    """按 NFO 路径汇总：路径 → 字段 → 记录；同一部片同一字段以最后一条为准，和报告一致。"""
+def _records_by_path(
+    run: RunDir, records: Sequence[TranslationRecord] | None = None
+) -> dict[str, dict[str, TranslationRecord]]:
+    """按 NFO 路径汇总：路径 → 字段 → 记录；同一部片同一字段以最后一条为准，和报告一致。
+
+    records 不传时读运行目录里的 translations.jsonl。
+    """
     by_path: dict[str, dict[str, TranslationRecord]] = {}
-    for rec in latest_translations(run.load_translations()):
+    for rec in latest_translations(run.load_translations() if records is None else records):
         for path in rec.targets:
             by_path.setdefault(path, {})[rec.field] = rec
     return by_path
@@ -140,8 +145,11 @@ def apply_run(
     model: str,
     skip_paths: set[str],
     refresher: Refresher | None,
+    records: Sequence[TranslationRecord] | None = None,
 ) -> ApplyResult:
     """把这次运行里通过检查的译文写回 NFO，最后刷新写过的条目。
+
+    records 是调用方已核对过的翻译记录；不传时读运行目录里的 translations.jsonl。
 
     root 是 NFO 可写根目录，备份放在 backup/<相对 root 的路径>。译文为空或带错误原因的字段、
     skip_paths 里的文件不写；单个文件出错只记进 skipped，不中断其余文件。
@@ -155,12 +163,12 @@ def apply_run(
         skipped.append((path, reason))
         run.append_apply({"path": path, "skipped": reason})
 
-    for path, records in sorted(_records_by_path(run).items()):
+    for path, path_records in sorted(_records_by_path(run, records).items()):
         if path in skip_paths:
             skip(path, "在跳过名单里，不写")
             continue
         usable: dict[str, TranslationRecord] = {}
-        for field_name, rec in records.items():
+        for field_name, rec in path_records.items():
             if rec.new_text is None or rec.error:
                 skip(path, f"{_FIELD_NAMES.get(field_name, field_name)}没有可写的译文：{rec.error or '译文为空'}")
             else:

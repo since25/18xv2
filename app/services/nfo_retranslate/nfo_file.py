@@ -116,8 +116,9 @@ def build_title(num: str, translated: str, part_suffix: str) -> str:
 
 
 def build_plot(translated: str, model: str) -> str:
-    """新简介 = 译文（换行改成 <br>）+ 结尾翻译标记。"""
-    return translated.replace("\n", "<br>") + f"<br>  <br>由 {model} 提供翻译"
+    """新简介 = 译文（各种换行写法先统一成换行符，再改成 <br>）+ 结尾翻译标记。"""
+    text = translated.replace("\r\n", "\n").replace("\r", "\n")
+    return text.replace("\n", "<br>") + f"<br>  <br>由 {model} 提供翻译"
 
 
 def _cdata(text: str) -> str:

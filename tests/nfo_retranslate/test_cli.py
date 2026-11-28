@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import random
 import sqlite3
+import subprocess
 import sys
 from types import SimpleNamespace
 
@@ -562,3 +563,216 @@ def test_resume_drops_old_fingerprint_until_new_report(env, cli, monkeypatch):
     assert "report" not in cli.read_run_meta(run)
     assert env.run("apply", "--run", run.run_id, "--no-refresh") == 1
     assert _snapshot(paths) == before
+
+
+# ---------- 整体审查修复 ----------
+
+
+def test_script_configures_mappers_in_fresh_interpreter():
+    """C1：单独运行脚本时 ORM 映射能配置成功（Jellyfin 条目查询要用）。"""
+    code = (
+        "import importlib.util, sys\n"
+        f"spec = importlib.util.spec_from_file_location('nfo_cli', {str(SCRIPT)!r})\n"
+        "m = importlib.util.module_from_spec(spec)\n"
+        "sys.modules['nfo_cli'] = m\n"
+        "spec.loader.exec_module(m)\n"
+        "from sqlalchemy.orm import configure_mappers\n"
+        "configure_mappers()\n"
+        "print('ok')\n"
+    )
+    repo = SCRIPT.parents[1]
+    env = {**os.environ, "PYTHONPATH": str(repo)}
+    result = subprocess.run(
+        [sys.executable, "-c", code], cwd=repo, env=env, capture_output=True, text=True, timeout=120
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip().endswith("ok")
+
+
+def _raising_refresher(calls: list):
+    def factory(db, client_factory, *, root, strm_root, **_kwargs):
+        def refresh(paths):
+            calls.append(list(paths))
+            raise RuntimeError("映射配置失败")
+
+        return refresh
+
+    return factory
+
+
+def test_refresh_exception_is_recorded_not_raised(env, cli, monkeypatch, capsys):
+    """C1：刷新阶段抛普通异常时，apply/restore 照常结束、打印汇总，NFO 不回滚。"""
+    group_a, b = _two_groups(env)
+    paths = [*group_a, b]
+    before = _snapshot(paths)
+    calls: list = []
+    monkeypatch.setattr(cli, "make_refresher", _raising_refresher(calls))
+    monkeypatch.setattr(cli, "SessionLocal", lambda: nullcontext(None))
+    assert env.run("translate") == 0
+    run = env.only_run()
+    capsys.readouterr()
+
+    assert env.run("apply", "--run", run.run_id) == 0
+
+    out = capsys.readouterr().out
+    assert "写入：3" in out
+    assert "刷新出错：RuntimeError" in out
+    assert "兜底" in out
+    assert all(Path(path).read_bytes() != before[path] for path in paths)
+    refresh_row = run.load_apply()[-1]["refresh"]
+    assert refresh_row["refreshed"] == 0
+    assert "RuntimeError" in refresh_row["failed"][0][1]
+
+    assert env.run("restore", "--run", run.run_id) == 0
+    out = capsys.readouterr().out
+    assert "还原：3" in out and "兜底" in out
+    assert _snapshot(paths) == before
+    assert len(calls) == 2
+
+
+def test_resume_reuses_original_args(env, cli, capsys):
+    """I1：原运行带 --engine，续跑不带参数也只处理原来筛中的组。"""
+    group_a, b = _two_groups(env)
+    for path in group_a:
+        Path(path).write_bytes(Path(path).read_bytes().replace("由 OpenAI 提供翻译".encode(), "由 Google 提供翻译".encode()))
+    # 甲组标题翻完、简介时按了 Ctrl-C
+    FakeTranslator.outputs = {"plot": KeyboardInterrupt()}
+    assert env.run("translate", "--engine", "Google", "--workers", "1") == 130
+    run = env.only_run()
+    FakeTranslator.outputs = {}
+    FakeTranslator.calls = []
+
+    assert env.run("translate", "--resume", run.run_id) == 0
+
+    assert len(FakeTranslator.calls) == 1
+    assert "番号：ABC-001" in FakeTranslator.calls[0]
+    assert {rec.num for rec in run.load_translations()} == {"ABC-001"}
+
+
+def test_resume_rejects_changed_args(env, cli, capsys):
+    """I1：续跑时给了和原运行不同的参数就拒绝；给相同的值可以。"""
+    _two_groups(env)
+    assert env.run("translate", "--engine", "OpenAI") == 0
+    run = env.only_run()
+    capsys.readouterr()
+    FakeTranslator.calls = []
+
+    for extra in (["--engine", "Google"], ["--limit", "1"], ["--fields", "title"], ["--path-prefix", "甲"], ["--redo"]):
+        assert env.run("translate", "--resume", run.run_id, *extra) == 1
+        assert "续跑沿用原运行参数" in capsys.readouterr().out
+    assert FakeTranslator.calls == []
+
+    assert env.run("translate", "--resume", run.run_id, "--engine", "OpenAI") == 0
+
+
+def test_translate_fingerprint_matches_report_bytes(env, cli, monkeypatch, capsys):
+    """I2：报告写完、记指纹前文件被追加，指纹仍是报告用的那份，apply 拒绝。"""
+    group_a, b = _two_groups(env)
+    paths = [*group_a, b]
+    before = _snapshot(paths)
+    real_write_report = cli.write_report
+
+    def write_then_append(path, records, **kwargs):
+        real_write_report(path, records, **kwargs)
+        run = env.only_run()
+        extra = run.load_translations()[-1]
+        run.append_translation(extra)
+
+    monkeypatch.setattr(cli, "write_report", write_then_append)
+    assert env.run("translate") == 0
+    run = env.only_run()
+    meta = cli.read_run_meta(run)
+    current = Path(run.path, "translations.jsonl").read_bytes()
+    assert meta["report"]["size"] < len(current)
+
+    assert env.run("apply", "--run", run.run_id, "--no-refresh") == 1
+    assert _snapshot(paths) == before
+
+
+def test_apply_uses_checked_records_only(env, cli, monkeypatch):
+    """I2：apply 核对指纹之后文件被追加，新追加的记录不会写进 NFO。"""
+    _, b = _two_groups(env)
+    assert env.run("translate") == 0
+    run = env.only_run()
+    real_apply_run = cli.apply_run
+
+    def append_then_apply(run_dir, **kwargs):
+        late = next(rec for rec in run_dir.load_translations() if rec.num == "DEF-002")
+        late.new_text = "核对之后才追加的译文，不该写进去。"
+        run_dir.append_translation(late)
+        return real_apply_run(run_dir, **kwargs)
+
+    monkeypatch.setattr(cli, "apply_run", append_then_apply)
+
+    assert env.run("apply", "--run", run.run_id, "--no-refresh") == 0
+
+    plot = read_nfo(b).plot
+    assert "不该写进去" not in plot
+    assert plot.startswith(_PLOT_OUT.replace("\n", "<br>"))
+
+
+def test_title_output_strips_num_and_rejects_newline(env):
+    """I3：标题译文开头的番号去掉；含换行的判失败。"""
+    _two_groups(env)
+    FakeTranslator.outputs = {"title": f"ABC-001 {_TITLE_OUT}"}
+    assert env.run("translate", "--fields", "title") == 0
+    rec = env.runs()[-1].load_translations()[0]
+    assert rec.new_text == _TITLE_OUT and rec.error is None
+
+    FakeTranslator.outputs = {"title": f"{_TITLE_OUT}\n（注：人名保留原文）"}
+    assert env.run("translate", "--fields", "title") == 0
+    rec = env.runs()[-1].load_translations()[0]
+    assert rec.new_text is None
+    assert rec.error == "标题译文含换行"
+
+
+def test_translate_prints_progress(env, capsys):
+    """I4：翻译过程中打印进度。"""
+    _two_groups(env)
+
+    assert env.run("translate") == 0
+
+    assert "已完成 3/3，失败 0" in capsys.readouterr().out
+
+
+def test_mdc_copy_not_kept_in_run_dir(env):
+    """I5：MDC 库副本读完即删，运行目录里没有 mdc/ 和 .db 文件。"""
+    _two_groups(env)
+
+    assert env.run("translate") == 0
+
+    run = env.only_run()
+    assert not os.path.exists(os.path.join(run.path, "mdc"))
+    for _dirpath, _dirs, files in os.walk(run.path):
+        assert not [name for name in files if ".db" in name]
+
+
+def test_source_doc_is_first_target(env):
+    """M1：组内第一个 NFO 被已写入记录跳过时，原文和旧译文取实际要写的那个。"""
+    group_a, _ = _two_groups(env)
+    second = Path(group_a[1])
+    second.write_bytes(second.read_bytes().replace("订婚后的我被两位上司在耳边低语诱惑".encode(), "第二段的旧标题".encode(), 1))
+    sha = sha256_text(Path(group_a[0]).read_bytes().decode("utf-8"))
+    os.makedirs(env.base)
+    append_ledger(env.base, group_a[0], LedgerEntry(sha256_after=sha, fields=frozenset({"title", "plot"}), model="x"))
+
+    assert env.run("translate", "--fields", "title") == 0
+
+    rec = env.only_run().load_translations()[0]
+    assert list(rec.targets) == [group_a[1]]
+    assert rec.old_text == "第二段的旧标题"
+
+
+def test_strm_root_matches_directory_name(env, cli, monkeypatch):
+    """M2：只认目录名正好是 302porn_tv1 的那一项。"""
+    _two_groups(env)
+    wanted = str(env.tmp / "strm" / "302porn_tv1")
+    env.settings.media_library_strm_roots = [str(env.tmp / "old" / "302porn_tv1_backup"), wanted]
+    calls: list = []
+    monkeypatch.setattr(cli, "make_refresher", _fake_refresher(calls))
+    monkeypatch.setattr(cli, "SessionLocal", lambda: nullcontext(None))
+    assert env.run("translate") == 0
+
+    assert env.run("apply", "--run", env.only_run().run_id) == 0
+
+    assert calls[0]["strm_root"] == wanted
