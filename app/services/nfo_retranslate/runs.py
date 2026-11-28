@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 import contextlib
 from dataclasses import asdict, dataclass
 from datetime import datetime
@@ -37,6 +37,15 @@ class TranslationRecord:
     new_text: str | None
     error: str | None
     targets: dict[str, str]
+
+
+def latest_translations(records: Sequence[TranslationRecord]) -> list[TranslationRecord]:
+    """同一部片同一字段有多条记录（续跑补翻）时只留最后一条；按这部片这个字段第一次出现的位置排列。
+
+    报告和 apply 都用它，报告里看到的就是实际写进去的。
+    """
+    latest = {(rec.group_key, rec.field): rec for rec in records}
+    return list(latest.values())
 
 
 @dataclass(frozen=True)

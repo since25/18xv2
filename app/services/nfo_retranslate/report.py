@@ -9,7 +9,7 @@ from collections import Counter
 from collections.abc import Sequence
 from html import escape
 
-from app.services.nfo_retranslate.runs import TranslationRecord
+from app.services.nfo_retranslate.runs import TranslationRecord, latest_translations
 
 _FIELD_NAMES = {"title": "标题", "plot": "简介"}
 _FIELD_ORDER = {"title": 0, "plot": 1}
@@ -39,8 +39,9 @@ def write_report(path: str, records: Sequence[TranslationRecord], *, model: str,
 
     同一部片同一字段有多条记录（续跑补翻）时以最后一条为准，和 apply 一致。
     """
-    latest = {(rec.group_key, rec.field): rec for rec in records}
-    rows = sorted(latest.values(), key=lambda rec: (rec.group_key, _FIELD_ORDER.get(rec.field, len(_FIELD_ORDER))))
+    rows = sorted(
+        latest_translations(records), key=lambda rec: (rec.group_key, _FIELD_ORDER.get(rec.field, len(_FIELD_ORDER)))
+    )
     failed = [rec for rec in rows if rec.error is not None]
     films = len({rec.group_key for rec in rows})
 

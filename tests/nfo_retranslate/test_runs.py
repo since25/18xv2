@@ -13,6 +13,7 @@ from app.services.nfo_retranslate.runs import (
     TranslationRecord,
     append_ledger,
     drop_ledger,
+    latest_translations,
     load_ledger,
 )
 
@@ -114,3 +115,16 @@ def test_ledger_last_entry_wins_and_drop(tmp_path):
 
     drop_ledger(base, iter(["/media/甲.nfo"]))
     assert load_ledger(base) == {"/media/乙.nfo": other}
+
+
+def test_latest_translations_last_record_wins():
+    first_try = _rec("甲|ABC-001", new_text=None, error="翻译接口请求失败（HTTP 500，已尝试 4 次）")
+    plot = _rec("甲|ABC-001", "plot")
+    other = _rec("乙|XYZ-002", num="XYZ-002")
+    # 续跑补翻：同一部片同一字段的后一条覆盖前一条，位置按第一次出现
+    retry = _rec("甲|ABC-001", new_text="补翻成功的标题")
+    # 反过来，先成功后失败的也以失败那条为准
+    plot_redo_failed = _rec("甲|ABC-001", "plot", new_text=None, error="假名占比超过 15%，疑似没翻")
+
+    assert latest_translations([first_try, plot, other, retry, plot_redo_failed]) == [retry, plot_redo_failed, other]
+    assert latest_translations([]) == []

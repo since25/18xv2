@@ -358,6 +358,30 @@ def test_refresh_library_uses_default_modes():
     assert "FullRefresh" not in str(request.url)
 
 
+def test_refresh_item_params():
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(204)
+
+    client = JellyfinClient("http://jf.test", "k", 3, 2, httpx.MockTransport(handler), sleep_fn=lambda _: None)
+
+    client.refresh_item("abc")
+
+    assert len(requests) == 1
+    request = requests[0]
+    assert request.method == "POST"
+    assert request.url.path == "/Items/abc/Refresh"
+    # 按 NFO 重建这个条目的元数据，图片不动
+    assert dict(request.url.params) == {
+        "MetadataRefreshMode": "FullRefresh",
+        "ImageRefreshMode": "Default",
+        "ReplaceAllMetadata": "true",
+        "ReplaceAllImages": "false",
+    }
+
+
 def test_get_person_image_returns_content_and_type():
     seen: list[bytes] = []
 

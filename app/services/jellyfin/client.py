@@ -349,6 +349,19 @@ class JellyfinClient:
             },
         )
 
+    def refresh_item(self, item_id: str) -> None:
+        """强制刷新单个条目：按 NFO 重建元数据（清掉残留的旧简介），图片不替换。"""
+        self._request(
+            "POST",
+            f"/Items/{item_id}/Refresh",
+            params={
+                "MetadataRefreshMode": "FullRefresh",
+                "ImageRefreshMode": "Default",
+                "ReplaceAllMetadata": "true",
+                "ReplaceAllImages": "false",
+            },
+        )
+
     def get_person(self, name: str) -> dict[str, Any] | None:
         """按人名查 Jellyfin 人物，返回 {"id", "has_primary"}；人物不存在或没有 Id 时返回 None，其他错误照常抛。"""
         response = self._request("GET", f"/Persons/{quote(name, safe='')}", allow_404=True)
