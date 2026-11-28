@@ -33,6 +33,7 @@ from app.services.nfo_retranslate.runs import (
     append_ledger,
     drop_ledger,
     latest_translations,
+    load_ledger,
 )
 
 # 刷新函数：输入写过的 NFO 路径，返回 (刷新成功数, [(条目 ID, 原因)], 找不到条目的 NFO 路径)
@@ -69,6 +70,7 @@ def _write_one(
     base_dir: str,
     root: str,
     model: str,
+    previous: LedgerEntry | None,
     skip: Callable[[str, str], None],
 ) -> bool:
     """写一个 NFO 里有译文的字段；写成功返回 True。整个文件或某个字段不写时调用 skip 记下原因。"""
@@ -116,7 +118,11 @@ def _write_one(
     fields = sorted(name for name, value in (("title", title), ("plot", plot)) if value is not None)
     sha_after = sha256_text(content)
     run.append_apply({"path": path, "fields": fields, "sha256_after": sha_after, "backup": rel})
-    append_ledger(base_dir, path, LedgerEntry(sha256_after=sha_after, fields=frozenset(fields), model=model))
+    ledger_fields = frozenset(fields)
+    if previous is not None and previous.sha256_after == doc.sha256:
+        # 上次写入后文件没被别人改过，上次写过的字段仍然算已写入
+        ledger_fields |= previous.fields
+    append_ledger(base_dir, path, LedgerEntry(sha256_after=sha_after, fields=ledger_fields, model=model))
     return True
 
 
@@ -142,6 +148,8 @@ def apply_run(
     """
     written: list[str] = []
     skipped: list[tuple[str, str]] = []
+    # 这次运行里每个文件最多写一次，开头读一遍以前的已写入记录就够
+    ledger = load_ledger(base_dir)
 
     def skip(path: str, reason: str) -> None:
         skipped.append((path, reason))
@@ -157,7 +165,16 @@ def apply_run(
                 skip(path, f"{_FIELD_NAMES.get(field_name, field_name)}没有可写的译文：{rec.error or '译文为空'}")
             else:
                 usable[field_name] = rec
-        if usable and _write_one(run, path, usable, base_dir=base_dir, root=root, model=model, skip=skip):
+        if usable and _write_one(
+            run,
+            path,
+            usable,
+            base_dir=base_dir,
+            root=root,
+            model=model,
+            previous=ledger.get(path),
+            skip=skip,
+        ):
             written.append(path)
 
     refreshed, refresh_failed, missing = _refresh(refresher, written)

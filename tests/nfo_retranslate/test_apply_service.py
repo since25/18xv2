@@ -173,6 +173,46 @@ def test_apply_title_skipped_when_title_not_prefixed_by_num(env):
     assert load_ledger(base)[nfo].fields == frozenset({"plot"})
 
 
+def _another_run(base: str) -> RunDir:
+    """同一记录根目录下的另一次运行；手动指定编号，避免和 env 里那次同一秒重名。"""
+    run = RunDir(base, "20991231-235959")
+    os.mkdir(run.path)
+    return run
+
+
+def test_ledger_merges_fields_across_runs(env):
+    root, base, run = env
+    nfo = _make_nfo(root, "a/A/A.nfo")
+    run.append_translation(_rec(nfo, "plot", "新简介"))
+    assert _apply(run, base, root).written == [nfo]
+    second = _another_run(base)
+    second.append_translation(_rec(nfo, "title", "新标题译文"))
+
+    assert _apply(second, base, root).written == [nfo]
+
+    # 上次写入后文件没被别人改过：上次写的简介仍算已写入
+    entry = load_ledger(base)[nfo]
+    assert entry.fields == frozenset({"title", "plot"})
+    assert entry.sha256_after == _sha(nfo)
+    # 这次运行自己的写入结果只记这次写的字段
+    assert second.load_apply()[0]["fields"] == ["title"]
+
+
+def test_ledger_does_not_merge_when_changed_between_runs(env):
+    root, base, run = env
+    nfo = _make_nfo(root, "a/A/A.nfo")
+    run.append_translation(_rec(nfo, "plot", "新简介"))
+    assert _apply(run, base, root).written == [nfo]
+    # 两次运行之间 MDC 改过这个文件，上次写的简介不再可信
+    _touch_rating(nfo)
+    second = _another_run(base)
+    second.append_translation(_rec(nfo, "title", "新标题译文"))
+
+    assert _apply(second, base, root).written == [nfo]
+
+    assert load_ledger(base)[nfo].fields == frozenset({"title"})
+
+
 def test_restore_puts_backup_back_and_drops_ledger(env):
     root, base, run = env
     x = _make_nfo(root, "a/X/X.nfo")
