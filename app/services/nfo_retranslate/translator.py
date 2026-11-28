@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 import threading
 import time
@@ -125,8 +125,12 @@ def translate_all(
         with lock:
             on_result(job, text, reason)
 
-    with ThreadPoolExecutor(max_workers=workers) as pool:
+    pool = ThreadPoolExecutor(max_workers=workers)
+    try:
         futures = [pool.submit(run, job) for job in jobs]
-    # 线程池已等全部任务结束；回调或意外错误在这里抛出
-    for future in futures:
-        future.result()
+        for future in as_completed(futures):
+            # 回调或意外错误一出现就立即抛出
+            future.result()
+    finally:
+        # 出错或 Ctrl-C 时取消还没开始的任务，只等正在请求的那几个
+        pool.shutdown(wait=True, cancel_futures=True)

@@ -136,3 +136,25 @@ def test_translate_all_respects_worker_limit():
             assert reason is None
     # 400 不重试
     assert requests_by_message["m4"] == 1
+
+
+def test_translate_all_stops_when_callback_fails():
+    lock = threading.Lock()
+    calls: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        with lock:
+            calls.append(1)
+        # 停一会儿，让队列里还有没开始的任务
+        time.sleep(0.02)
+        return _reply("译文")
+
+    def on_result(job: TranslateJob, text: str | None, reason: str | None) -> None:
+        raise RuntimeError("写记录失败")
+
+    jobs = [TranslateJob(key=f"k{i}", field="plot", user_message=f"m{i}") for i in range(20)]
+    with pytest.raises(RuntimeError, match="写记录失败"):
+        translate_all(_client(handler), jobs, workers=2, on_result=on_result)
+
+    # 回调出错后取消还没开始的任务，不再继续请求接口
+    assert len(calls) < 20
