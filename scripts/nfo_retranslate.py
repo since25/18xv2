@@ -77,7 +77,7 @@ RANDOM = random.Random()
 # 每完成这么多个字段打印一次进度
 PROGRESS_EVERY = 50
 # 续跑时沿用原运行的这些参数；命令行另给了不同的值就拒绝
-RESUME_ARGS = ("fields", "path_prefix", "engine", "redo", "limit", "sample")
+RESUME_ARGS = ("fields", "path_prefix", "engine", "redo", "limit", "sample", "thinking")
 
 
 @dataclass
@@ -229,7 +229,8 @@ def _field_jobs(
 def _resume_args(args: argparse.Namespace, meta: dict) -> argparse.Namespace | None:
     """续跑时用原运行的参数替换命令行里的同名参数；命令行另给了不同的值时打印原因返回 None。"""
     original = meta.get("args") if isinstance(meta.get("args"), dict) else {}
-    defaults = {"fields": None, "path_prefix": None, "engine": None, "redo": False, "limit": None, "sample": None}
+    defaults = {"fields": None, "path_prefix": None, "engine": None, "redo": False, "limit": None, "sample": None,
+                "thinking": False}
     conflicts = []
     for name in RESUME_ARGS:
         old = original.get(name, defaults[name])
@@ -378,7 +379,8 @@ def _translate(args: argparse.Namespace) -> int:
         for job in field_jobs.values()
     ]
     total = len(translate_jobs)
-    print(f"运行编号：{run.run_id}；要翻 {len(keys)} 部、{total} 个字段，模型 {model}", flush=True)
+    print(f"运行编号：{run.run_id}；要翻 {len(keys)} 部、{total} 个字段，模型 {model}，"
+          f"思考{'开' if args.thinking else '关'}", flush=True)
     progress = {"done": 0, "failed": 0}
 
     def on_result(tjob: TranslateJob, text: str | None, reason: str | None) -> None:
@@ -412,7 +414,8 @@ def _translate(args: argparse.Namespace) -> int:
         if progress["done"] % PROGRESS_EVERY == 0 or progress["done"] == total:
             print(f"已完成 {progress['done']}/{total}，失败 {progress['failed']}", flush=True)
 
-    client = TranslatorClient(settings.nfo_translate_api_base, settings.nfo_translate_api_key, model)
+    client = TranslatorClient(settings.nfo_translate_api_base, settings.nfo_translate_api_key, model,
+                              thinking=args.thinking)
     interrupted = False
     try:
         translate_all(client, translate_jobs, workers=args.workers, on_result=on_result)
@@ -631,6 +634,7 @@ def _parser() -> argparse.ArgumentParser:
     tr.add_argument("--path-prefix", default=None, help="只翻根目录下这个子目录里的 NFO")
     tr.add_argument("--engine", default=None, help="只翻简介标记为「由 X 提供翻译」的片子，例如 Google")
     tr.add_argument("--workers", type=int, default=8, help="并发请求数")
+    tr.add_argument("--thinking", action="store_true", help="打开模型思考（默认关）")
     tr.add_argument("--resume", default=None, metavar="RUN_ID", help="续跑这次运行，跳过已翻过的字段，沿用原运行的参数")
     tr.add_argument("--redo", action="store_true", help="已写入记录里的 NFO 也重翻")
     tr.add_argument("--force", action="store_true", help="找不到 MDC 任务的 NFO 超过 100 个也继续")

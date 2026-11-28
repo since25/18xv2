@@ -42,9 +42,11 @@ class FakeTranslator:
 
     calls: list[str] = []
     outputs: dict[str, object] = {}
+    init_kwargs: dict[str, object] = {}
 
-    def __init__(self, base_url, api_key, model, **_kwargs):
+    def __init__(self, base_url, api_key, model, **kwargs):
         self.model = model
+        FakeTranslator.init_kwargs = kwargs
 
     def translate(self, user_message: str) -> str:
         FakeTranslator.calls.append(user_message)
@@ -630,6 +632,26 @@ def test_refresh_exception_is_recorded_not_raised(env, cli, monkeypatch, capsys)
     assert len(calls) == 2
 
 
+def test_translate_thinking_flag(env, cli, capsys):
+    """思考默认关；--thinking 打开，记进 run.json，续跑沿用原运行的开关。"""
+    _two_groups(env)
+    assert env.run("translate", "--limit", "1") == 0
+    assert FakeTranslator.init_kwargs.get("thinking") is False
+    assert "思考关" in capsys.readouterr().out
+
+    FakeTranslator.outputs = {"plot": KeyboardInterrupt()}
+    assert env.run("translate", "--thinking", "--workers", "1") == 130
+    assert FakeTranslator.init_kwargs.get("thinking") is True
+    run = env.only_run()
+    meta = json.loads(Path(run.path, "run.json").read_text(encoding="utf-8"))
+    assert meta["args"]["thinking"] is True
+
+    FakeTranslator.outputs = {}
+    FakeTranslator.init_kwargs = {}
+    assert env.run("translate", "--resume", run.run_id) == 0
+    assert FakeTranslator.init_kwargs.get("thinking") is True
+
+
 def test_resume_reuses_original_args(env, cli, capsys):
     """I1：原运行带 --engine，续跑不带参数也只处理原来筛中的组。"""
     group_a, b = _two_groups(env)
@@ -657,7 +679,8 @@ def test_resume_rejects_changed_args(env, cli, capsys):
     capsys.readouterr()
     FakeTranslator.calls = []
 
-    for extra in (["--engine", "Google"], ["--limit", "1"], ["--fields", "title"], ["--path-prefix", "甲"], ["--redo"]):
+    for extra in (["--engine", "Google"], ["--limit", "1"], ["--fields", "title"], ["--path-prefix", "甲"], ["--redo"],
+                  ["--thinking"]):
         assert env.run("translate", "--resume", run.run_id, *extra) == 1
         assert "续跑沿用原运行参数" in capsys.readouterr().out
     assert FakeTranslator.calls == []

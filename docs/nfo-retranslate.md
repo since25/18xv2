@@ -62,11 +62,18 @@ docker exec docker-app-1 python scripts/nfo_retranslate.py restore --run 2026112
 | `--path-prefix 目录` | 只翻根目录下这个子目录（例如某个演员目录）；目录不存在会报错退出 |
 | `--engine Google` | 只翻简介标记为「由 Google 提供翻译」的片子，先处理质量最差的旧译 |
 | `--workers 8` | 并发请求数，默认 8 |
+| `--thinking` | 打开模型思考，默认关。每次请求都会带上 `chat_template_kwargs.enable_thinking`，不依赖后端的默认设置 |
 | `--resume 运行编号` | 续跑中断的那次运行：已有记录的字段不再翻；沿用原运行的参数和当初选中的片子 |
 | `--redo` | 已写入记录里的 NFO 也重翻（默认跳过上次写入后没被改过的） |
 | `--force` | 找不到 MDC 任务的 NFO 超过 100 个也继续 |
 
-中断后用 `translate --resume <运行编号>` 继续，不用再带别的参数：`--fields`、`--path-prefix`、`--engine`、`--redo`、`--force`、`--limit`、`--sample` 都沿用原运行的；另给了不同的值会报错退出。续跑时当前配置的模型必须和这次运行记下的一致，否则也报错退出。
+中断后用 `translate --resume <运行编号>` 继续，不用再带别的参数：`--fields`、`--path-prefix`、`--engine`、`--redo`、`--force`、`--limit`、`--sample`、`--thinking` 都沿用原运行的；另给了不同的值会报错退出。续跑时当前配置的模型必须和这次运行记下的一致，否则也报错退出。
+
+请求超时和重试：
+- 每次请求最多等 600 秒。
+- 读超时说明请求已经到了后端、后端还在算，这时不重发，直接记为失败。重发只会让后端的在途请求越堆越多。
+- 连不上接口、返回 429 或 5xx 时最多重试 3 次。后端给了 `Retry-After` 就按它等，没给就依次等 10、20、40 秒。
+- 按 Ctrl-C 后，会等正在请求的那几条返回再退出。
 
 翻译失败的字段续跑不会重翻（已有记录）。要补这些字段：先 `apply` 这次运行，再开一次新的 `translate`，已写入的会自动跳过，只会翻失败的那些。
 

@@ -70,8 +70,75 @@ def test_translate_retries_429_and_5xx_then_succeeds():
 
     assert _client(handler, sleeps=sleeps).translate("用户消息") == "译文"
     assert len(calls) == 3
-    # 退避 2**attempt 秒
-    assert sleeps == [1, 2]
+    # 没有 Retry-After 时退避 10、20 秒（10 * 2**attempt）
+    assert sleeps == [10, 20]
+
+
+def test_translate_always_sends_thinking_switch():
+    bodies: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return _reply("译文")
+
+    _client(handler).translate("用户消息")
+    TranslatorClient(_BASE, "test-key", "qwen38", thinking=True, transport=httpx.MockTransport(handler)).translate("用户消息")
+
+    # 不依赖后端默认值：每次请求都明确写开或关
+    assert bodies[0]["chat_template_kwargs"] == {"enable_thinking": False}
+    assert bodies[1]["chat_template_kwargs"] == {"enable_thinking": True}
+
+
+def test_default_timeout_is_600_seconds():
+    # 思考模式下单条实测 15–130 秒，后端还会排队，60 秒太短
+    assert TranslatorClient(_BASE, "test-key", "qwen38").timeout == 600.0
+
+
+def test_translate_honours_retry_after():
+    statuses = [429]
+    sleeps: list[float] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if statuses:
+            return httpx.Response(statuses.pop(0), headers={"Retry-After": "7"})
+        return _reply("译文")
+
+    assert _client(handler, sleeps=sleeps).translate("用户消息") == "译文"
+    assert sleeps == [7]
+
+
+def test_translate_does_not_resend_after_read_timeout():
+    # 读超时说明请求已到后端、后端还在算；重发只会让在途请求越堆越多
+    calls: list[int] = []
+    sleeps: list[float] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(1)
+        raise httpx.ReadTimeout("read timed out", request=request)
+
+    with pytest.raises(TranslateError) as excinfo:
+        _client(handler, sleeps=sleeps).translate("用户消息")
+
+    assert len(calls) == 1
+    assert sleeps == []
+    message = str(excinfo.value)
+    assert "超时" in message
+    assert "llm.test" not in message
+
+
+def test_translate_retries_connect_error():
+    calls: list[int] = []
+    sleeps: list[float] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(1)
+        if len(calls) == 1:
+            raise httpx.ConnectError("connection refused", request=request)
+        return _reply("译文")
+
+    assert _client(handler, sleeps=sleeps).translate("用户消息") == "译文"
+    assert len(calls) == 2
+    assert sleeps == [10]
 
 
 def test_translate_gives_up_after_retries():

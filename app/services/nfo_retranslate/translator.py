@@ -38,7 +38,8 @@ class TranslatorClient:
         api_key: str,
         model: str,
         *,
-        timeout: float = 60.0,
+        thinking: bool = False,
+        timeout: float = 600.0,
         retries: int = 3,
         transport: httpx.BaseTransport | None = None,
         sleep_fn: Callable[[float], None] = time.sleep,
@@ -46,6 +47,7 @@ class TranslatorClient:
         self._url = str(base_url).rstrip("/") + "/chat/completions"
         self._api_key = api_key
         self.model = model
+        self.thinking = bool(thinking)
         self.timeout = float(timeout)
         self.retries = int(retries)
         self._transport = transport
@@ -65,7 +67,11 @@ class TranslatorClient:
         return session
 
     def translate(self, user_message: str) -> str:
-        """发一条用户消息，返回去掉首尾空白的译文；连接错误、429、5xx 退避 2**attempt 秒重试，其他 4xx 直接失败。"""
+        """发一条用户消息，返回去掉首尾空白的译文。
+
+        读超时不重发：请求已到后端、后端还在算，重发只会让在途请求越堆越多。
+        其他连接错误、429、5xx 重试：有 Retry-After 按它等，没有就退避 10 * 2**attempt 秒；其他 4xx 直接失败。
+        """
         payload = {
             "model": self.model,
             "messages": [
@@ -73,27 +79,40 @@ class TranslatorClient:
                 {"role": "user", "content": user_message},
             ],
             "temperature": _TEMPERATURE,
+            # 每次都明确写思考开关，不依赖后端默认值（qwen3 系列用 chat_template_kwargs，实测后端认这个写法）
+            "chat_template_kwargs": {"enable_thinking": self.thinking},
         }
         attempts = self.retries + 1
         for attempt in range(attempts):
             last = attempt == attempts - 1
             try:
                 response = self._session().post(self._url, json=payload)
+            except httpx.ReadTimeout:
+                # from None：httpx 的异常里可能带请求地址，不往外带
+                raise TranslateError(f"翻译接口读超时（等了 {self.timeout:g} 秒没返回，不重发）") from None
             except httpx.RequestError as exc:
                 if not last:
-                    self._sleep(2**attempt)
+                    self._sleep(10 * 2**attempt)
                     continue
-                # from None：httpx 的异常里可能带请求地址，不往外带
                 raise TranslateError(f"翻译接口连接失败（{type(exc).__name__}，已尝试 {attempts} 次）") from None
 
             status = response.status_code
             if status < 400:
                 return self._content(response)
             if (status == 429 or status >= 500) and not last:
-                self._sleep(2**attempt)
+                self._sleep(self._retry_after(response) or 10 * 2**attempt)
                 continue
             raise TranslateError(f"翻译接口请求失败（HTTP {status}，已尝试 {attempt + 1} 次）")
         raise TranslateError("翻译接口请求失败")
+
+    @staticmethod
+    def _retry_after(response: httpx.Response) -> float | None:
+        """取 Retry-After 的秒数；没有、不是数字或不是正数时返回 None（HTTP 日期格式不处理）。"""
+        try:
+            seconds = float(response.headers.get("Retry-After", ""))
+        except ValueError:
+            return None
+        return seconds if seconds > 0 else None
 
     @staticmethod
     def _content(response: httpx.Response) -> str:
