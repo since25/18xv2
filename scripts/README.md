@@ -49,6 +49,14 @@ python scripts/jellyfin_display_names.py --restore            # 回滚：改回�
 ```
 生产在 `docker exec docker-app-1` 里执行。说明见 `docker/jellyfin/README.md`「本地视频显示名」。
 
+### nfo_retranslate.py — NFO 标题、简介重新翻译
+```bash
+python scripts/nfo_retranslate.py translate --sample 20        # 翻译并出报告，不改 NFO
+python scripts/nfo_retranslate.py apply --run <运行编号>        # 写回 NFO 并刷新 Jellyfin
+python scripts/nfo_retranslate.py restore --run <运行编号>      # 用备份还原
+```
+需要 `.env` 里的 `NFO_TRANSLATE_*` 配置。生产在 `docker exec docker-app-1` 里执行，`translate` 建议后台跑。说明见 `docs/nfo-retranslate.md`。
+
 ### 115_real_smoke.py — API 冒烟测试
 ```bash
 python scripts/115_real_smoke.py                            # 只读冒烟

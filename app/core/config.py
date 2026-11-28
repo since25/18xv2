@@ -118,6 +118,19 @@ class Settings(BaseSettings):
     openlist_url: str | None = Field(default=None, alias="OPENLIST_URL")
     openlist_token: str | None = Field(default=None, alias="OPENLIST_TOKEN")
 
+    # NFO 重新翻译：OpenAI 兼容接口地址，例如 https://<域名>/v1
+    nfo_translate_api_base: str | None = Field(default=None, alias="NFO_TRANSLATE_API_BASE")
+    # 翻译接口密钥（只放 .env）
+    nfo_translate_api_key: str | None = Field(default=None, alias="NFO_TRANSLATE_API_KEY")
+    # 模型名，同时写进简介结尾「由 X 提供翻译」
+    nfo_translate_model: str | None = Field(default=None, alias="NFO_TRANSLATE_MODEL")
+    # 302porn_tv1 的可写根目录（写 NFO 用）
+    nfo_translate_root: str | None = Field(default=None, alias="NFO_TRANSLATE_ROOT")
+    # MDC 数据库路径（只读）
+    nfo_translate_mdc_db: str = Field(default="/app/mdc/mdc_ng.db", alias="NFO_TRANSLATE_MDC_DB")
+    # MDC 演员对照表 mapping_actor.xml 的路径（只读）
+    nfo_translate_name_map: str = Field(default="/app/mdc/mapping_actor.xml", alias="NFO_TRANSLATE_NAME_MAP")
+
     # 脚本中心：每次运行的日志和输入输出文件都放在这里（保留 30 天）
     script_jobs_dir: str = Field(default="data/script-jobs", alias="SCRIPT_JOBS_DIR")
     # sehuatang：qB 接口凭证（只放 .env，页面不显示）；站点 cookie 和 User-Agent 存在这个文件里
